@@ -6,6 +6,7 @@ import { useVSCodeBridge } from "@/hooks/use-vscode-bridge"
 import { useSelectionState } from "@/hooks/use-selection-state"
 import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts"
 import { AgentCanvas } from "./canvas"
+import { agentSpendUsd } from "./canvas/draw-cost"
 import { ControlBar } from "./control-bar"
 import { AgentDetailCard } from "./agent-detail-card"
 import { GlassContextMenu } from "./glass-context-menu"
@@ -215,6 +216,12 @@ export function AgentVisualizer() {
     return sum
   }, [agents])
 
+  const totalCostUsd = useMemo(() => {
+    let sum = 0
+    for (const a of agents.values()) sum += agentSpendUsd(a).usd
+    return sum
+  }, [agents])
+
   const selectedAgent = selection.selectedAgentId ? agents.get(selection.selectedAgentId) : null
   const selectedConversation = selection.selectedAgentId ? (conversations.get(selection.selectedAgentId) || []) : []
 
@@ -418,6 +425,7 @@ export function AgentVisualizer() {
         connectionStatus={bridge.connectionStatus}
         agentCount={agents.size}
         totalTokens={totalTokens}
+        totalCostUsd={totalCostUsd}
         showFileAttention={showFileAttention}
         showTranscript={showTranscript}
         showCostOverlay={showCostOverlay}

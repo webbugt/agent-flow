@@ -139,14 +139,19 @@ function TodoContent({ data }: { data: Record<string, unknown> }) {
 function BashContent({ data, compact }: { data: Record<string, unknown>; compact: boolean }) {
   const command = String(data.command || '')
   const description = String(data.description || '')
-  const maxLen = compact ? 120 : 300
+  // The detail popup shows the whole command (wrapped, scrollable); only the
+  // inline chat view shortens it.
+  const maxLen = compact ? 120 : Infinity
 
   return (
     <div>
       {description && (
         <div className="text-[9px] mb-1 opacity-60" style={{ color: COLORS.assistantText }}>{description}</div>
       )}
-      <div className="rounded px-1.5 py-1 text-[9px] font-mono" style={{ background: COLORS.codeBlockBg, color: COLORS.tool_calling }}>
+      <div
+        className="rounded px-1.5 py-1 text-[9px] font-mono whitespace-pre-wrap break-all overflow-y-auto"
+        style={{ background: COLORS.codeBlockBg, color: COLORS.tool_calling, maxHeight: compact ? undefined : 240 }}
+      >
         <span className="opacity-55 mr-1">$</span>
         {command.length > maxLen ? command.slice(0, maxLen) + '...' : command}
       </div>

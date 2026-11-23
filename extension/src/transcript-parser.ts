@@ -25,6 +25,7 @@ import {
 } from './constants'
 import { summarizeInput, summarizeResult, extractInputData, detectError, buildDiscovery } from './tool-summarizer'
 import { estimateTokensFromContent, estimateTokensFromText } from './token-estimator'
+import { recordAssistantUsage } from './usage-ledger'
 import { createLogger } from './logger'
 
 const log = createLogger('TranscriptParser')
@@ -208,6 +209,11 @@ export class TranscriptParser {
     const role = msg.role // 'assistant', 'user', 'human'
 
     const session = sessionId ? this.delegate.getSession(sessionId) : undefined
+
+    // Billed usage for spend tracking (each message id counted once)
+    if (session && entry.type === 'assistant') {
+      recordAssistantUsage(session, agentName, msg, entry.uuid)
+    }
 
     // Extract model from assistant messages (updates tokensMax on the frontend).
     // Per-agent tracking: re-emit when the model changes (e.g. /model switch).
@@ -658,6 +664,10 @@ export class TranscriptParser {
               session.seenMessageHashes.add(hashKey)
               session.contextBreakdown.userMessages += estimateTokensFromText(text)
             }
+          }
+          // Billed usage of messages written before the session was attached
+          if (entry.type === 'assistant' && entry.message) {
+            recordAssistantUsage(session, ORCHESTRATOR_NAME, entry.message, entry.uuid)
           }
           // Extract model from first assistant message
           if (entry.type === 'assistant' && isRealModelId(entry.message?.model) && !session.model) {

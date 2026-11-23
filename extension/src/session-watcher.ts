@@ -412,6 +412,8 @@ export class SessionWatcher implements AgentSessionWatcher {
       permissionTimer: null,
       permissionEmitted: false,
       contextBreakdown: { systemPrompt: SYSTEM_PROMPT_BASE_TOKENS, userMessages: 0, toolResults: 0, reasoning: 0, subagentResults: 0 },
+      spendByAgent: new Map(),
+      seenUsageIds: new Set(),
     }
     this.sessions.set(sessionId, session)
 
@@ -573,6 +575,7 @@ export class SessionWatcher implements AgentSessionWatcher {
   private emitContextUpdate(agentName: string, session: WatchedSession, sessionId?: string): void {
     const bd = session.contextBreakdown
     const total = bd.systemPrompt + bd.userMessages + bd.toolResults + bd.reasoning + bd.subagentResults
+    const spend = session.spendByAgent.get(agentName)
     this.emit({
       time: this.elapsed(sessionId),
       type: 'context_update',
@@ -580,6 +583,7 @@ export class SessionWatcher implements AgentSessionWatcher {
         agent: agentName,
         tokens: total,
         breakdown: { ...bd },
+        ...(spend ? { spend: { ...spend } } : {}),
       },
     }, sessionId)
   }

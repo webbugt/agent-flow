@@ -209,6 +209,23 @@ export interface WatchedSession {
     reasoning: number
     subagentResults: number
   }
+  /** Real billed usage per agent (summed from assistant message.usage) */
+  spendByAgent: Map<string, SpendTotals>
+  /** Claude message ids whose usage has already been counted */
+  seenUsageIds: Set<string>
+}
+
+/** Cumulative billed token counts for one agent, as reported by the API */
+export interface SpendTotals {
+  inputTokens: number
+  outputTokens: number
+  cacheReadTokens: number
+  /** Cache writes with the default 5-minute TTL */
+  cacheWrite5mTokens: number
+  /** Cache writes with the 1-hour TTL (billed at a higher rate) */
+  cacheWrite1hTokens: number
+  /** Last real model id seen for this agent */
+  model?: string
 }
 
 // ─── Claude Settings Types ──────────────────────────────────────────────────

@@ -1,4 +1,4 @@
-import type { ContextBreakdown } from '@/lib/agent-types'
+import type { ContextBreakdown, SpendTotals } from '@/lib/agent-types'
 import type { ConversationMessage } from './types'
 import { appendConversation, asString, asNumber, LABEL_LEN_NAME, LABEL_LEN_TASK, LABEL_LEN_BUBBLE, MAX_BUBBLES } from './types'
 import type { MutableEventState } from './process-event'
@@ -57,6 +57,21 @@ export function handleMessage(
   appendConversation(state.conversations, agentName, { type: msgType, content, timestamp: currentTime })
 }
 
+/** Validate the billed-usage totals sent with a context update. */
+function parseSpend(raw: unknown): SpendTotals | undefined {
+  if (!raw || typeof raw !== 'object') return undefined
+  const r = raw as Record<string, unknown>
+  const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
+  return {
+    inputTokens: num(r.inputTokens),
+    outputTokens: num(r.outputTokens),
+    cacheReadTokens: num(r.cacheReadTokens),
+    cacheWrite5mTokens: num(r.cacheWrite5mTokens),
+    cacheWrite1hTokens: num(r.cacheWrite1hTokens),
+    model: typeof r.model === 'string' ? r.model : undefined,
+  }
+}
+
 export function handleContextUpdate(
   payload: Record<string, unknown>,
   state: MutableEventState,
@@ -70,6 +85,7 @@ export function handleContextUpdate(
   const tokensMaxOverride = typeof payload.tokensMax === 'number' && payload.tokensMax > 0
     ? payload.tokensMax
     : undefined
+  const spend = parseSpend(payload.spend)
   const agent = state.agents.get(agentName)
   if (agent) {
     state.agents.set(agentName, {
@@ -77,6 +93,7 @@ export function handleContextUpdate(
       tokensUsed: tokens,
       tokensMax: tokensMaxOverride ?? agent.tokensMax,
       contextBreakdown: breakdown || agent.contextBreakdown,
+      spend: spend ?? agent.spend,
       state: agent.state === 'complete' ? 'complete' : 'thinking'
     })
   }
