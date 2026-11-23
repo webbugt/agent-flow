@@ -538,10 +538,16 @@ export async function createRelay(options: RelayOptions): Promise<Relay> {
         if (aActive !== bActive) return bActive - aActive
         return b.lastActivityTime - a.lastActivityTime
       })
-      if (sorted.length > 0) {
-        const buffered = eventBuffer.get(sorted[0].id)
-        if (buffered) {
-          sendSSE(res, { type: 'agent-event-batch', events: buffered })
+      // Replay every listed session, oldest first, so the most recent one is
+      // applied last. Replaying only one left the other sessions' nodes missing
+      // until the user switched to Review (which loads the full history).
+      for (const session of [...sorted].reverse()) {
+        const buffered = eventBuffer.get(session.id)
+        if (buffered && buffered.length > 0) {
+          // The page holds events until its playback clock reaches their time, and
+          // the clock starts at 0 on load. Replayed history is a snapshot, so time 0
+          // makes it show at once, in buffer order.
+          sendSSE(res, { type: 'agent-event-batch', events: buffered.map(e => ({ ...e, time: 0 })) })
         }
       }
     },
