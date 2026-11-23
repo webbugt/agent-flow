@@ -59,7 +59,7 @@ function hashString(s: string): number {
   return h >>> 0
 }
 
-/** Stable per identity, so a group keeps its colour across reloads and reordering. */
+/** Preferred palette slot for an identity (hash). groupInstances resolves collisions between groups. */
 export function groupColor(identity: string): string {
   return GROUP_PALETTE[hashString(identity) % GROUP_PALETTE.length]
 }
@@ -85,10 +85,26 @@ export function groupInstances(instances: readonly FleetInstance[]): FleetGroup[
     if (list) list.push(inst)
     else byIdentity.set(inst.identity, [inst])
   }
+  // Colours: hash slot per identity, probing forward past slots already taken so two
+  // groups never share a lane colour (until there are more groups than palette slots).
+  // Identities are assigned in alphabetical order, so the result does not depend on start times.
+  const taken = new Set<string>()
+  const colorOf = new Map<string, string>()
+  for (const identity of [...byIdentity.keys()].sort()) {
+    const base = hashString(identity) % GROUP_PALETTE.length
+    let pick: string = GROUP_PALETTE[base]
+    for (let i = 0; i < GROUP_PALETTE.length; i++) {
+      const candidate = GROUP_PALETTE[(base + i) % GROUP_PALETTE.length]
+      if (!taken.has(candidate)) { pick = candidate; break }
+    }
+    taken.add(pick)
+    colorOf.set(identity, pick)
+    if (taken.size === GROUP_PALETTE.length) taken.clear()
+  }
   const groups: FleetGroup[] = []
   for (const [identity, list] of byIdentity) {
     const sorted = [...list].sort((a, b) => a.startTime - b.startTime || a.id.localeCompare(b.id))
-    groups.push({ identity, id: groupSelectionId(identity), color: groupColor(identity), instances: sorted })
+    groups.push({ identity, id: groupSelectionId(identity), color: colorOf.get(identity) as string, instances: sorted })
   }
   return groups.sort((a, b) => a.instances[0].startTime - b.instances[0].startTime || a.identity.localeCompare(b.identity))
 }

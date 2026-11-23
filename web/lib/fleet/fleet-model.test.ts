@@ -57,6 +57,17 @@ test('fixture groups into 3 groups / 5 instances, copies stay in their own group
   assert.equal(groups.reduce((n, g) => n + g.instances.length, 0), 5)
 })
 
+test('groups get distinct colours, independent of start order', () => {
+  const fixture = createFleetFixture(NOW)
+  const colors = groupInstances(fixture).map(g => g.color)
+  assert.equal(new Set(colors).size, colors.length)
+  const reversed = groupInstances([...fixture].reverse())
+  for (const g of groupInstances(fixture)) assert.equal(reversed.find(r => r.identity === g.identity)?.color, g.color)
+  // more groups than palette slots still returns a colour for each
+  const many = Array.from({ length: 20 }, (_, i) => ({ ...fixture[0], id: `i${i}`, identity: `agent${i}` }))
+  assert.equal(groupInstances(many).length, 20)
+})
+
 test('group colour is stable per identity and shared by copies', () => {
   assert.equal(groupColor('taxis'), groupColor('taxis'))
   const rows = buildFleetRows({ instances: createFleetFixture(NOW), selection: view(none), expanded: new Set(['taxis']), now: NOW })
