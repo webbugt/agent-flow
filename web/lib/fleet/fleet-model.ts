@@ -13,7 +13,8 @@ export const DAY_MS = 86_400_000
 
 // ─── Instances & groups ─────────────────────────────────────────────────────
 
-export type FleetInstanceStatus = 'active' | 'completed' | 'error'
+/** `idle`: nothing running right now (restored from history, or quiet), but active within the idle window. */
+export type FleetInstanceStatus = 'active' | 'idle' | 'completed' | 'error'
 
 export interface FleetMarker {
   id: string
@@ -116,6 +117,8 @@ export interface SessionLike {
   status: 'active' | 'completed'
   startTime: number
   lastActivityTime: number
+  /** Listed from history only: nothing live, shown idle. */
+  idle?: boolean
 }
 
 /** Live adapter: one instance per bridge session. No tool-call markers (the bridge does not carry them per session). */
@@ -126,7 +129,7 @@ export function instancesFromSessions(sessions: readonly SessionLike[]): FleetIn
     runtime: 'session',
     startTime: s.startTime,
     endTime: s.status === 'completed' ? s.lastActivityTime : undefined,
-    status: s.status,
+    status: s.idle ? 'idle' : s.status,
     markers: [],
   }))
 }
@@ -159,6 +162,8 @@ interface NodeDraft {
   base: number
   start: number
   end?: number
+  /** Quiet (`agent_idle`) or restored from history (`agent_complete` with `idle`). Cleared by new activity. */
+  idle?: boolean
   model?: string
   markers: FleetMarker[]
 }
@@ -175,6 +180,7 @@ function nodesFromEvents(sessionId: string, events: readonly SessionEventLike[])
         // Same node active again (a new run): new time base, running again.
         node.base = p.startedAt
         node.end = undefined
+        node.idle = false
       } else {
         node = { name: p.name, base: p.startedAt, start: p.startedAt, markers: [] }
         nodes.set(p.name, node)
@@ -182,10 +188,17 @@ function nodesFromEvents(sessionId: string, events: readonly SessionEventLike[])
       if (typeof p.model === 'string') node.model = p.model
     } else if (e.type === 'agent_complete') {
       const node = typeof p.name === 'string' ? nodes.get(p.name) : undefined
-      if (node) node.end = Math.max(node.start, node.base + e.time * 1000)
+      if (node) {
+        node.end = Math.max(node.start, node.base + e.time * 1000)
+        node.idle = p.idle === true
+      }
+    } else if (e.type === 'agent_idle') {
+      const node = typeof p.name === 'string' ? nodes.get(p.name) : undefined
+      if (node && node.end === undefined) node.idle = true
     } else if (e.type === 'tool_call_start') {
       const node = typeof p.agent === 'string' ? nodes.get(p.agent) : undefined
       if (!node) continue
+      node.idle = false
       node.markers.push({
         id: `${nodeInstanceId(sessionId, node.name)}:t${node.markers.length}`,
         at: node.base + e.time * 1000,
@@ -226,7 +239,7 @@ export function instancesFromSessionEvents(
         runtime: n.model ?? 'session',
         startTime: n.start,
         endTime: n.end,
-        status: n.end === undefined ? 'active' : 'completed',
+        status: n.idle ? 'idle' : n.end === undefined ? 'active' : 'completed',
         markers: n.markers.slice(-MAX_MARKERS_PER_INSTANCE),
       })
     }
@@ -235,20 +248,34 @@ export function instancesFromSessionEvents(
 }
 
 /**
+ * Sessions the fleet canvas is built from: every session the relay lists (live and
+ * idle) plus the tabs the user closed. It never looks at the open tab, so two
+ * profiles that are active at once (say Taxis and OMH Coder) are both on the canvas
+ * whichever tab is selected.
+ */
+export function fleetSessions<S extends { id: string }>(open: readonly S[], dismissed: readonly S[]): S[] {
+  const ids = new Set(open.map(s => s.id))
+  return [...open, ...dismissed.filter(s => !ids.has(s.id))]
+}
+
+/**
  * Tab strip of the single-profile view. Only while the Fleet view is on may the fleet
  * selection hide a tab (all of its session's nodes deselected). With Fleet off every
  * tab shows, as before the Fleet view existed. The open tab always shows. Selection
  * never closes a session.
  */
-export function tabSessions<S extends { id: string }>(
+export function tabSessions<S extends { id: string; idle?: boolean }>(
   sessions: readonly S[],
   selectedSessionId: string | null,
   showFleet: boolean,
   instances: readonly FleetInstance[],
   selection: FleetSelectionView,
 ): S[] {
-  if (!showFleet) return [...sessions]
-  return sessions.filter(s => {
+  // Idle profiles (listed from history only) belong to the fleet view, not the tab strip:
+  // with Fleet off the strip holds the same tabs as before. Opening one from the fleet selects it.
+  const tabs = sessions.filter(s => !s.idle || s.id === selectedSessionId)
+  if (!showFleet) return tabs
+  return tabs.filter(s => {
     if (s.id === selectedSessionId) return true
     const own = instances.filter(i => i.id === s.id || i.id.startsWith(`${s.id}::`))
     // No fleet data for a session: keep its tab. Otherwise it shows while any of its nodes is selected.
@@ -331,7 +358,7 @@ function instanceSpan(inst: FleetInstance): FleetSpan {
 }
 
 /** Failure must stay visible when copies are merged: error > active > completed. */
-const STATUS_RANK: Record<FleetInstanceStatus, number> = { completed: 0, active: 1, error: 2 }
+const STATUS_RANK: Record<FleetInstanceStatus, number> = { completed: 0, idle: 1, active: 2, error: 3 }
 
 function worseStatus(a: FleetInstanceStatus | undefined, b: FleetInstanceStatus | undefined): FleetInstanceStatus | undefined {
   if (!a) return b
@@ -438,10 +465,12 @@ export function buildFleetRows(input: BuildRowsInput): FleetRow[] {
     const state = checkState(ids, sel)
     const shown = group.instances.filter(i => sel.isSelected(i.id))
     const multi = group.instances.length > 1
+    // Every copy quiet or restored from history: the whole profile reads idle.
+    const allIdle = group.instances.every(i => i.status === 'idle')
     const isOpen = multi && expanded.has(group.identity)
     rows.push({
       key: group.id, kind: 'group', label: group.identity,
-      sublabel: multi ? undefined : group.instances[0].runtime,
+      sublabel: allIdle ? (multi ? 'idle' : `${group.instances[0].runtime} · idle`) : multi ? undefined : group.instances[0].runtime,
       color: group.color, depth: 0, selectionIds: ids,
       checked: state.checked, indeterminate: state.indeterminate,
       badge: multi ? `x${group.instances.length}` : undefined,
@@ -455,7 +484,7 @@ export function buildFleetRows(input: BuildRowsInput): FleetRow[] {
       const on = sel.isSelected(inst.id)
       rows.push({
         key: inst.id, kind: 'instance', label: `#${idx + 1}`,
-        sublabel: `${inst.runtime}${inst.parentId ? ' · sub' : ''}`,
+        sublabel: `${inst.runtime}${inst.parentId ? ' · sub' : ''}${inst.status === 'idle' ? ' · idle' : ''}`,
         color: group.color, depth: 1, selectionIds: [inst.id],
         checked: on, indeterminate: false, expandable: false, expanded: false, hidden: !on,
         spans: on ? [instanceSpan(inst)] : [], markers: on ? inst.markers : [],

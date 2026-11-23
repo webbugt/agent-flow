@@ -16,7 +16,7 @@ import { scanSubagentsDir, readSubagentNewLines, newestSubagentMtime } from '../
 import { followSession } from '../extension/src/session-relocation'
 import { handlePermissionDetection } from '../extension/src/permission-detection'
 import { CodexSessionWatcher } from '../extension/src/codex-session-watcher'
-import { HermesLogWatcher, resolveHermesRoot } from './hermes-logs'
+import { HermesLogWatcher, idleWindowFromEnv, resolveHermesRoot } from './hermes-logs'
 import {
   ANONYMIZE_ENV,
   ANONYMIZE_OVERRIDES_ENV,
@@ -481,6 +481,7 @@ export async function createRelay(options: RelayOptions): Promise<Relay> {
       emit: (event, sessionId) => emitEvent(event, sessionId),
       lifecycle: (type, sessionId, label) => broadcastSessionLifecycle(type, sessionId, label),
       anonymize,
+      idleWindowMs: idleWindowFromEnv(process.env),
     })
     hermesLogs.start()
   }

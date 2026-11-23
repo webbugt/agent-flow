@@ -103,13 +103,17 @@ function drawFleet(
       const x1 = xFor(s.end ?? now, axis, width)
       const w = Math.max(x1 - x0, 1)
       const color = s.status === 'error' ? COLORS.error : row.color
-      ctx.globalAlpha = s.intensity !== undefined ? 0.15 + 0.6 * s.intensity : 0.3
+      const idle = s.status === 'idle'
+      // Idle spans: fainter fill and a dashed outline, so they read as "not running".
+      ctx.globalAlpha = s.intensity !== undefined ? 0.15 + 0.6 * s.intensity : idle ? 0.14 : 0.3
       ctx.fillStyle = color
       ctx.fillRect(x0, barY + 1, w, barH - 2)
-      ctx.globalAlpha = 0.45
+      ctx.globalAlpha = idle ? 0.6 : 0.45
       ctx.strokeStyle = color
       ctx.lineWidth = 1
+      if (idle) ctx.setLineDash([3, 3])
       ctx.strokeRect(x0 + 0.5, barY + 1.5, Math.max(w - 1, 0), barH - 3)
+      if (idle) ctx.setLineDash([])
       if (s.end === undefined) {
         // still running: bright leading edge
         ctx.globalAlpha = 0.9
@@ -355,7 +359,8 @@ export function FleetTimelinePanel({ visible, instances, kanban, supermemory, se
           </span>
         </PanelHeader>
 
-        <div className="overflow-auto" style={{ maxHeight: 320 }}>
+        {/* Shorter on a phone (18vh) so the node map above keeps most of the screen. */}
+        <div className="overflow-auto max-h-[18vh] sm:max-h-80">
           <div className="flex">
             <div style={{ width: LABEL_WIDTH, flexShrink: 0 }}>
               <div style={{ height: HEADER_HEIGHT }} />

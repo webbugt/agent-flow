@@ -63,6 +63,10 @@ To show **structure only** for some or all profiles — command name and length 
 
 Profiles the setting does not name follow the default, which is **`none`** (full content) — one constant, `DEFAULT_ANONYMIZE` in `web/lib/content-privacy.ts`. A name that is not a Hermes profile on this machine is ignored with a warning in the relay log; the relay still starts. The live feed, the session detail and the Fleet tab all follow the same per-profile setting, and anonymizing happens in the relay, so the hidden text never reaches the browser.
 
+**Idle profiles.** The relay's session list includes every Hermes profile with a session in the last 24 hours, marked `idle: true` when nothing has logged since the relay started (read-only `SELECT` on each profile's `state.db`, up to 20 sessions per profile). Idle profiles appear on the Fleet node map and timeline but never as tabs. `AGENT_FLOW_FLEET_IDLE_WINDOW_HOURS` sets the window (fractions allowed, `0` = live activity only).
+
+**Fleet node map.** With Fleet on, the canvas draws every profile (live and idle) as a node with its sessions around it, plus Kanban boards (squares) and Supermemory namespaces (diamonds), linked to the profiles that use them. It is built from all listed sessions, independent of the open tab. At most 8 sessions per profile and 8 boards / 8 namespaces are drawn; archived and empty boards are skipped.
+
 The Fleet tab reads Hermes Kanban boards and Supermemory namespaces (read-only) from `GET /api/fleet`. The endpoint is loopback-only by default: requests with a non-loopback `Host` or proxy headers (`X-Forwarded-For`, `X-Real-IP`, `Forwarded`) get `403`. To serve it through a reverse proxy or to other machines, set `AGENT_FLOW_FLEET_ALLOW_REMOTE=1` — this exposes board names, task titles and namespace names to anyone who can reach the port, so only use it on a trusted network. The response never contains filesystem paths: the Kanban database path is dropped and scrubbed from board error messages.
 
 #### Which build is running

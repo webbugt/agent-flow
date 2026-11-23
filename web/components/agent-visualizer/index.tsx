@@ -15,9 +15,10 @@ import { DiscoveryDetailPopup } from "./discovery-detail-popup"
 import { FileAttentionPanel } from "./file-attention-panel"
 import { TimelinePanel } from "./timeline-panel"
 import { FleetTimelinePanel } from "./fleet-timeline-panel"
+import { FleetMap } from "./fleet-map"
 import { useFleetSelection } from "@/hooks/use-fleet-selection"
 import { useFleetSources } from "@/hooks/use-fleet-sources"
-import { createFleetFixture, instancesFromSessionEvents, splitInstanceId, tabSessions } from "@/lib/fleet/fleet-model"
+import { createFleetFixture, fleetSessions, instancesFromSessionEvents, splitInstanceId, tabSessions } from "@/lib/fleet/fleet-model"
 import { AgentChatPanel } from "./chat-panel"
 import { SessionTranscriptPanel } from "./session-transcript-panel"
 import { SessionDetailPanel } from "./session-detail-panel"
@@ -98,9 +99,7 @@ export function AgentVisualizer() {
   const fleetInstances = useMemo(() => {
     if (bridge.useMockData) return fleetFixture
     if (!showFleet) return []
-    const open = new Set(bridgeSessions.map(s => s.id))
-    const all = [...bridgeSessions, ...getDismissedSessions().filter(s => !open.has(s.id))]
-    return instancesFromSessionEvents(all, getSessionEvents)
+    return instancesFromSessionEvents(fleetSessions(bridgeSessions, getDismissedSessions()), getSessionEvents)
     // fleetTick: the event buffers are refs, so React does not see new events by itself
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bridge.useMockData, showFleet, bridgeSessions, getSessionEvents, getDismissedSessions, fleetFixture, fleetTick])
@@ -496,6 +495,20 @@ export function AgentVisualizer() {
         timelineEntries={timelineEntries}
         currentTime={currentTime}
         onClose={() => setShowTimeline(false)}
+      />
+
+      {/* Fleet node map: all profiles + sessions, Kanban boards and Supermemory namespaces around them.
+          Covers the single-session canvas while Fleet is on; independent of the open tab. */}
+      <FleetMap
+        visible={showFleet}
+        instances={fleetInstances}
+        kanban={bridge.useMockData ? undefined : fleetSources.kanban}
+        supermemory={bridge.useMockData ? undefined : fleetSources.supermemory}
+        selection={fleetSelection.view}
+        onOpenSession={bridge.useMockData ? undefined : handleFleetOpenSession}
+        insetTop={48}
+        insetBottom={380}
+        insetRight={showSessionDetail ? CARD.sessionDetail.width : 0}
       />
 
       {/* Fleet timeline panel (grouped agents + Kanban/Supermemory lanes) */}

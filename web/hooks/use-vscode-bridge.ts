@@ -162,7 +162,7 @@ export function useVSCodeBridge(): BridgeHookResult {
         if (saved) {
           setSessions(prev => {
             if (prev.find(s => s.id === saved.id)) return prev
-            return [...prev, { ...saved, status: 'active' as const, lastActivityTime: Date.now() }]
+            return [...prev, { ...saved, status: 'active' as const, lastActivityTime: Date.now(), idle: undefined }]
           })
         }
       }
@@ -199,8 +199,11 @@ export function useVSCodeBridge(): BridgeHookResult {
         setSessions(sessionList)
         // Auto-select: prefer active sessions, then most recently active.
         // Only set selection — useLayoutEffect handles flushing events.
-        if (!selectedSessionIdRef.current && sessionList.length > 0) {
-          const sorted = [...sessionList].sort((a, b) => {
+        // Idle sessions (history only) are fleet-only: never auto-selected, so the
+        // single-profile view opens exactly as it did before they were listed.
+        const selectable = sessionList.filter(s => !s.idle)
+        if (!selectedSessionIdRef.current && selectable.length > 0) {
+          const sorted = [...selectable].sort((a, b) => {
             const aActive = a.status === 'active' ? 1 : 0
             const bActive = b.status === 'active' ? 1 : 0
             if (aActive !== bActive) return bActive - aActive
@@ -224,7 +227,7 @@ export function useVSCodeBridge(): BridgeHookResult {
           if (existing) {
             // Session resumed after inactivity — mark active again
             return prev.map(s => s.id === session.id
-              ? { ...s, status: 'active' as const, lastActivityTime: Date.now() }
+              ? { ...s, status: 'active' as const, lastActivityTime: Date.now(), idle: undefined }
               : s)
           }
           return [...prev, session]

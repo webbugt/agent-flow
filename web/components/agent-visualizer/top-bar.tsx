@@ -31,16 +31,18 @@ function UnmutedIcon() {
 
 // ─── Toggle Button ──────────────────────────────────────────────────────────
 
-function ToggleButton({ active, onClick, children, style, activeColor }: {
+function ToggleButton({ active, onClick, children, style, activeColor, testId }: {
   active: boolean
   onClick: () => void
   children: React.ReactNode
   style?: React.CSSProperties
   activeColor?: { bg: string; text: string }
+  testId?: string
 }) {
   return (
     <button
       onClick={onClick}
+      data-testid={testId}
       className="px-1.5 py-0.5 rounded transition-all"
       style={{
         background: active ? (activeColor?.bg ?? COLORS.toggleActive) : COLORS.toggleInactive,
@@ -113,10 +115,16 @@ export const TopBar = memo(function TopBar({
   onTogglePanel, onToggleTimeline, onToggleFleet, onToggleMute,
 }: TopBarProps) {
   return (
-    <div className="absolute top-3 left-3 right-3 flex items-center gap-4 font-mono text-[10px]" style={{ zIndex: Z.info }}>
-      {/* Session tabs — scrollable, takes available space */}
+    // flex-wrap: on a narrow screen (phone, 390px) the controls drop to a second row instead
+    // of running off the right edge, so Timeline / Fleet / mute stay reachable.
+    <div
+      data-testid="top-bar"
+      className="absolute top-3 left-3 right-3 flex flex-wrap items-center gap-x-4 gap-y-1.5 font-mono text-[10px]"
+      style={{ zIndex: Z.info }}
+    >
+      {/* Session tabs — scrollable, never wider than the bar */}
       {sessions.length > 1 && (
-        <div className="min-w-0 flex-shrink overflow-x-auto scrollbar-hide">
+        <div className="min-w-0 max-w-full flex-shrink overflow-x-auto scrollbar-hide">
           <SessionTabs
             sessions={sessions}
             selectedSessionId={selectedSessionId}
@@ -127,11 +135,8 @@ export const TopBar = memo(function TopBar({
         </div>
       )}
 
-      {/* Spacer pushes info to the right */}
-      <div className="flex-1" />
-
-      {/* Right-side info/controls */}
-      <div className="flex items-center gap-4 flex-shrink-0" style={{ color: COLORS.textMuted }}>
+      {/* Right-side info/controls: ml-auto pushes them right; they wrap when the bar is narrow */}
+      <div className="ml-auto flex min-w-0 max-w-full flex-wrap items-center justify-end gap-x-3 gap-y-1.5 sm:gap-x-4" style={{ color: COLORS.textMuted }}>
         {isVSCode && <ConnectionIndicator status={connectionStatus} />}
         <span>{agentCount} agents</span>
         <span>
@@ -161,7 +166,7 @@ export const TopBar = memo(function TopBar({
 
         {/* Independent toggles */}
         <ToggleButton active={showTimeline} onClick={onToggleTimeline}>Timeline</ToggleButton>
-        <ToggleButton active={showFleet} onClick={onToggleFleet}>Fleet</ToggleButton>
+        <ToggleButton active={showFleet} onClick={onToggleFleet} testId="fleet-toggle">Fleet</ToggleButton>
         <ToggleButton active={!isMuted} onClick={onToggleMute} style={{ border: `1px solid ${COLORS.toggleBorder}` }}>
           {isMuted ? <MutedIcon /> : <UnmutedIcon />}
         </ToggleButton>

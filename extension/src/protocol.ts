@@ -36,6 +36,8 @@ export interface SessionInfo {
   status: 'active' | 'completed'
   startTime: number
   lastActivityTime: number
+  /** Listed from history only (Hermes profile with recent sessions, nothing live): fleet view only, no tab. */
+  idle?: boolean
 }
 
 // ─── Extension → Webview Messages ────────────────────────────────────────────

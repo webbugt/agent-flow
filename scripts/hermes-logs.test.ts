@@ -13,9 +13,11 @@ import {
   readSessionTitle,
   resolveHermesRoot,
   HermesLogWatcher,
+  readRecentSessions,
+  idleWindowFromEnv,
 } from './hermes-logs'
 import type { AgentEvent } from '../extension/src/protocol'
-import type { SqliteCtor } from './hermes-logs'
+import type { SqliteCtor, RecentSession } from './hermes-logs'
 
 const TOOL_TAGGED = '2026-11-23 12:06:13,000 INFO [20261123_103037_d0ddaef5] agent.tool_executor: tool terminal completed (0.10s, 588 chars)'
 const TOOL_UNTAGGED = '2026-11-23 12:06:12,989 INFO agent.tool_executor: tool skill_view completed (0.04s, 5457 chars)'
@@ -271,4 +273,173 @@ test('resolves the Hermes root from a profile-shell HERMES_HOME', () => {
   assert.equal(resolveHermesRoot('/home/u/.hermes/profiles'), '/home/u/.hermes')
   assert.equal(resolveHermesRoot('/home/u/.hermes/profiles/taxis'), '/home/u/.hermes')
   assert.equal(resolveHermesRoot('/home/u/.hermes/profiles/taxis/'), '/home/u/.hermes')
+})
+
+// ─── Idle profiles (fleet view) ─────────────────────────────────────────────
+
+const H = 3_600_000
+
+/** A temp state.db with `sessions` and `messages`, like Hermes' own (only the columns the reader uses). */
+function stateDb(rows: Array<{ id: string; title: string | null; startedS: number; lastMsgS?: number }>): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hermes-recent-'))
+  const file = path.join(dir, 'state.db')
+  const db = new (openSqlite())(file)
+  db.exec('create table sessions (id text primary key, title text, started_at real)')
+  db.exec('create table messages (id integer primary key, session_id text, timestamp real)')
+  for (const r of rows) {
+    db.prepare('insert into sessions values (?, ?, ?)').run(r.id, r.title, r.startedS)
+    if (r.lastMsgS !== undefined) db.prepare('insert into messages (session_id, timestamp) values (?, ?)').run(r.id, r.lastMsgS)
+  }
+  db.close()
+  return file
+}
+
+test('reads recent sessions from a state database: window, newest first, last message time', () => {
+  const now = 1_800_000_000_000
+  const file = stateDb([
+    { id: 'old', title: 'Old one', startedS: (now - 30 * H) / 1000, lastMsgS: (now - 29 * H) / 1000 },
+    { id: 'a', title: 'Recent A', startedS: (now - 5 * H) / 1000, lastMsgS: (now - 4 * H) / 1000 },
+    { id: 'b', title: null, startedS: (now - 2 * H) / 1000 }, // no messages: its start counts
+    { id: 'long', title: 'Started long ago, active now', startedS: (now - 40 * H) / 1000, lastMsgS: (now - 1 * H) / 1000 },
+  ])
+  const found = readRecentSessions(file, now - 24 * H)
+  assert.deepEqual(found.map(s => s.id), ['long', 'b', 'a'])
+  assert.equal(found[2].title, 'Recent A')
+  assert.equal(found[2].startedAt, now - 5 * H)
+  assert.equal(found[2].lastActivityAt, now - 4 * H)
+  assert.equal(found[1].title, undefined)
+  assert.deepEqual(readRecentSessions(path.join(os.tmpdir(), 'no-such-state.db'), 0), [])
+  assert.equal(readRecentSessions(file, now - 24 * H, 1).length, 1)
+})
+
+test('idle window: AGENT_FLOW_FLEET_IDLE_WINDOW_HOURS, default 24 h, 0 turns it off', () => {
+  assert.equal(idleWindowFromEnv({}), 24 * H)
+  assert.equal(idleWindowFromEnv({ AGENT_FLOW_FLEET_IDLE_WINDOW_HOURS: '6' }), 6 * H)
+  assert.equal(idleWindowFromEnv({ AGENT_FLOW_FLEET_IDLE_WINDOW_HOURS: '0.5' }), H / 2)
+  assert.equal(idleWindowFromEnv({ AGENT_FLOW_FLEET_IDLE_WINDOW_HOURS: '0' }), 0)
+  assert.equal(idleWindowFromEnv({ AGENT_FLOW_FLEET_IDLE_WINDOW_HOURS: 'abc' }), 24 * H)
+  assert.equal(idleWindowFromEnv({ AGENT_FLOW_FLEET_IDLE_WINDOW_HOURS: '-3' }), 24 * H)
+})
+
+/** Hermes home with two profiles; sophia has a quiet log, taxis one line appended later. */
+function twoProfiles() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hermes-fleet-'))
+  const profilesRoot = path.join(root, 'profiles')
+  const logs: Record<string, string> = {}
+  for (const p of ['sophia', 'taxis', 'hestia']) {
+    const dir = path.join(profilesRoot, p, 'logs')
+    fs.mkdirSync(dir, { recursive: true })
+    logs[p] = path.join(dir, 'agent.log')
+    fs.writeFileSync(logs[p], '')
+  }
+  return { profilesRoot, logs }
+}
+
+test('session list carries idle profiles (recent sessions, no live log line) marked idle', () => {
+  const { profilesRoot } = twoProfiles()
+  const now = 1_800_000_000_000
+  const recent: Record<string, RecentSession[]> = {
+    sophia: [
+      { id: '20261123_082951_1c240c9e', title: 'Agentic system visualisation options', startedAt: now - 5 * H, lastActivityAt: now - 4 * H },
+      { id: '20261123_170201_74050890', title: 'Cost estimate explanation', startedAt: now - 2 * H, lastActivityAt: now - H },
+    ],
+    taxis: [{ id: '20261123_103647_c9c036f8', title: 'Plan fleet timeline', startedAt: now - 3 * H, lastActivityAt: now - 2 * H }],
+    // hestia has nothing inside the window
+  }
+  const asked: Array<[string, number]> = []
+  const c = collector()
+  const w = new HermesLogWatcher({
+    profilesRoot, emit: c.emit, lifecycle: c.lifecycleFn, now: () => now, titleFor: () => undefined,
+    recentSessionsFor: (profile, _db, sinceMs) => { asked.push([profile, sinceMs]); return recent[profile] ?? [] },
+  })
+  w.poll()
+
+  // Window: 24 h back from now, asked once per profile.
+  assert.deepEqual(asked.map(a => a[1]), [now - 24 * H, now - 24 * H, now - 24 * H])
+  const list = w.getActiveSessions()
+  assert.deepEqual(list.map(s => s.id).sort(), ['hermes-sophia', 'hermes-taxis'], 'hestia has no recent session and is not listed')
+  for (const s of list) {
+    assert.equal(s.idle, true)
+    assert.equal(s.status, 'completed')
+  }
+  const sophia = list.find(s => s.id === 'hermes-sophia')!
+  assert.equal(sophia.label, 'Sophia')
+  assert.equal(sophia.startTime, now - 5 * H)
+  assert.equal(sophia.lastActivityTime, now - H)
+
+  // Nothing is live: no lifecycle, so no session-started goes to pages.
+  assert.deepEqual(c.lifecycle, [])
+  // Per session: a main node, one child per session placed by its real times, completed as idle.
+  const sophiaEvents = c.events.filter(e => e.sessionId === 'hermes-sophia').map(e => e.event)
+  const spawns = sophiaEvents.filter(e => e.type === 'agent_spawn').map(e => e.payload)
+  assert.equal(spawns[0].name, 'Sophia')
+  assert.equal(spawns[0].isMain, true)
+  assert.deepEqual(spawns.slice(1).map(p => [p.name, p.startedAt]), [
+    ['Sophia · Agentic System', now - 5 * H],
+    ['Sophia · Cost Estimate', now - 2 * H],
+  ])
+  const done = sophiaEvents.filter(e => e.type === 'agent_complete' && e.payload.idle === true)
+  assert.deepEqual(done.map(e => [e.payload.name, e.time]), [
+    ['Sophia · Agentic System', H / 1000],
+    ['Sophia · Cost Estimate', H / 1000],
+    ['Sophia', 0],
+  ])
+  assert.deepEqual(w.nodesOf('sophia'), ['Sophia · Agentic System', 'Sophia · Cost Estimate'])
+})
+
+test('an idle profile turns live on its first log line; other profiles stay idle', () => {
+  const { profilesRoot, logs } = twoProfiles()
+  const now = 1_800_000_000_000
+  let clock = now
+  const c = collector()
+  const w = new HermesLogWatcher({
+    profilesRoot, emit: c.emit, lifecycle: c.lifecycleFn, now: () => clock, titleFor: () => undefined,
+    recentSessionsFor: profile => profile === 'hestia' ? [] : [{ id: '20261123_103037_d0ddaef5', title: 'Fix the PDF export bug', startedAt: now - 3 * H, lastActivityAt: now - 2 * H }],
+  })
+  w.poll()
+  assert.deepEqual(w.getActiveSessions().map(s => [s.id, s.idle]).sort(), [['hermes-sophia', true], ['hermes-taxis', true]])
+
+  fs.appendFileSync(logs.taxis, TOOL_TAGGED + '\n')
+  clock += 1000
+  w.poll()
+  const byId = Object.fromEntries(w.getActiveSessions().map(s => [s.id, s]))
+  assert.equal(byId['hermes-taxis'].status, 'active')
+  assert.equal(byId['hermes-taxis'].idle, undefined, 'live profile is no longer idle')
+  assert.equal(byId['hermes-sophia'].idle, true)
+  assert.deepEqual(c.lifecycle.map(l => [l.type, l.sessionId]), [['started', 'hermes-taxis']])
+  // The restored session is reactivated, not duplicated.
+  assert.deepEqual(w.nodesOf('taxis'), ['Taxis · Fix PDF'])
+})
+
+test('a profile that was live and then finished is not idle (it stays a normal completed tab)', () => {
+  const { profilesRoot, logs } = twoProfiles()
+  let clock = 1_800_000_000_000
+  const c = collector()
+  const w = new HermesLogWatcher({
+    profilesRoot, emit: c.emit, lifecycle: c.lifecycleFn, now: () => clock, titleFor: () => 'T', recentSessionsFor: () => [],
+    endMs: 5_000,
+  })
+  w.poll()
+  fs.appendFileSync(logs.taxis, TOOL_TAGGED + '\n')
+  clock += 1000
+  w.poll()
+  clock += 10_000
+  w.poll()
+  const s = w.getActiveSessions().find(x => x.id === 'hermes-taxis')!
+  assert.equal(s.status, 'completed')
+  assert.equal(s.idle, undefined)
+})
+
+test('idle window 0 keeps to live activity only', () => {
+  const { profilesRoot } = twoProfiles()
+  const c = collector()
+  let asked = 0
+  const w = new HermesLogWatcher({
+    profilesRoot, emit: c.emit, lifecycle: c.lifecycleFn, now: () => 1_800_000_000_000, titleFor: () => undefined,
+    idleWindowMs: 0, recentSessionsFor: () => { asked++; return [] },
+  })
+  w.poll()
+  assert.equal(asked, 0)
+  assert.deepEqual(w.getActiveSessions(), [])
+  assert.equal(c.events.length, 0)
 })

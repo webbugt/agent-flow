@@ -196,8 +196,8 @@ export function MessageFeedPanel({
 
     return (
       <div
-        className="absolute cursor-pointer transition-all hover:scale-[1.02]"
-        style={{ top: 48, left: 12, zIndex: Z.info, pointerEvents: 'auto' }}
+        className="absolute top-12 max-sm:top-24 cursor-pointer transition-all hover:scale-[1.02]"
+        style={{ left: 12, zIndex: Z.info, pointerEvents: 'auto' }}
         onClick={() => setExpanded(true)}
       >
         <div className="glass-card px-3 py-2 flex items-center gap-2" style={{ maxWidth: 320 }}>
@@ -218,8 +218,8 @@ export function MessageFeedPanel({
   return (
     <div
       ref={panelRef}
-      className="absolute"
-      style={{ top: 48, left: 12, zIndex: Z.info, pointerEvents: 'auto' }}
+      className="absolute top-12 max-sm:top-24"
+      style={{ left: 12, zIndex: Z.info, pointerEvents: 'auto' }}
       onClick={(e) => e.stopPropagation()}
     >
       <div className="glass-card flex flex-col" style={{ width: 320, maxHeight: 420 }}>

@@ -45,7 +45,7 @@ import type { AnonymizePolicy } from '../web/lib/content-privacy'
 /** Minimal shape of node:sqlite's DatabaseSync (loaded at runtime; typed here for older @types/node). */
 export interface SqliteDb {
   exec(sql: string): void
-  prepare(sql: string): { get(...params: unknown[]): unknown; run(...params: unknown[]): unknown }
+  prepare(sql: string): { get(...params: unknown[]): unknown; all(...params: unknown[]): unknown[]; run(...params: unknown[]): unknown }
   close(): void
 }
 export type SqliteCtor = new (file: string, options?: { readOnly?: boolean }) => SqliteDb
@@ -213,6 +213,65 @@ export function readSessionTitle(dbFile: string, sid: string): string | undefine
   }
 }
 
+/** A Hermes session with recent activity, as listed in a profile's state.db. */
+export interface RecentSession {
+  id: string
+  title?: string
+  /** Epoch ms of the session's first row */
+  startedAt: number
+  /** Epoch ms of its newest message (its start if it has none) */
+  lastActivityAt: number
+}
+
+/** How far back idle profiles are looked up: 24 hours. */
+export const DEFAULT_IDLE_WINDOW_MS = 24 * 3_600_000
+/**
+ * Idle window from AGENT_FLOW_FLEET_IDLE_WINDOW_HOURS (hours, may be fractional; 0 turns
+ * idle profiles off). Unset or invalid: the 24 h default.
+ */
+export function idleWindowFromEnv(env: Record<string, string | undefined> = process.env): number {
+  const raw = env.AGENT_FLOW_FLEET_IDLE_WINDOW_HOURS
+  if (raw === undefined || raw.trim() === '') return DEFAULT_IDLE_WINDOW_MS
+  const hours = Number(raw)
+  return Number.isFinite(hours) && hours >= 0 ? Math.round(hours * 3_600_000) : DEFAULT_IDLE_WINDOW_MS
+}
+/** At most this many sessions per profile are restored, newest first. */
+export const MAX_RESTORED_SESSIONS = 20
+
+/**
+ * Hermes sessions of one profile with activity at or after `sinceMs`, newest
+ * first. Read-only SELECT on `sessions` and `messages`; any failure (missing
+ * db, locked, unknown schema) returns an empty list.
+ */
+export function readRecentSessions(dbFile: string, sinceMs: number, limit = MAX_RESTORED_SESSIONS): RecentSession[] {
+  try {
+    const DatabaseSync = (require('node:sqlite') as { DatabaseSync: SqliteCtor }).DatabaseSync
+    const db = new DatabaseSync(dbFile, { readOnly: true })
+    try {
+      const rows = db.prepare(
+        `select id, title, started_at, last_at from (
+           select s.id as id, s.title as title, s.started_at as started_at,
+                  coalesce((select max(m.timestamp) from messages m where m.session_id = s.id), s.started_at) as last_at
+           from sessions s
+         ) where last_at >= ? order by last_at desc limit ?`,
+      ).all(sinceMs / 1000, limit) as Array<{ id: string; title: string | null; started_at: number | null; last_at: number | null }>
+      const out: RecentSession[] = []
+      for (const r of rows) {
+        if (typeof r.id !== 'string' || typeof r.last_at !== 'number') continue
+        const lastActivityAt = Math.round(r.last_at * 1000)
+        const startedAt = typeof r.started_at === 'number' ? Math.min(Math.round(r.started_at * 1000), lastActivityAt) : lastActivityAt
+        const title = r.title?.trim()
+        out.push({ id: r.id, ...(title ? { title } : {}), startedAt, lastActivityAt })
+      }
+      return out
+    } finally {
+      db.close()
+    }
+  } catch {
+    return []
+  }
+}
+
 // ─── Watcher ────────────────────────────────────────────────────────────────
 
 export interface HermesLogWatcherOptions {
@@ -244,6 +303,13 @@ export interface HermesLogWatcherOptions {
   idleMs?: number
   /** Quiet period after which a session's node is shown complete */
   endMs?: number
+  /**
+   * Profiles with sessions active within this window are listed as idle even when
+   * the watcher saw no log line since it started (default 24 h, 0 = live activity only).
+   */
+  idleWindowMs?: number
+  /** Recent sessions of a profile (default: read-only state.db lookup, see readRecentSessions). */
+  recentSessionsFor?: (profile: string, dbFile: string, sinceMs: number) => RecentSession[]
 }
 
 /** Builds an event for a node. The node name is only known after the node is spawned. */
@@ -273,6 +339,8 @@ interface SessionState {
   completed: boolean
   /** Node created in the visualizer */
   spawned: boolean
+  /** Restored from state.db at discovery and not active since: shown idle, not live */
+  restored: boolean
   agentName: string
   pending: Builder[]
   model?: string
@@ -426,7 +494,9 @@ export class HermesLogWatcher {
 
   /**
    * Profiles for the relay's session list. Each profile is one Agent Flow
-   * session, so a page that loads late still sees it.
+   * session, so a page that loads late still sees it. Profiles with sessions
+   * inside the idle window are listed too, marked `idle`, so the fleet view
+   * shows every profile and not only the ones that logged since the relay started.
    */
   getActiveSessions(): SessionInfo[] {
     const out: SessionInfo[] = []
@@ -439,6 +509,8 @@ export class HermesLogWatcher {
         status: p.mainActive ? 'active' : 'completed',
         startTime: Math.min(...started.map(s => s.startedAt)),
         lastActivityTime: Math.max(...started.map(s => s.lastActivity)),
+        // Only restored from history, nothing live since the watcher started
+        ...(!p.mainActive && started.every(s => s.restored) ? { idle: true } : {}),
       })
     }
     return out
@@ -501,7 +573,7 @@ export class HermesLogWatcher {
       if (!fs.existsSync(agentLog)) continue
       const gatewayLog = path.join(logDir, 'gateway.log')
       // Start at the end: history from before the watcher attached is not replayed.
-      this.profiles.set(profile, {
+      const state: ProfileState = {
         profile,
         group,
         sessionId: `hermes-${profile}`,
@@ -511,8 +583,51 @@ export class HermesLogWatcher {
         sessions: new Map(),
         mainActive: false,
         pendingInbound: [],
-      })
+      }
+      this.profiles.set(profile, state)
+      this.restoreRecent(state)
     }
+  }
+
+  /**
+   * Seed a profile from state.db: every Hermes session with activity inside the
+   * idle window becomes a finished child node (spawn, then complete marked `idle`),
+   * placed on the wall clock by its real start and last-activity times. Nothing
+   * here is live: no lifecycle call is made, so the profile is listed idle until a
+   * log line shows real activity. Only structure is read (id, title, times),
+   * never message text.
+   */
+  private restoreRecent(p: ProfileState): void {
+    const windowMs = this.opts.idleWindowMs ?? DEFAULT_IDLE_WINDOW_MS
+    if (!(windowMs > 0)) return
+    const lookup = this.opts.recentSessionsFor ?? ((_profile, dbFile, sinceMs) => readRecentSessions(dbFile, sinceMs))
+    const recent = lookup(p.profile, p.dbFile, this.now() - windowMs)
+    if (recent.length === 0) return
+    // Oldest first, so node names and the event order follow the history.
+    const ordered = [...recent].sort((a, b) => a.startedAt - b.startedAt || a.id.localeCompare(b.id))
+    this.opts.emit({
+      time: 0,
+      type: 'agent_spawn',
+      payload: { name: p.group, isMain: true, profile: p.profile, group: p.group, task: `Hermes profile ${p.profile}` },
+    } as AgentEvent, p.sessionId)
+    for (const r of ordered) {
+      if (p.sessions.has(r.id)) continue
+      const s = this.sessionFor(p, r.id, r.lastActivityAt)
+      s.title = r.title
+      s.startedAt = r.startedAt
+      s.lastActivity = r.lastActivityAt
+      s.hasStarted = true
+      s.restored = true
+      s.spawned = true
+      s.agentName = this.uniqueName(p, s)
+      this.opts.emit({ time: 0, type: 'agent_spawn', payload: this.spawnPayload(p, s) } as AgentEvent, p.sessionId)
+      this.opts.emit({
+        time: Math.max(0, (r.lastActivityAt - r.startedAt) / 1000),
+        type: 'agent_complete',
+        payload: { name: s.agentName, idle: true },
+      } as AgentEvent, p.sessionId)
+    }
+    this.opts.emit({ time: 0, type: 'agent_complete', payload: { name: p.group, idle: true } } as AgentEvent, p.sessionId)
   }
 
   private handle(p: ProfileState, parsed: ParsedHermesLine): void {
@@ -647,6 +762,7 @@ export class HermesLogWatcher {
       active: false,
       completed: true,
       spawned: false,
+      restored: false,
       agentName: '',
       pending: [],
       toolSeq: 0,
@@ -661,6 +777,7 @@ export class HermesLogWatcher {
     if (s.active && !s.completed) return
     if (s.hasStarted) s.startedAt = t
     s.hasStarted = true
+    s.restored = false
     s.active = true
     s.completed = false
     s.lastActivity = t
