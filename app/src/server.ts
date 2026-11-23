@@ -10,6 +10,7 @@ import { exec, execFile } from 'child_process'
 import { createRelay } from '../../scripts/relay'
 import { createTelemetryClient } from '../../scripts/telemetry'
 import { serveStatic } from './static'
+import { handleFleetHttp, isFleetPath } from './fleet-route'
 import { isLoopbackHost } from '../../extension/src/request-guard'
 
 interface ServerOptions {
@@ -42,6 +43,16 @@ export async function startServer(options: ServerOptions) {
     // SSE endpoint
     if (req.url === '/events') {
       return relay.handleSSE(req, res)
+    }
+
+    // Read-only Kanban / Supermemory fleet data (loopback-only unless opted in)
+    if (isFleetPath(req.url)) {
+      void handleFleetHttp(req, res).catch(err => {
+        console.error('[fleet] /api/fleet failed', err)
+        if (!res.headersSent) res.writeHead(500, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ error: 'fleet read failed' }))
+      })
+      return
     }
 
     // Static files (UI)
