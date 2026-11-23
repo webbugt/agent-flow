@@ -21,6 +21,8 @@ export interface UseFleetSceneOptions {
   columns?: number
   /** Changes when the event buffers have grown. */
   tick: number
+  /** Shared replay: the session detail panel reads the same settled states the map draws. */
+  replay?: FleetReplay
 }
 
 const EMPTY_SCENE: FleetScene = {
@@ -35,9 +37,10 @@ const EMPTY_SCENE: FleetScene = {
  * targets) and `frameRef`, the same kind of ref the single-session canvas draws from.
  */
 export function useFleetScene(opts: UseFleetSceneOptions) {
-  const { visible, sessions, eventsOf, instances, selection, graph, kanban, narrow, columns, tick } = opts
-  const replayRef = useRef<FleetReplay | null>(null)
-  if (!replayRef.current) replayRef.current = new FleetReplay()
+  const { visible, sessions, eventsOf, instances, selection, graph, kanban, narrow, columns, tick, replay: sharedReplay } = opts
+  const ownReplayRef = useRef<FleetReplay | null>(null)
+  if (!ownReplayRef.current) ownReplayRef.current = new FleetReplay()
+  const replayRef = { current: sharedReplay ?? ownReplayRef.current }
   const movedRef = useRef(new Map<string, { x: number; y: number }>())
   const frameRef = useRef<SimulationState>(EMPTY_SCENE.state)
 

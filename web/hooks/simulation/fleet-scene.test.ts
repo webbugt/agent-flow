@@ -7,6 +7,7 @@ import type { PublicKanbanBoardNode } from '@/lib/fleet/kanban-source'
 import type { SupermemoryNamespaceNode } from '@/lib/fleet/supermemory-source'
 import { anonymizeToolInput, createAnonymizePolicy, isAnonymized } from '@/lib/content-privacy'
 import { buildFleetScene, FleetReplay, openTargetOf } from './fleet-scene'
+import { buildSessionItems, pickDefaultAgentId } from '@/lib/session-detail'
 import { RESTING_TOOLS_PER_AGENT } from './animate'
 
 const T0 = Date.UTC(2026, 10, 23, 12, 0, 0)
@@ -220,4 +221,36 @@ test('fleet replay: resets when the buffer is shorter, and does not reprocess an
   assert.equal(replay.advance('hermes-taxis', f.events['hermes-taxis']), a, 'same state object when nothing is new')
   const b = replay.advance('hermes-taxis', f.events['hermes-taxis'].slice(0, 2))
   assert.equal(b.toolCalls.size, 0, 'a shorter buffer starts over')
+})
+
+test('fleet replay feeds the session detail: a completed or idle profile still has its whole conversation', () => {
+  const f = fixture()
+  // Taxis finished (every node complete), Sophia is idle after a while.
+  f.events['hermes-taxis'].push({ time: 50, type: 'agent_complete', payload: { name: 'taxis · Plan' } })
+  f.events['hermes-taxis'].push({ time: 51, type: 'agent_complete', payload: { name: 'taxis' } })
+  f.events['hermes-sophia'].push({ time: 60, type: 'agent_complete', payload: { name: 'sophia · Report', idle: true } })
+  const replay = new FleetReplay()
+  const { scene } = sceneFor(f, all, replay)
+  // The node stays on the map, dimmed, with its satellites.
+  assert.equal(scene.state.agents.get('hermes-taxis::taxis · Plan')!.state, 'complete')
+
+  for (const [sid, node, tools] of [['hermes-taxis', 'taxis · Plan', 2], ['hermes-sophia', 'sophia · Report', 1]] as const) {
+    // What the panel is fed from when opened from the Fleet (main node click = plain session id).
+    const detail = replay.advance(sid, f.events[sid])
+    const open = openTargetOf(scene, `${sid}::${node}`)!
+    assert.equal(open.openId, `${sid}::${node}`)
+    assert.ok(detail.agents.has(node), `${node} is in the panel's agents although it finished`)
+    const picked = pickDefaultAgentId(detail.agents, detail.conversations)
+    assert.equal(picked, node, 'a main-node click picks the session node, not the empty main node')
+    const items = buildSessionItems(detail.conversations.get(picked!) ?? [])
+    assert.equal(items.filter(i => i.kind === 'tool').length, tools, `${node}: its tool calls are in the detail`)
+    assert.ok(items.some(i => i.kind === 'message'), `${node}: its message is in the detail`)
+  }
+
+  // Anonymized profile: the detail carries structure only; the other profile carries content.
+  const detailText = (sid: string, node: string) => JSON.stringify(buildSessionItems(replay.advance(sid, f.events[sid]).conversations.get(node) ?? []))
+  assert.ok(!detailText('hermes-taxis', 'taxis · Plan').includes('very-private-endpoint'))
+  assert.ok(!detailText('hermes-taxis', 'taxis · Plan').includes('checking the build'))
+  assert.ok(detailText('hermes-sophia', 'sophia · Report').includes('pnpm test'))
+  assert.ok(detailText('hermes-sophia', 'sophia · Report').includes('checking the build'))
 })

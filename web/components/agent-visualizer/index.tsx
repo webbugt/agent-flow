@@ -34,6 +34,7 @@ import { TopBar } from "./top-bar"
 import { useAudioEffects } from "@/hooks/use-audio-effects"
 import { useViewportWidth } from "@/hooks/use-viewport-width"
 import { detailInset } from "@/lib/session-detail"
+import { FleetReplay } from "@/hooks/simulation/fleet-scene"
 
 export function AgentVisualizer() {
   const bridge = useVSCodeBridge()
@@ -83,6 +84,11 @@ export function AgentVisualizer() {
   // Session detail: the whole conversation + tool calls of ONE Hermes session (agent node)
   const [showSessionDetail, setShowSessionDetail] = useState(false)
   const [detailAgentId, setDetailAgentId] = useState<string | null>(null)
+  // Set when the detail was opened from the Fleet: it then reads that profile's fleet replay
+  // (finished and idle nodes keep their history there), not the single-view simulation.
+  const [detailFleetSessionId, setDetailFleetSessionId] = useState<string | null>(null)
+  const fleetReplayRef = useRef<FleetReplay | null>(null)
+  if (!fleetReplayRef.current) fleetReplayRef.current = new FleetReplay()
   const viewportWidth = useViewportWidth(1280)
 
   // Fleet view: agent instances grouped by identity + Kanban/Supermemory lanes.
@@ -130,11 +136,13 @@ export function AgentVisualizer() {
     setShowTranscript(prev => panel === 'transcript' ? !prev : false)
     setShowCostOverlay(prev => panel === 'cost' ? !prev : false)
     setShowSessionDetail(prev => panel === 'session' ? !prev : false)
+    if (panel === 'session') setDetailFleetSessionId(null)
   }, [])
 
   /** Open the session detail (it closes the other right-hand panels). `agentId` null = the most recently active session node. */
-  const openSessionDetail = useCallback((agentId: string | null) => {
+  const openSessionDetail = useCallback((agentId: string | null, fleetSession: string | null = null) => {
     setDetailAgentId(agentId)
+    setDetailFleetSessionId(fleetSession)
     setShowFileAttention(false)
     setShowTranscript(false)
     setShowCostOverlay(false)
@@ -329,15 +337,30 @@ export function AgentVisualizer() {
 
   const handleFleetOpenSession = useCallback((instanceId: string) => {
     const { sessionId, agentName } = splitInstanceId(instanceId)
-    if (!canOpenFleetSession(instanceId)) return
-    if (bridge.selectedSessionId !== sessionId) bridge.selectSession(sessionId)
-    openSessionDetail(agentName ?? null)
-  }, [bridge, canOpenFleetSession, openSessionDetail])
+    // A live tab is switched to (as before). A closed tab has no live session, but its history is in
+    // the fleet replay, which feeds the panel, so it still opens.
+    if (canOpenFleetSession(instanceId) && bridge.selectedSessionId !== sessionId) bridge.selectSession(sessionId)
+    openSessionDetail(agentName ?? null, showFleet && !bridge.useMockData ? sessionId : null)
+  }, [bridge, canOpenFleetSession, openSessionDetail, showFleet])
+
+  // What the session detail panel shows. Opened from the Fleet: the settled replay of that profile,
+  // which keeps finished and idle nodes with their whole conversation. Otherwise the single view's state.
+  const fleetDetail = useMemo(() => {
+    if (!showFleet || !detailFleetSessionId || bridge.useMockData) return null
+    const replay = fleetReplayRef.current as FleetReplay
+    return replay.advance(detailFleetSessionId, getSessionEvents(detailFleetSessionId))
+    // fleetTick: the event buffers are refs, so React does not see new events by itself
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showFleet, detailFleetSessionId, bridge.useMockData, getSessionEvents, fleetTick])
 
   const currentSessionLabel = useMemo(
     () => bridge.sessions.find(s => s.id === bridge.selectedSessionId)?.label,
     [bridge.sessions, bridge.selectedSessionId],
   )
+  const detailSessionLabel = useMemo(() => {
+    if (!fleetDetail || !detailFleetSessionId) return currentSessionLabel
+    return mapSessions.find(s => s.id === detailFleetSessionId)?.label ?? currentSessionLabel
+  }, [fleetDetail, detailFleetSessionId, mapSessions, currentSessionLabel])
 
   const handleCloseSession = useCallback((id: string) => {
     bridge.removeSession(id)
@@ -495,10 +518,10 @@ export function AgentVisualizer() {
       {/* Session detail: whole conversation, tool calls (copyable), model and cost of one session */}
       <SessionDetailPanel
         visible={showSessionDetail}
-        agents={agents}
-        conversations={conversations}
+        agents={fleetDetail ? fleetDetail.agents : agents}
+        conversations={fleetDetail ? fleetDetail.conversations : conversations}
         agentId={detailAgentId}
-        sessionLabel={currentSessionLabel}
+        sessionLabel={detailSessionLabel}
         onSelectAgent={setDetailAgentId}
         onClose={() => setShowSessionDetail(false)}
       />
@@ -523,6 +546,7 @@ export function AgentVisualizer() {
         supermemory={bridge.useMockData ? undefined : fleetSources.supermemory}
         selection={fleetSelection.view}
         onOpenSession={bridge.useMockData ? undefined : handleFleetOpenSession}
+        replay={fleetReplayRef.current}
         insetTop={48}
         insetBottom={380}
         insetRight={detailInset(showSessionDetail, viewportWidth, CARD.sessionDetail.width)}

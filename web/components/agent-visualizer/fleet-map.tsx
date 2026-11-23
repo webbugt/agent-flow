@@ -8,7 +8,7 @@ import type { PublicKanbanBoardNode } from "@/lib/fleet/kanban-source"
 import type { SupermemoryNamespaceNode } from "@/lib/fleet/supermemory-source"
 import { buildFleetGraph } from "@/lib/fleet/fleet-graph"
 import { useFleetScene } from "@/hooks/use-fleet-scene"
-import { openTargetOf } from "@/hooks/simulation/fleet-scene"
+import { openTargetOf, type FleetReplay } from "@/hooks/simulation/fleet-scene"
 import { AgentCanvas } from "./canvas"
 
 interface FleetMapProps {
@@ -25,6 +25,8 @@ interface FleetMapProps {
   selection: FleetSelectionView
   /** Open an agent node (instance id `<session>::<node>`) in the session detail. */
   onOpenSession?: (instanceId: string) => void
+  /** Replay shared with the session detail panel (it shows finished nodes' history too). */
+  replay?: FleetReplay
   /** Space under the top bar / above the timeline panel / left of the session detail panel. */
   insetTop: number
   insetBottom: number
@@ -42,7 +44,7 @@ const noop = () => {}
  * its satellites) to open its session detail. Deselecting an agent in the fleet only hides it.
  */
 export function FleetMap({
-  visible, sessions, eventsOf, tick, instances, kanban, supermemory, selection, onOpenSession, insetTop, insetBottom, insetRight,
+  visible, sessions, eventsOf, tick, instances, kanban, supermemory, selection, onOpenSession, replay, insetTop, insetBottom, insetRight,
 }: FleetMapProps) {
   const [wrap, setWrap] = useState<HTMLDivElement | null>(null)
   const [size, setSize] = useState({ width: 0, height: 0 })
@@ -97,7 +99,7 @@ export function FleetMap({
   )
 
   const { scene, frameRef, moveNode } = useFleetScene({
-    visible, sessions, eventsOf, instances, selection, graph, kanban, narrow, columns, tick,
+    visible, sessions, eventsOf, instances, selection, graph, kanban, narrow, columns, tick, replay,
   })
 
   // Re-fit the camera when the set of nodes or the free area changes (the user's own pan/zoom is kept otherwise).
