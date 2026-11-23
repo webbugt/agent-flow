@@ -12,7 +12,14 @@ export interface AnimateOptions {
   mockScenarioEndTime: number
 }
 
-function animateAgents(agents: SimulationState['agents'], deltaTime: number, currentTime: number): SimulationState['agents'] {
+/** Fleet map: a finished node rests at this opacity instead of fading out. */
+export const FINISHED_AGENT_OPACITY = 0.5
+/** Fleet map: a settled tool call card rests at this opacity instead of fading out. */
+export const RESTING_TOOL_OPACITY = 0.7
+/** Fleet map: tool calls kept as satellites per agent (the newest). */
+export const RESTING_TOOLS_PER_AGENT = 4
+
+function animateAgents(agents: SimulationState['agents'], deltaTime: number, currentTime: number, keepFinished = false): SimulationState['agents'] {
   let newAgents = agents
   for (const [id, agent] of agents) {
     let updated = false
@@ -23,7 +30,10 @@ function animateAgents(agents: SimulationState['agents'], deltaTime: number, cur
 
     if (agent.state !== 'complete' && opacity < 1) { opacity = Math.min(1, opacity + deltaTime * ANIM_SPEED.agentFadeIn); updated = true }
     if (agent.state !== 'complete' && scale < 1) { scale = Math.min(1, scale + deltaTime * ANIM_SPEED.agentScaleIn); updated = true }
-    if (agent.state === 'complete' && !agent.isMain) {
+    if (agent.state === 'complete' && keepFinished) {
+      // Fleet map: finished nodes stay, dimmed
+      if (opacity > FINISHED_AGENT_OPACITY) { opacity = Math.max(FINISHED_AGENT_OPACITY, opacity - deltaTime * ANIM_SPEED.agentFadeOut); updated = true }
+    } else if (agent.state === 'complete' && !agent.isMain) {
       if (opacity > 0) { opacity = Math.max(0, opacity - deltaTime * ANIM_SPEED.agentFadeOut); updated = true }
       if (scale > 0.8) { scale = Math.max(0.8, scale - deltaTime * ANIM_SPEED.agentScaleOut); updated = true }
     }
@@ -50,11 +60,17 @@ function animateEdges(edges: SimulationState['edges'], deltaTime: number): Simul
   return edges
 }
 
-function animateToolCalls(toolCalls: SimulationState['toolCalls'], deltaTime: number, newTime: number): SimulationState['toolCalls'] {
+function animateToolCalls(toolCalls: SimulationState['toolCalls'], deltaTime: number, newTime: number, keepFinished = false): SimulationState['toolCalls'] {
   let newToolCalls = toolCalls
   for (const [id, tc] of toolCalls) {
     let newOpacity = tc.opacity
-    if (tc.state === 'running') {
+    if (keepFinished) {
+      // Fleet map: cards settle at a resting opacity (the newest few per agent are kept, see pruneRestingTools)
+      const target = tc.state === 'running' || newTime - (tc.completeTime ?? 0) < TOOL_MIN_DISPLAY_S ? 1 : RESTING_TOOL_OPACITY
+      newOpacity = tc.opacity < target
+        ? Math.min(target, tc.opacity + deltaTime * ANIM_SPEED.toolFadeIn)
+        : Math.max(target, tc.opacity - deltaTime * ANIM_SPEED.toolFadeOut)
+    } else if (tc.state === 'running') {
       const runningSince = newTime - tc.startTime
       if (runningSince > TOOL_MAX_RUNNING_S) {
         newOpacity = Math.max(0, tc.opacity - deltaTime * ANIM_SPEED.toolFadeOut)
@@ -77,21 +93,49 @@ function animateToolCalls(toolCalls: SimulationState['toolCalls'], deltaTime: nu
   return newToolCalls
 }
 
+/**
+ * Fleet map: keep only the newest `perAgent` tool calls of each agent (running ones count),
+ * with their edges. Returns the same objects when nothing is dropped.
+ */
+export function pruneRestingTools(
+  toolCalls: SimulationState['toolCalls'],
+  edges: SimulationState['edges'],
+  perAgent = RESTING_TOOLS_PER_AGENT,
+): { toolCalls: SimulationState['toolCalls']; edges: SimulationState['edges'] } {
+  const byAgent = new Map<string, string[]>()
+  for (const [id, tc] of toolCalls) {
+    const list = byAgent.get(tc.agentId)
+    if (list) list.push(id)
+    else byAgent.set(tc.agentId, [id])
+  }
+  const drop = new Set<string>()
+  for (const ids of byAgent.values()) {
+    if (ids.length <= perAgent) continue
+    // Map order is insertion order = start order: the oldest come first.
+    for (const id of ids.slice(0, ids.length - perAgent)) drop.add(id)
+  }
+  if (drop.size === 0) return { toolCalls, edges }
+  const kept = new Map(toolCalls)
+  for (const id of drop) kept.delete(id)
+  return { toolCalls: kept, edges: edges.filter(e => !(e.type === 'tool' && drop.has(e.to))) }
+}
+
 function cleanupFaded(
   agents: SimulationState['agents'],
   toolCalls: SimulationState['toolCalls'],
   edges: SimulationState['edges'],
   originalAgents: SimulationState['agents'],
   originalToolCalls: SimulationState['toolCalls'],
+  keepFinished = false,
 ): { agents: SimulationState['agents']; toolCalls: SimulationState['toolCalls']; edges: SimulationState['edges'] } {
   let newAgents = agents
   let newToolCalls = toolCalls
   let filteredEdges = edges
 
-  // Cleanup faded agents (completed sub-agents) and their edges
+  // Cleanup faded agents (completed sub-agents) and their edges. The fleet map keeps every node.
   const fadedAgentIds: string[] = []
   for (const [id, agent] of newAgents) {
-    if (!agent.isMain && agent.state === 'complete' && agent.opacity <= 0) {
+    if (!keepFinished && !agent.isMain && agent.state === 'complete' && agent.opacity <= 0) {
       fadedAgentIds.push(id)
     }
   }
@@ -100,6 +144,14 @@ function cleanupFaded(
     const fadedSet = new Set(fadedAgentIds)
     for (const id of fadedAgentIds) newAgents.delete(id)
     filteredEdges = filteredEdges.filter(e => !fadedSet.has(e.from) && !fadedSet.has(e.to))
+  }
+
+  if (keepFinished) {
+    const pruned = pruneRestingTools(newToolCalls, filteredEdges)
+    if (pruned.toolCalls !== newToolCalls) {
+      newToolCalls = pruned.toolCalls
+      filteredEdges = pruned.edges
+    }
   }
 
   // Cleanup faded tool calls (opacity <= 0) and their edges
@@ -155,12 +207,13 @@ function animateParticles(particles: SimulationState['particles'], deltaTime: nu
 }
 
 export function computeNextFrame(prev: SimulationState, deltaTime: number, newTime: number, maxT: number, currentState: SimulationState, options: AnimateOptions): SimulationState {
-      const newAgentsRaw = animateAgents(currentState.agents, deltaTime, currentState.currentTime)
+      const keep = currentState.keepFinished === true
+      const newAgentsRaw = animateAgents(currentState.agents, deltaTime, currentState.currentTime, keep)
       const newEdgesRaw = animateEdges(currentState.edges, deltaTime)
-      const newToolCallsRaw = animateToolCalls(currentState.toolCalls, deltaTime, newTime)
+      const newToolCallsRaw = animateToolCalls(currentState.toolCalls, deltaTime, newTime, keep)
 
       const { agents: newAgents, toolCalls: newToolCalls, edges: filteredEdges } =
-        cleanupFaded(newAgentsRaw, newToolCallsRaw, newEdgesRaw, currentState.agents, currentState.toolCalls)
+        cleanupFaded(newAgentsRaw, newToolCallsRaw, newEdgesRaw, currentState.agents, currentState.toolCalls, keep)
 
       const newDiscoveries = animateDiscoveries(currentState.discoveries, deltaTime, newTime)
       const newParticles = animateParticles(currentState.particles, deltaTime, currentState.speed)

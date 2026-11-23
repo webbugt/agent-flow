@@ -126,6 +126,13 @@ export function handleAgentComplete(
 ): void {
   const name = asString(payload.name)
   const agent = state.agents.get(name)
+  if (ctx.keepFinished && payload.idle === true) {
+    // Fleet map: a node restored from history, or quiet, is idle - not finished. It stays on the map.
+    if (agent && agent.state !== 'complete') {
+      state.agents.set(name, { ...agent, state: 'idle', currentTool: undefined })
+    }
+    return
+  }
   if (agent && agent.state !== 'complete') {
     state.agents.set(name, { ...agent, state: 'complete', completeTime: currentTime })
 
@@ -180,11 +187,13 @@ export function handlePermissionRequested(
 export function handleAgentIdle(
   payload: Record<string, unknown>,
   state: MutableEventState,
+  keepFinished = false,
 ): void {
   const idleName = asString(payload.name)
   const idleAgent = state.agents.get(idleName)
-  if (idleAgent && (idleAgent.state === 'tool_calling' || idleAgent.state === 'waiting_permission')) {
-    state.agents.set(idleName, { ...idleAgent, state: 'thinking', currentTool: undefined })
+  if (idleAgent && (idleAgent.state === 'tool_calling' || idleAgent.state === 'waiting_permission' || (keepFinished && idleAgent.state === 'thinking'))) {
+    // Fleet map: a quiet node reads idle (its own resting look), not as still thinking.
+    state.agents.set(idleName, { ...idleAgent, state: keepFinished ? 'idle' : 'thinking', currentTool: undefined })
   }
 }
 

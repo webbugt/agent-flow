@@ -26,6 +26,12 @@ export interface SimulationState {
   eventLog: SimulationEvent[]
   /** Highest currentTime ever reached (for scrubber range in live mode) */
   maxTimeReached: number
+  /**
+   * Fleet map: nodes are never removed. A finished or idle node stays on the map (dimmed),
+   * and each node keeps its last few tool calls as resting satellites. Off for the
+   * single-profile view, which fades finished nodes and tool calls out.
+   */
+  keepFinished?: boolean
 }
 
 /** Create an empty simulation state, optionally preserving specific fields */
@@ -142,4 +148,6 @@ export interface UseAgentSimulationOptions {
   sessionFilterRef?: React.RefObject<string | null>
   /** If true, CLAUDE_CODE_DISABLE_1M_CONTEXT is set — cap context window to 200k */
   disable1MContext?: boolean
+  /** Fleet map simulation: keep finished/idle nodes and resting tool calls (see SimulationState.keepFinished) */
+  keepFinished?: boolean
 }

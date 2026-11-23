@@ -116,15 +116,17 @@ export function drawEdges(
 
     const fromX = fromAgent.x, fromY = fromAgent.y
     const hasActiveParticles = activeEdgeIds.has(edge.id)
-    const baseAlpha = hasActiveParticles ? BEAM.activeAlpha : BEAM.idleAlpha
+    const isResource = edge.type === 'resource'
+    // Resource links (fleet map) carry no particles: a link that saw recent use is drawn like an active beam.
+    const baseAlpha = hasActiveParticles || (isResource && edge.active) ? BEAM.activeAlpha : isResource ? BEAM.idleAlpha * 2 : BEAM.idleAlpha
     const pulsing = hasActiveParticles ? Math.sin(time * ANIM.pulseSpeed) * 0.1 + 0.9 : 1
 
     const cp = computeControlPoints(fromX, fromY, toX, toY)
     if (!cp) continue
     const { cp1x, cp1y, cp2x, cp2y } = cp
 
-    const beamColor = edge.type === 'tool' ? COLORS.tool : COLORS.holoBase
-    const bw = edge.type === 'tool' ? BEAM.tool : BEAM.parentChild
+    const beamColor = isResource ? (edge.color ?? COLORS.holoBase) : edge.type === 'tool' ? COLORS.tool : COLORS.holoBase
+    const bw = edge.type === 'parent-child' ? BEAM.parentChild : BEAM.tool
 
     ctx.save()
 

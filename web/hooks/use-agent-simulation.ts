@@ -3,18 +3,18 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
 import {
   Agent,
-  ToolCallNode,
   Edge,
   SimulationEvent,
   type TimelineEntry,
 } from '@/lib/agent-types'
 import { MOCK_SCENARIO } from '@/lib/mock-scenario'
-import { TOOL_CARD_W, TOOL_CARD_H, FORCE, TOOL_SLOT, BUBBLE_VISIBLE_S, MODEL_FAMILY_CONTEXT, DEFAULT_CONTEXT_SIZE, FALLBACK_CONTEXT_SIZE, ANIM_SPEED } from '@/lib/canvas-constants'
+import { FORCE, MODEL_FAMILY_CONTEXT, DEFAULT_CONTEXT_SIZE, FALLBACK_CONTEXT_SIZE, ANIM_SPEED } from '@/lib/canvas-constants'
 import { forceSimulation, forceLink, forceManyBody, forceCenter, forceCollide, type Simulation } from 'd3-force'
 
 import type { SimulationState, ForceNode, ForceLink, UseAgentSimulationOptions } from './simulation/types'
 import { createEmptyState, MAX_EVENT_LOG } from './simulation/types'
 import { processEvent, type ProcessEventContext } from './simulation/process-event'
+import { findToolSlot as findToolSlotShared } from './simulation/tool-slot'
 import { computeNextFrame } from './simulation/animate'
 import { snapVisualState } from './simulation/snap-visual-state'
 import { applyExternalEvents } from './simulation/apply-external-events'
@@ -108,47 +108,8 @@ export function useAgentSimulation(options: UseAgentSimulationOptions = {}) {
     sim.stop()
   }, [])
 
-  // ─── Tool slot placement ─────────────────────────────────────────────────
-  const findToolSlot = useCallback((
-    agent: Agent, agents: Map<string, Agent>,
-    toolCalls: Map<string, ToolCallNode>, currentTime: number,
-  ): { x: number; y: number } => {
-    const visibleBubbles = agent.messageBubbles.filter(b => currentTime - b.time <= BUBBLE_VISIBLE_S)
-    const bubbleRect = visibleBubbles.length > 0 ? {
-      x1: agent.x + 30, y1: agent.y - 30,
-      x2: agent.x + 300, y2: agent.y - 20 + visibleBubbles.length * 60 + 20,
-    } : null
-
-    const overlaps = (cx: number, cy: number) => {
-      if (bubbleRect && cx + TOOL_CARD_W / 2 > bubbleRect.x1 && cx - TOOL_CARD_W / 2 < bubbleRect.x2
-        && cy + TOOL_CARD_H / 2 > bubbleRect.y1 && cy - TOOL_CARD_H / 2 < bubbleRect.y2) return true
-      for (const tc of toolCalls.values()) {
-        if (Math.abs(cx - tc.x) < TOOL_CARD_W && Math.abs(cy - tc.y) < TOOL_CARD_H) return true
-      }
-      return false
-    }
-
-    let outAngle = -Math.PI / 2
-    if (agent.parentId) {
-      const parent = agents.get(agent.parentId)
-      if (parent) {
-        outAngle = Math.atan2(agent.y - parent.y, agent.x - parent.x)
-      }
-    }
-
-    for (let ring = 1; ring <= TOOL_SLOT.maxRings; ring++) {
-      const dist = TOOL_SLOT.baseDistance + ring * TOOL_SLOT.ringIncrement
-      const steps = TOOL_SLOT.baseSteps + ring * TOOL_SLOT.stepsPerRing
-      for (let i = 0; i < steps; i++) {
-        const sweep = (i / (steps - 1) - 0.5) * Math.PI
-        const angle = outAngle + sweep
-        const cx = agent.x + Math.cos(angle) * dist
-        const cy = agent.y + Math.sin(angle) * dist
-        if (!overlaps(cx, cy)) return { x: cx, y: cy }
-      }
-    }
-    return { x: agent.x + Math.cos(outAngle) * TOOL_SLOT.fallbackDistance, y: agent.y + Math.sin(outAngle) * TOOL_SLOT.fallbackDistance }
-  }, [])
+  // Tool slot placement is shared with the fleet map (see simulation/tool-slot.ts)
+  const findToolSlot = findToolSlotShared
 
   const getContextWindowSize = useCallback((modelId?: string): number => {
     if (!modelId) return disable1MContext ? DEFAULT_CONTEXT_SIZE : FALLBACK_CONTEXT_SIZE

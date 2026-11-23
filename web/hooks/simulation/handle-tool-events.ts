@@ -64,6 +64,8 @@ export function handleToolCallStart(
       inputData,
       x: pos.x,
       y: pos.y,
+      offX: pos.x - agent.x,
+      offY: pos.y - agent.y,
       startTime: currentTime,
       opacity: 0,
     })

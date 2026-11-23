@@ -18,6 +18,8 @@ export interface ProcessEventContext {
   getContextWindowSize: (modelId?: string) => number
   blockIdCounter: { current: number }
   skipForceSync: boolean
+  /** Fleet map: an idle completion keeps the node (idle) instead of finishing it */
+  keepFinished?: boolean
 }
 
 /** Mutable collections that handlers mutate in place during a single processEvent call. */
@@ -71,9 +73,17 @@ export function processEvent(event: SimulationEvent, prev: SimulationState, ctx:
       }
 
       switch (event.type) {
-        case 'agent_spawn':       handleAgentSpawn(event.payload, prev.currentTime, state, ctx); break
+        case 'agent_spawn': {
+          handleAgentSpawn(event.payload, prev.currentTime, state, ctx)
+          // Remember which session (Hermes profile) the node belongs to, for the fleet map's hide/show.
+          const spawned = typeof event.payload?.name === 'string' ? state.agents.get(event.payload.name) : undefined
+          if (spawned && event.sessionId && spawned.sessionId !== event.sessionId) {
+            state.agents.set(spawned.id, { ...spawned, sessionId: event.sessionId })
+          }
+          break
+        }
         case 'agent_complete':    handleAgentComplete(event.payload, prev.currentTime, state, ctx); break
-        case 'agent_idle':        handleAgentIdle(event.payload, state); break
+        case 'agent_idle':        handleAgentIdle(event.payload, state, ctx.keepFinished); break
         case 'model_detected':    handleModelDetected(event.payload, state, ctx); break
         case 'tool_call_start':   handleToolCallStart(event.payload, prev.currentTime, state, ctx); break
         case 'tool_call_end':     handleToolCallEnd(event.payload, prev.currentTime, state, ctx); break

@@ -18,6 +18,7 @@ import { FleetTimelinePanel } from "./fleet-timeline-panel"
 import { FleetMap } from "./fleet-map"
 import { useFleetSelection } from "@/hooks/use-fleet-selection"
 import { useFleetSources } from "@/hooks/use-fleet-sources"
+import { createFleetFixtureSessions } from "@/lib/fleet/fleet-fixture-events"
 import { createFleetFixture, fleetSessions, instancesFromSessionEvents, splitInstanceId, tabSessions } from "@/lib/fleet/fleet-model"
 import { AgentChatPanel } from "./chat-panel"
 import { SessionTranscriptPanel } from "./session-transcript-panel"
@@ -103,6 +104,16 @@ export function AgentVisualizer() {
     // fleetTick: the event buffers are refs, so React does not see new events by itself
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bridge.useMockData, showFleet, bridgeSessions, getSessionEvents, getDismissedSessions, fleetFixture, fleetTick])
+  // The Fleet map draws every session (profile) with the single-session renderer: live, idle and
+  // closed tabs, fed from the same per-session event buffers. The demo feeds it through the same path.
+  const fleetDemo = useMemo(() => createFleetFixtureSessions(Date.now()), [])
+  const mapSessions = useMemo(() => {
+    if (bridge.useMockData) return fleetDemo.sessions
+    if (!showFleet) return []
+    return fleetSessions(bridgeSessions, getDismissedSessions())
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bridge.useMockData, showFleet, bridgeSessions, getDismissedSessions, fleetDemo, fleetTick])
+  const mapEventsOf = bridge.useMockData ? fleetDemo.eventsOf : getSessionEvents
   // Fleet on: nodes deselected in the fleet drop out of the tab strip (the open tab always stays).
   // Fleet off: the single-profile tab strip is unchanged.
   const visibleSessions = useMemo(
@@ -501,6 +512,9 @@ export function AgentVisualizer() {
           Covers the single-session canvas while Fleet is on; independent of the open tab. */}
       <FleetMap
         visible={showFleet}
+        sessions={mapSessions}
+        eventsOf={mapEventsOf}
+        tick={fleetTick}
         instances={fleetInstances}
         kanban={bridge.useMockData ? undefined : fleetSources.kanban}
         supermemory={bridge.useMockData ? undefined : fleetSources.supermemory}

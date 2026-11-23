@@ -62,8 +62,8 @@ export const MAX_SESSIONS_PER_PROFILE = 8
 /** A board link counts as in use when its event is this recent, ms. */
 const RECENT_USE_MS = 30 * 60_000
 
-export const KANBAN_COLOR = '#ffbb44'
-export const SUPERMEMORY_COLOR = '#cc88ff'
+import { KANBAN_COLOR, SUPERMEMORY_COLOR } from './fleet-colors'
+export { KANBAN_COLOR, SUPERMEMORY_COLOR }
 
 /** Profile names compare without case, dashes or spaces: "omh-coder" = "OMH Coder" = "omh coder". Hermes' default profile is shown as "Hermes". */
 export function profileKey(name: string): string {

@@ -1,0 +1,207 @@
+import { test } from 'node:test'
+import { strict as assert } from 'node:assert'
+import type { SimulationEvent } from '@/lib/agent-types'
+import { instancesFromSessionEvents, type FleetSelectionView, type SessionLike } from '@/lib/fleet/fleet-model'
+import { buildFleetGraph } from '@/lib/fleet/fleet-graph'
+import type { PublicKanbanBoardNode } from '@/lib/fleet/kanban-source'
+import type { SupermemoryNamespaceNode } from '@/lib/fleet/supermemory-source'
+import { anonymizeToolInput, createAnonymizePolicy, isAnonymized } from '@/lib/content-privacy'
+import { buildFleetScene, FleetReplay, openTargetOf } from './fleet-scene'
+import { RESTING_TOOLS_PER_AGENT } from './animate'
+
+const T0 = Date.UTC(2026, 10, 23, 12, 0, 0)
+const MIN = 60_000
+const NOW = T0 + 60 * MIN
+const all: FleetSelectionView = { isSelected: () => true }
+
+const session = (profile: string, over: Partial<SessionLike> = {}): SessionLike => ({
+  id: `hermes-${profile}`, label: profile, status: 'active', startTime: T0, lastActivityTime: NOW, ...over,
+})
+
+/** What the relay delivers for a profile: its main node, one session node and some actions. */
+function profileEvents(profile: string, node: string, actions: Array<{ tool: string; input: Record<string, unknown>; hermesTool: string }>, anonymize: boolean): SimulationEvent[] {
+  const events: SimulationEvent[] = [
+    { time: 0, type: 'agent_spawn', payload: { name: profile, isMain: true, profile, group: profile, task: `Hermes profile ${profile}` } },
+    { time: 0, type: 'agent_spawn', payload: { name: node, parent: profile, startedAt: T0, task: node } },
+  ]
+  actions.forEach((a, i) => {
+    // The relay anonymizes before the event leaves it (lib/content-privacy.ts); mirror that here.
+    const shown = anonymize ? anonymizeToolInput(a.hermesTool, a.input) : { args: String(Object.values(a.input)[0] ?? ''), inputData: a.input }
+    events.push({ time: 10 + i * 5, type: 'tool_call_start', payload: { agent: node, tool: a.tool, toolUseId: `u${i}`, args: shown.args, inputData: shown.inputData } })
+    events.push({ time: 12 + i * 5, type: 'tool_call_end', payload: { agent: node, tool: a.tool, toolUseId: `u${i}`, result: 'ok' } })
+  })
+  events.push({ time: 20, type: 'message', payload: { agent: node, role: 'assistant', content: anonymize ? '(42 chars)' : 'checking the build output now' } })
+  return events
+}
+
+const SECRET_CMD = 'curl -H "x: y" https://internal.example/very-private-endpoint'
+const SECRET_FILE = '/srv/private/plan.md'
+
+function fixture() {
+  const sessions = [session('taxis'), session('sophia')]
+  const events: Record<string, SimulationEvent[]> = {
+    'hermes-taxis': profileEvents('taxis', 'taxis · Plan', [
+      { tool: 'Bash', hermesTool: 'terminal', input: { command: SECRET_CMD } },
+      { tool: 'Read', hermesTool: 'read_file', input: { path: SECRET_FILE } },
+    ], true),
+    'hermes-sophia': profileEvents('sophia', 'sophia · Report', [
+      { tool: 'Bash', hermesTool: 'terminal', input: { command: 'pnpm test' } },
+    ], false),
+  }
+  return { sessions, events }
+}
+
+function sceneFor(f: ReturnType<typeof fixture>, selection: FleetSelectionView = all, replay = new FleetReplay(), extra: { kanban?: PublicKanbanBoardNode[]; supermemory?: SupermemoryNamespaceNode[] } = {}) {
+  const instances = instancesFromSessionEvents(f.sessions, id => f.events[id] ?? [])
+  const graph = buildFleetGraph({ instances, kanban: extra.kanban, supermemory: extra.supermemory, selection, now: NOW })
+  const scene = buildFleetScene({
+    sessions: f.sessions, stateOf: id => replay.advance(id, f.events[id] ?? []), instances, selection, graph, kanban: extra.kanban,
+  })
+  return { scene, replay, graph, instances }
+}
+
+const board = (slug: string, assignee: string): PublicKanbanBoardNode => ({
+  id: `kanban:${slug}`, type: 'kanban-board', slug, name: slug, description: '', archived: false,
+  taskCounts: { running: 1, done: 1 }, totalTasks: 2,
+  recentEvents: [{ id: 1, taskId: 't1', taskTitle: 'Write the plan', assignee, kind: 'claimed', runId: null, at: NOW - MIN }],
+  lastEventAt: NOW - MIN,
+} as PublicKanbanBoardNode)
+
+const space = (tag: string, byProfile: Record<string, number>): SupermemoryNamespaceNode => ({
+  id: `supermemory:${tag}`, type: 'supermemory-namespace', containerTag: tag,
+  counts: { store: 1, search: 3, forget: 0 }, total: 4,
+  byProfile: Object.fromEntries(Object.entries(byProfile).map(([p, n]) => [p, { store: 0, search: n, forget: 0 }])),
+  daily: [], lastEventAt: NOW - MIN,
+})
+
+test('fleet scene: two active profiles each show their agent nodes with their action nodes', () => {
+  const { scene } = sceneFor(fixture())
+  const agents = [...scene.state.agents.values()]
+  const names = agents.map(a => a.name).sort()
+  // Both profiles: the main node (its profile name) and the session node.
+  assert.deepEqual(names, ['sophia', 'sophia · Report', 'taxis', 'taxis · Plan'])
+  for (const a of agents) assert.ok(a.sessionId, `${a.name} carries its session`)
+  const cards = (agent: string) => [...scene.state.toolCalls.values()].filter(tc => tc.agentId === agent)
+  assert.equal(cards('hermes-taxis::taxis · Plan').length, 2, 'taxis: both tool calls orbit its node')
+  assert.equal(cards('hermes-sophia::sophia · Report').length, 1, 'sophia: its tool call orbits its node')
+  // Same shared edges as the single view: a tool edge from node to card.
+  const toolEdges = scene.state.edges.filter(e => e.type === 'tool')
+  assert.equal(toolEdges.length, 3)
+  // The message shows as a bubble on its node, as in the single view.
+  assert.equal(scene.state.agents.get('hermes-sophia::sophia · Report')!.messageBubbles.length, 1)
+  // Satellites sit near their node (orbit), not at the origin.
+  for (const tc of scene.state.toolCalls.values()) {
+    const a = scene.state.agents.get(tc.agentId)!
+    assert.ok(Math.hypot(tc.x - a.x, tc.y - a.y) < 400, 'a card orbits its node')
+  }
+})
+
+test('fleet scene: the two profiles are laid out apart, not on top of each other', () => {
+  const { scene } = sceneFor(fixture())
+  const t = scene.state.agents.get('hermes-taxis::taxis · Plan')!
+  const s = scene.state.agents.get('hermes-sophia::sophia · Report')!
+  assert.ok(Math.hypot(t.x - s.x, t.y - s.y) > 150)
+})
+
+test('fleet scene: clicking an agent, or one of its satellites, opens that agent in its session', () => {
+  const { scene } = sceneFor(fixture())
+  assert.deepEqual(openTargetOf(scene, 'hermes-sophia::sophia · Report'), { sessionId: 'hermes-sophia', instanceId: 'hermes-sophia::sophia · Report' })
+  const card = [...scene.state.toolCalls.values()].find(tc => tc.agentId === 'hermes-taxis::taxis · Plan')!
+  assert.deepEqual(openTargetOf(scene, card.id), { sessionId: 'hermes-taxis', instanceId: 'hermes-taxis::taxis · Plan' })
+  assert.equal(openTargetOf(scene, null), null)
+  assert.equal(openTargetOf(scene, 'nope'), null)
+})
+
+test('fleet scene: anonymize on one profile hides its content while the other shows content', () => {
+  const f = fixture()
+  // Same policy the relay applies: taxis anonymized, sophia full.
+  const policy = createAnonymizePolicy({ value: 'taxis', warn: () => {} })
+  assert.equal(isAnonymized(policy, 'taxis'), true)
+  assert.equal(isAnonymized(policy, 'sophia'), false)
+  const { scene } = sceneFor(f)
+  const text = (agent: string) => JSON.stringify([...scene.state.toolCalls.values()].filter(tc => tc.agentId === agent).map(tc => [tc.args, tc.inputData]))
+  const bubbles = (agent: string) => scene.state.agents.get(agent)!.messageBubbles.map(b => b.text).join('|')
+
+  const taxis = text('hermes-taxis::taxis · Plan')
+  assert.ok(!taxis.includes('very-private-endpoint'), 'anonymized command text is not on the satellites')
+  assert.ok(taxis.includes('curl · '), 'structure only: command name and size')
+  assert.ok(taxis.includes(SECRET_FILE), 'file path stays (structure)')
+  assert.ok(!bubbles('hermes-taxis::taxis · Plan').includes('checking the build'), 'message text hidden')
+
+  const sophia = text('hermes-sophia::sophia · Report')
+  assert.ok(sophia.includes('pnpm test'), 'the other profile shows its content')
+  assert.ok(bubbles('hermes-sophia::sophia · Report').includes('checking the build'))
+})
+
+test('fleet scene: deselecting an agent only hides it, and it comes back with its state and history', () => {
+  const f = fixture()
+  const replay = new FleetReplay()
+  const before = sceneFor(f, all, replay).scene
+  const key = 'hermes-taxis::taxis · Plan'
+  const hidden = new Set(['hermes-taxis::taxis · Plan', 'hermes-taxis'])
+  const without: FleetSelectionView = { isSelected: id => !hidden.has(id) }
+  const during = sceneFor(f, without, replay).scene
+  assert.ok(!during.state.agents.has(key), 'the deselected node is off the map')
+  assert.ok([...during.state.toolCalls.values()].every(tc => tc.agentId !== key), 'and so are its satellites')
+  assert.ok(during.state.agents.has('hermes-sophia::sophia · Report'), 'the other profile stays')
+
+  // New activity while hidden is not lost: the replay keeps running.
+  f.events['hermes-taxis'].push({ time: 40, type: 'tool_call_start', payload: { agent: 'taxis · Plan', tool: 'Bash', toolUseId: 'late', args: 'git · 10 chars' } })
+  const after = sceneFor(f, all, replay).scene
+  const node = after.state.agents.get(key)!
+  assert.equal(node.state, 'tool_calling', 'it keeps its state')
+  assert.equal([...after.state.toolCalls.values()].filter(tc => tc.agentId === key).length, 3, 'with its own history, including what happened while hidden')
+  assert.equal(before.state.agents.get(key)!.toolCalls, 2)
+  assert.equal(node.toolCalls, 3)
+})
+
+test('fleet scene: an idle node stays on the map, idle', () => {
+  const f = fixture()
+  f.events['hermes-sophia'].push({ time: 60, type: 'agent_complete', payload: { name: 'sophia · Report', idle: true } })
+  const { scene } = sceneFor(f)
+  const node = scene.state.agents.get('hermes-sophia::sophia · Report')!
+  assert.equal(node.state, 'idle')
+  assert.ok(node.opacity > 0)
+  assert.equal([...scene.state.toolCalls.values()].filter(tc => tc.agentId === node.id).length, 1, 'its action history stays')
+})
+
+test('fleet scene: satellites per node are capped to the newest, the node keeps its full count', () => {
+  const f = fixture()
+  const many = Array.from({ length: 20 }, (_, i) => ({ tool: 'Read', hermesTool: 'read_file', input: { path: `/f/${i}.ts` } }))
+  f.events['hermes-sophia'] = profileEvents('sophia', 'sophia · Report', many, false)
+  const { scene } = sceneFor(f)
+  const node = scene.state.agents.get('hermes-sophia::sophia · Report')!
+  const cards = [...scene.state.toolCalls.values()].filter(tc => tc.agentId === node.id)
+  assert.equal(cards.length, RESTING_TOOLS_PER_AGENT)
+  assert.equal(node.toolCalls, 20)
+  assert.ok(cards.some(c => c.args.includes('/f/19.ts')), 'the newest are kept')
+})
+
+test('fleet scene: Kanban boards and Supermemory namespaces stay on the map, linked to the agents that use them', () => {
+  const { scene } = sceneFor(fixture(), all, new FleetReplay(), {
+    kanban: [board('agent-flow', 'taxis')],
+    supermemory: [space('omh_family', { sophia: 3 })],
+  })
+  const agents = [...scene.state.agents.values()]
+  const kanban = agents.filter(a => a.resourceKind === 'kanban')
+  const memory = agents.filter(a => a.resourceKind === 'supermemory')
+  assert.equal(kanban.length, 1)
+  assert.equal(memory.length, 1)
+  const links = scene.state.edges.filter(e => e.type === 'resource')
+  const link = (resource: string) => links.find(e => e.to === resource)!
+  assert.equal(link(kanban[0].id).from, 'hermes-taxis::taxis', 'Kanban links to the profile that works on it') // main node: id = `<session>::<name>`
+  assert.equal(link(memory[0].id).from, 'hermes-sophia::sophia')
+  // The Kanban event is a satellite of the profile's main node.
+  assert.ok([...scene.state.toolCalls.values()].some(tc => tc.agentId === 'hermes-taxis::taxis' && tc.toolName.startsWith('kanban')))
+  // Resources are not an agent to open.
+  assert.equal(openTargetOf(scene, kanban[0].id), null)
+})
+
+test('fleet replay: resets when the buffer is shorter, and does not reprocess an unchanged buffer', () => {
+  const f = fixture()
+  const replay = new FleetReplay()
+  const a = replay.advance('hermes-taxis', f.events['hermes-taxis'])
+  assert.equal(replay.advance('hermes-taxis', f.events['hermes-taxis']), a, 'same state object when nothing is new')
+  const b = replay.advance('hermes-taxis', f.events['hermes-taxis'].slice(0, 2))
+  assert.equal(b.toolCalls.size, 0, 'a shorter buffer starts over')
+})

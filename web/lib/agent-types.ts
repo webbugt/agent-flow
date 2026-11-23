@@ -54,6 +54,12 @@ export interface Agent {
   scale: number
   /** Queued text bubbles shown on canvas — newest pushed to end */
   messageBubbles: MessageBubble[]
+  /** Bridge session (Hermes profile) the node came from, set from the spawn event's session id.
+   *  The fleet map uses it to hide/show a node by the fleet selection. */
+  sessionId?: string
+  /** Fleet map only: this node stands for a resource (a Kanban board or a Supermemory namespace),
+   *  not an agent. `name` is its label and `task` its second line. */
+  resourceKind?: 'kanban' | 'supermemory'
 }
 
 export interface MessageBubble {
@@ -86,6 +92,10 @@ export interface ToolCallNode {
   startTime: number
   completeTime?: number // when the tool call completed (for minimum display duration)
   opacity: number
+  /** Where the card sits relative to its agent when placed. The fleet map re-anchors resting
+   *  cards with it, so they keep orbiting the node when the layout moves it. */
+  offX?: number
+  offY?: number
 }
 
 // Discovery — something the agent found and "pinned"
@@ -148,8 +158,12 @@ export interface Edge {
   id: string
   from: string
   to: string
-  type: 'parent-child' | 'tool'
+  type: 'parent-child' | 'tool' | 'resource'
   opacity: number
+  /** resource edges: the link saw recent use (drawn brighter) */
+  active?: boolean
+  /** resource edges: beam colour (the resource's own colour) */
+  color?: string
 }
 
 export interface Particle {

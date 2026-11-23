@@ -6,6 +6,7 @@ import {
 import { alphaHex, formatTokens } from '@/lib/utils'
 import { truncateText, drawHexagon, CLAUDE_SPARK_D, OPENAI_LOGO_D, OPENAI_LOGO_VIEWBOX } from './draw-misc'
 import { getAgentGlowSprite } from './render-cache'
+import { KANBAN_COLOR, SUPERMEMORY_COLOR } from '@/lib/fleet/fleet-colors'
 
 let _claudeSparkPath: Path2D | null = null
 export function getClaudeSparkPath() {
@@ -332,6 +333,52 @@ function drawStatsOverlay(ctx: CanvasRenderingContext2D, agent: Agent, r: number
   ctx.fillText(`${agent.toolCalls} tools \u00B7 ${agent.timeAlive.toFixed(1)}s`, agent.x, sy + STATS_OVERLAY.textPaddingY)
 }
 
+/**
+ * Fleet map: a resource node (Kanban board = rounded square, Supermemory namespace = diamond),
+ * in the same holographic style as the agent hexagons: glow sprite, dark interior, ring, label.
+ */
+function drawResourceNode(ctx: CanvasRenderingContext2D, agent: Agent, isHovered: boolean, isSelected: boolean, time: number) {
+  const color = agent.resourceKind === 'kanban' ? KANBAN_COLOR : SUPERMEMORY_COLOR
+  const r = NODE.radiusSub
+  const active = agent.state !== 'idle' && agent.state !== 'complete'
+  const glowR = r + AGENT_DRAW.glowPadding
+  const glowAlpha = isHovered || isSelected ? 0.35 : active ? 0.2 : 0.1
+  const sprite = getAgentGlowSprite(color, Math.round(r * 0.5), Math.ceil(glowR), alphaHex(glowAlpha))
+  ctx.drawImage(sprite, agent.x - Math.ceil(glowR), agent.y - Math.ceil(glowR))
+
+  ctx.beginPath()
+  if (agent.resourceKind === 'kanban') {
+    ctx.roundRect(agent.x - r * 0.85, agent.y - r * 0.85, r * 1.7, r * 1.7, 5)
+  } else {
+    const d = r * 1.1
+    ctx.moveTo(agent.x, agent.y - d); ctx.lineTo(agent.x + d, agent.y); ctx.lineTo(agent.x, agent.y + d); ctx.lineTo(agent.x - d, agent.y); ctx.closePath()
+  }
+  ctx.fillStyle = COLORS.nodeInterior
+  ctx.fill()
+  ctx.strokeStyle = active ? color : color + '80'
+  ctx.lineWidth = isSelected || isHovered ? 2.5 : 2
+  if (!active) ctx.setLineDash([4, 4])
+  ctx.stroke()
+  ctx.setLineDash([])
+  if (active) {
+    // Soft pulse on a resource that is in use
+    ctx.beginPath()
+    ctx.arc(agent.x, agent.y, r + 6 + Math.sin(time * 3) * 2, 0, Math.PI * 2)
+    ctx.strokeStyle = color + '30'
+    ctx.lineWidth = 1
+    ctx.stroke()
+  }
+
+  drawAgentLabel(ctx, agent, r, isHovered)
+  if (agent.task) {
+    ctx.fillStyle = COLORS.textMuted
+    ctx.font = '9px monospace'
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'top'
+    ctx.fillText(truncateText(ctx, agent.task, r * AGENT_DRAW.labelWidthMultiplier), agent.x, agent.y + r + AGENT_DRAW.labelYOffset + 12)
+  }
+}
+
 export function drawAgents(
   ctx: CanvasRenderingContext2D,
   agents: Map<string, Agent>,
@@ -341,6 +388,13 @@ export function drawAgents(
   time: number,
 ) {
   for (const [id, agent] of agents) {
+    if (agent.resourceKind) {
+      ctx.save()
+      ctx.globalAlpha = agent.opacity
+      drawResourceNode(ctx, agent, id === hoveredAgentId, id === selectedAgentId, time)
+      ctx.restore()
+      continue
+    }
     const radius = agent.isMain ? NODE.radiusMain : NODE.radiusSub
     const color = getStateColor(agent.state)
     const isHovered = id === hoveredAgentId
