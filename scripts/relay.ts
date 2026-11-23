@@ -69,9 +69,13 @@ function sendSSE(res: http.ServerResponse, data: unknown) {
   }
 }
 
+/** Sequence number sent as the SSE event id; browsers return it as Last-Event-ID on reconnect. */
+let sseSeq = 0
+
 function broadcast(data: string) {
+  const id = ++sseSeq
   for (const res of sseClients) {
-    try { res.write(`data: ${data}\n\n`) } catch {
+    try { res.write(`id: ${id}\ndata: ${data}\n\n`) } catch {
       sseClients.delete(res)
     }
   }
@@ -538,10 +542,21 @@ export async function createRelay(options: RelayOptions): Promise<Relay> {
         if (aActive !== bActive) return bActive - aActive
         return b.lastActivityTime - a.lastActivityTime
       })
-      if (sorted.length > 0) {
-        const buffered = eventBuffer.get(sorted[0].id)
-        if (buffered) {
-          sendSSE(res, { type: 'agent-event-batch', events: buffered })
+      // A browser that reconnects sends Last-Event-ID and already holds the
+      // history. Replaying again would add every event a second time (the
+      // "2-3 copies" of tool calls), so resumed streams skip the replay.
+      if (req.headers['last-event-id'] !== undefined) return
+
+      // Replay every listed session, oldest first, so the most recent one is
+      // applied last. Replaying only one left the other sessions' nodes missing
+      // until the user switched to Review (which loads the full history).
+      for (const session of [...sorted].reverse()) {
+        const buffered = eventBuffer.get(session.id)
+        if (buffered && buffered.length > 0) {
+          // The page holds events until its playback clock reaches their time, and
+          // the clock starts at 0 on load. Replayed history is a snapshot, so time 0
+          // makes it show at once, in buffer order.
+          sendSSE(res, { type: 'agent-event-batch', events: buffered.map(e => ({ ...e, time: 0 })) })
         }
       }
     },
