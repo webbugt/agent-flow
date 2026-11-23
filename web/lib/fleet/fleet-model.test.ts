@@ -158,6 +158,22 @@ test('mergeSpans closes open spans at now and keeps disjoint ones apart', () => 
   assert.deepEqual(out.map(s => [s.start, s.end]), [[0, 8], [10, 100]])
 })
 
+test('mergeSpans keeps the error status of any overlapping copy, whichever comes first', () => {
+  const errFirst = mergeSpans([
+    { start: 0, end: 10, status: 'error' }, { start: 5, end: 20, status: 'completed' },
+  ], 100)
+  assert.deepEqual(errFirst, [{ start: 0, end: 20, status: 'error' }])
+  const errLater = mergeSpans([
+    { start: 0, end: 10, status: 'completed' }, { start: 5, end: 20, status: 'error' },
+    { start: 6, end: 7, status: 'active' },
+  ], 100)
+  assert.deepEqual(errLater, [{ start: 0, end: 20, status: 'error' }])
+  // disjoint spans keep their own status; active outranks completed
+  assert.deepEqual(mergeSpans([
+    { start: 0, end: 5, status: 'error' }, { start: 10, end: 20, status: 'completed' }, { start: 15, end: 30, status: 'active' },
+  ], 100).map(s => s.status), ['error', 'active'])
+})
+
 // ─── Kanban + Supermemory lanes ─────────────────────────────────────────────
 
 test('kanban marker kinds map to created/started/blocked/completed; noise is dropped', () => {

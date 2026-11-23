@@ -187,7 +187,20 @@ function instanceSpan(inst: FleetInstance): FleetSpan {
   return { start: inst.startTime, end: inst.endTime, status: inst.status }
 }
 
-/** Merge overlapping spans so a group lane draws the union of its copies once. */
+/** Failure must stay visible when copies are merged: error > active > completed. */
+const STATUS_RANK: Record<FleetInstanceStatus, number> = { completed: 0, active: 1, error: 2 }
+
+function worseStatus(a: FleetInstanceStatus | undefined, b: FleetInstanceStatus | undefined): FleetInstanceStatus | undefined {
+  if (!a) return b
+  if (!b) return a
+  return STATUS_RANK[b] > STATUS_RANK[a] ? b : a
+}
+
+/**
+ * Merge overlapping spans so a group lane draws the union of its copies once.
+ * The merged span keeps the most severe status of its parts, so a copy that
+ * errored still shows red when it overlaps a healthy copy.
+ */
 export function mergeSpans(spans: readonly FleetSpan[], now: number): FleetSpan[] {
   const sorted = spans.map(s => ({ ...s, end: s.end ?? now })).sort((a, b) => a.start - b.start)
   const out: FleetSpan[] = []
@@ -195,6 +208,7 @@ export function mergeSpans(spans: readonly FleetSpan[], now: number): FleetSpan[
     const last = out[out.length - 1]
     if (last && s.start <= (last.end as number)) {
       last.end = Math.max(last.end as number, s.end as number)
+      last.status = worseStatus(last.status, s.status)
     } else {
       out.push({ start: s.start, end: s.end, status: s.status })
     }
