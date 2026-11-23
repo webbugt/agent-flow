@@ -14,6 +14,10 @@ import { ToolDetailPopup } from "./tool-detail-popup"
 import { DiscoveryDetailPopup } from "./discovery-detail-popup"
 import { FileAttentionPanel } from "./file-attention-panel"
 import { TimelinePanel } from "./timeline-panel"
+import { FleetTimelinePanel } from "./fleet-timeline-panel"
+import { useFleetSelection } from "@/hooks/use-fleet-selection"
+import { useFleetSources } from "@/hooks/use-fleet-sources"
+import { createFleetFixture, instancesFromSessions } from "@/lib/fleet/fleet-model"
 import { AgentChatPanel } from "./chat-panel"
 import { SessionTranscriptPanel } from "./session-transcript-panel"
 import { OpenFileProvider } from "./tool-content-renderer"
@@ -68,8 +72,24 @@ export function AgentVisualizer() {
   const [showHexGrid, setShowHexGrid] = useState(true)
   const [showCostOverlay, setShowCostOverlay] = useState(false)
   const [showTimeline, setShowTimeline] = useState(false)
+  const [showFleet, setShowFleet] = useState(false)
   const [showFileAttention, setShowFileAttention] = useState(false)
   const [showTranscript, setShowTranscript] = useState(false)
+
+  // Fleet view: agent instances grouped by identity + Kanban/Supermemory lanes.
+  // Selection only hides things from the views; it never stops a session.
+  const fleetSelection = useFleetSelection()
+  const fleetSources = useFleetSources(showFleet && !bridge.useMockData)
+  const fleetFixture = useMemo(() => createFleetFixture(Date.now()), [])
+  const fleetInstances = useMemo(
+    () => bridge.useMockData ? fleetFixture : instancesFromSessions(bridge.sessions),
+    [bridge.useMockData, bridge.sessions, fleetFixture],
+  )
+  // Deselected sessions drop out of the tab strip (the open tab always stays).
+  const visibleSessions = useMemo(
+    () => bridge.sessions.filter(s => s.id === bridge.selectedSessionId || fleetSelection.view.isSelected(s.id)),
+    [bridge.sessions, bridge.selectedSessionId, fleetSelection.view],
+  )
 
   // Mutually exclusive panel toggling — opening one closes the others
   const toggleExclusivePanel = useCallback((panel: 'files' | 'transcript' | 'cost') => {
@@ -414,9 +434,19 @@ export function AgentVisualizer() {
         onClose={() => setShowTimeline(false)}
       />
 
+      {/* Fleet timeline panel (grouped agents + Kanban/Supermemory lanes) */}
+      <FleetTimelinePanel
+        visible={showFleet}
+        instances={fleetInstances}
+        kanban={bridge.useMockData ? undefined : fleetSources.kanban}
+        supermemory={bridge.useMockData ? undefined : fleetSources.supermemory}
+        selection={fleetSelection}
+        onClose={() => setShowFleet(false)}
+      />
+
       {/* Top bar: session tabs + info/controls */}
       <TopBar
-        sessions={bridge.sessions}
+        sessions={visibleSessions}
         selectedSessionId={bridge.selectedSessionId}
         sessionsWithActivity={bridge.sessionsWithActivity}
         onSelectSession={bridge.selectSession}
@@ -430,9 +460,11 @@ export function AgentVisualizer() {
         showTranscript={showTranscript}
         showCostOverlay={showCostOverlay}
         showTimeline={showTimeline}
+        showFleet={showFleet}
         isMuted={isMuted}
         onTogglePanel={toggleExclusivePanel}
-        onToggleTimeline={() => setShowTimeline(prev => !prev)}
+        onToggleTimeline={() => { setShowTimeline(prev => !prev); setShowFleet(false) }}
+        onToggleFleet={() => { setShowFleet(prev => !prev); setShowTimeline(false) }}
         onToggleMute={handleToggleMute}
       />
     </div>
