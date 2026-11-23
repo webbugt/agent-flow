@@ -19,6 +19,10 @@ interface FleetTimelinePanelProps {
   supermemory?: readonly SupermemoryNamespaceNode[]
   /** Selection state from useFleetSelection (hide/show only, never stops anything). */
   selection: ReturnType<typeof useFleetSelection>
+  /** Click on a group or copy row: open that session's detail. Omitted = rows are not clickable. */
+  onOpenSession?: (sessionId: string) => void
+  /** Pixels to keep free on the right (a side panel is open there), so the timeline is not covered. */
+  rightInset?: number
   onClose: () => void
 }
 
@@ -161,7 +165,8 @@ function hoverTitle(row: FleetRow | undefined, axis: FleetAxis | null, x: number
 
 // ─── Row label column (DOM: checkboxes need real inputs) ────────────────────
 
-function LabelCell({ row, onToggle, onExpand }: { row: FleetRow; onToggle: () => void; onExpand: () => void }) {
+function LabelCell({ row, onToggle, onExpand, onOpen }: { row: FleetRow; onToggle: () => void; onExpand: () => void; onOpen?: (sessionId: string) => void }) {
+  const openId = onOpen ? row.openSessionId : undefined
   const checkboxRef = useRef<HTMLInputElement>(null)
   useEffect(() => {
     if (checkboxRef.current) checkboxRef.current.indeterminate = row.indeterminate
@@ -197,13 +202,27 @@ function LabelCell({ row, onToggle, onExpand }: { row: FleetRow; onToggle: () =>
       ) : (
         <span style={{ width: 10, flexShrink: 0 }} />
       )}
-      <span
-        className="truncate"
-        style={{ color: row.kind === 'section' ? COLORS.textPrimary : COLORS.textDim, fontWeight: row.kind === 'lane' ? 400 : 600 }}
-        title={row.label}
-      >
-        {row.label}
-      </span>
+      {openId ? (
+        <button
+          type="button"
+          onClick={() => onOpen?.(openId)}
+          className="truncate text-left hover:underline"
+          style={{ color: COLORS.textPrimary, fontWeight: 600, cursor: 'pointer' }}
+          title={`Open the session detail of ${row.label}`}
+          aria-label={`Open session detail of ${row.label}`}
+          data-fleet-open={openId}
+        >
+          {row.label}
+        </button>
+      ) : (
+        <span
+          className="truncate"
+          style={{ color: row.kind === 'section' ? COLORS.textPrimary : COLORS.textDim, fontWeight: row.kind === 'lane' ? 400 : 600 }}
+          title={row.label}
+        >
+          {row.label}
+        </span>
+      )}
       {row.badge && (
         <span
           className="px-1 rounded-sm flex-shrink-0"
@@ -221,7 +240,7 @@ function LabelCell({ row, onToggle, onExpand }: { row: FleetRow; onToggle: () =>
 
 // ─── Component ──────────────────────────────────────────────────────────────
 
-export function FleetTimelinePanel({ visible, instances, kanban, supermemory, selection, onClose }: FleetTimelinePanelProps) {
+export function FleetTimelinePanel({ visible, instances, kanban, supermemory, selection, onOpenSession, rightInset = 0, onClose }: FleetTimelinePanelProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const trackRef = useRef<HTMLDivElement>(null)
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set())
@@ -293,7 +312,7 @@ export function FleetTimelinePanel({ visible, instances, kanban, supermemory, se
   return (
     <SlidingPanel
       visible={visible}
-      position={{ bottom: 72, left: 16, right: 16 }}
+      position={{ bottom: 72, left: 16, right: 16 + rightInset }}
       axis="Y"
       zIndex={Z.sidePanel}
       className="mx-auto"
@@ -324,7 +343,9 @@ export function FleetTimelinePanel({ visible, instances, kanban, supermemory, se
           }
         >
           <span className="text-[10px] font-mono tracking-wider" style={{ color: COLORS.textPrimary }}>FLEET TIMELINE</span>
-          <span className="text-[9px] font-mono" style={{ color: COLORS.textMuted }}>hiding does not stop agents</span>
+          <span className="text-[9px] font-mono" style={{ color: COLORS.textMuted }}>
+            hiding does not stop agents{onOpenSession ? ' · click a name to open its session' : ''}
+          </span>
         </PanelHeader>
 
         <div className="overflow-auto" style={{ maxHeight: 320 }}>
@@ -337,6 +358,7 @@ export function FleetTimelinePanel({ visible, instances, kanban, supermemory, se
                   row={row}
                   onToggle={() => selection.toggleIds(row.selectionIds)}
                   onExpand={() => toggleExpanded(row.label)}
+                  onOpen={onOpenSession}
                 />
               ))}
               {rows.length === 0 && (

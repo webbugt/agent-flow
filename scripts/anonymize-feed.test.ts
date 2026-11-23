@@ -173,3 +173,14 @@ test('relay flags: --anonymize-content[=value], --show-content', () => {
   assert.equal(parseArgs(['--show-content']).anonymizeContent, 'none')
   assert.equal(parseArgs(['--anonymize-content=all', '--port', '4000']).port, 4000)
 })
+
+test('anonymized: no times and no separate sender or platform fields leave either', () => {
+  const items = rowsToItems(ROWS, new Map(), {
+    displayTool: displayToolName, anonymize: true, from: { user: 'Webbugt', platform: 'matrix' },
+    origin: { platform: 'matrix', sender: 'Webbugt' },
+  })
+  for (const item of items) {
+    assert.ok(!('at' in item) || (item as { at?: number }).at === undefined, 'no time')
+    assert.ok(!('sender' in item) && !('platform' in item), 'no sender/platform field')
+  }
+})

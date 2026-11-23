@@ -20,9 +20,10 @@ import { useFleetSources } from "@/hooks/use-fleet-sources"
 import { createFleetFixture, instancesFromSessions } from "@/lib/fleet/fleet-model"
 import { AgentChatPanel } from "./chat-panel"
 import { SessionTranscriptPanel } from "./session-transcript-panel"
+import { SessionDetailPanel } from "./session-detail-panel"
 import { OpenFileProvider } from "./tool-content-renderer"
 import { stopPropagationHandlers } from "./shared-ui"
-import { TimelineEvent, TIMING } from "@/lib/agent-types"
+import { CARD, TimelineEvent, TIMING } from "@/lib/agent-types"
 import { COLORS } from "@/lib/colors"
 
 import { MOCK_DURATION } from "@/lib/mock-scenario"
@@ -75,6 +76,9 @@ export function AgentVisualizer() {
   const [showFleet, setShowFleet] = useState(false)
   const [showFileAttention, setShowFileAttention] = useState(false)
   const [showTranscript, setShowTranscript] = useState(false)
+  // Session detail: the whole conversation + tool calls of ONE Hermes session (agent node)
+  const [showSessionDetail, setShowSessionDetail] = useState(false)
+  const [detailAgentId, setDetailAgentId] = useState<string | null>(null)
 
   // Fleet view: agent instances grouped by identity + Kanban/Supermemory lanes.
   // Selection only hides things from the views; it never stops a session.
@@ -92,10 +96,20 @@ export function AgentVisualizer() {
   )
 
   // Mutually exclusive panel toggling — opening one closes the others
-  const toggleExclusivePanel = useCallback((panel: 'files' | 'transcript' | 'cost') => {
+  const toggleExclusivePanel = useCallback((panel: 'files' | 'transcript' | 'cost' | 'session') => {
     setShowFileAttention(prev => panel === 'files' ? !prev : false)
     setShowTranscript(prev => panel === 'transcript' ? !prev : false)
     setShowCostOverlay(prev => panel === 'cost' ? !prev : false)
+    setShowSessionDetail(prev => panel === 'session' ? !prev : false)
+  }, [])
+
+  /** Open the session detail (it closes the other right-hand panels). `agentId` null = the most recently active session node. */
+  const openSessionDetail = useCallback((agentId: string | null) => {
+    setDetailAgentId(agentId)
+    setShowFileAttention(false)
+    setShowTranscript(false)
+    setShowCostOverlay(false)
+    setShowSessionDetail(true)
   }, [])
   const [zoomToFitTrigger, setZoomToFitTrigger] = useState(0)
 
@@ -222,7 +236,7 @@ export function AgentVisualizer() {
     zoomToFit: () => { setZoomToFitTrigger(n => n + 1) },
     clearSelection: () => { selection.clearAllSelections() },
     deselectAgent: () => { selection.clearAgent() },
-    closeTranscript: () => { setShowTranscript(false) },
+    closeTranscript: () => { setShowTranscript(false); setShowSessionDetail(false) },
     toggleMute: handleToggleMute,
     setSpeed,
     selectedAgentId: selection.selectedAgentId,
@@ -273,6 +287,19 @@ export function AgentVisualizer() {
       { label: '⟲  Restart', onClick: restart },
     ]
   ) : []
+
+  // Fleet tab row click: switch to that Hermes profile's session, then open its detail.
+  // A fixture row (demo data) has no live session behind it, so it opens nothing.
+  const handleFleetOpenSession = useCallback((sessionId: string) => {
+    if (!bridge.sessions.some(s => s.id === sessionId)) return
+    if (bridge.selectedSessionId !== sessionId) bridge.selectSession(sessionId)
+    openSessionDetail(null)
+  }, [bridge, openSessionDetail])
+
+  const currentSessionLabel = useMemo(
+    () => bridge.sessions.find(s => s.id === bridge.selectedSessionId)?.label,
+    [bridge.sessions, bridge.selectedSessionId],
+  )
 
   const handleCloseSession = useCallback((id: string) => {
     bridge.removeSession(id)
@@ -371,6 +398,7 @@ export function AgentVisualizer() {
         agentState={selectedAgent?.state ?? 'idle'}
         conversation={selectedConversation}
         runtime={selectedAgent?.runtime ?? sessionRuntime}
+        onOpenDetail={() => openSessionDetail(selection.selectedAgentId)}
         onClose={selection.clearAgent}
       />
 
@@ -426,6 +454,17 @@ export function AgentVisualizer() {
         onClose={() => setShowTranscript(false)}
       />
 
+      {/* Session detail: whole conversation, tool calls (copyable), model and cost of one session */}
+      <SessionDetailPanel
+        visible={showSessionDetail}
+        agents={agents}
+        conversations={conversations}
+        agentId={detailAgentId}
+        sessionLabel={currentSessionLabel}
+        onSelectAgent={setDetailAgentId}
+        onClose={() => setShowSessionDetail(false)}
+      />
+
       {/* Timeline panel (slide-in from bottom) */}
       <TimelinePanel
         visible={showTimeline}
@@ -441,6 +480,8 @@ export function AgentVisualizer() {
         kanban={bridge.useMockData ? undefined : fleetSources.kanban}
         supermemory={bridge.useMockData ? undefined : fleetSources.supermemory}
         selection={fleetSelection}
+        onOpenSession={bridge.useMockData ? undefined : handleFleetOpenSession}
+        rightInset={showSessionDetail ? CARD.sessionDetail.width : 0}
         onClose={() => setShowFleet(false)}
       />
 
@@ -459,6 +500,7 @@ export function AgentVisualizer() {
         showFileAttention={showFileAttention}
         showTranscript={showTranscript}
         showCostOverlay={showCostOverlay}
+        showSessionDetail={showSessionDetail}
         showTimeline={showTimeline}
         showFleet={showFleet}
         isMuted={isMuted}

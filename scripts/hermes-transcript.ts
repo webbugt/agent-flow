@@ -17,8 +17,9 @@
  *     never selected.
  *
  * What is read: `role`, `content`, `tool_calls`, `tool_call_id`, `tool_name`,
- * `reasoning` and `timestamp` of `messages` rows, and the existence of the
- * `sessions` row.
+ * `reasoning` and `timestamp` of `messages` rows, and `source` (the platform),
+ * `display_name` and `user_id` (the sender) of the `sessions` row, which the
+ * detail views show next to each message.
  *
  * Secrets: tool arguments and results can contain credentials (an `.env` that
  * was read, a command with a token in it). Every string read from Hermes passes
@@ -262,9 +263,31 @@ export interface TranscriptRow {
 }
 
 export type TranscriptItem =
-  | { kind: 'message'; role: 'user' | 'assistant' | 'thinking'; content: string }
-  | { kind: 'tool_start'; callId: string; hermesTool: string; tool: string; args: string; inputData: Record<string, unknown> }
-  | { kind: 'tool_end'; callId: string; hermesTool: string; result: string; isError: boolean }
+  | {
+      kind: 'message'
+      role: 'user' | 'assistant' | 'thinking'
+      content: string
+      /** Epoch ms of the message row, when it has a usable timestamp */
+      at?: number
+      /** Who wrote a user message (platform user name), when known */
+      sender?: string
+      /** Platform the session runs on (telegram, matrix, kanban ...), when known */
+      platform?: string
+    }
+  | { kind: 'tool_start'; callId: string; hermesTool: string; tool: string; args: string; inputData: Record<string, unknown>; at?: number }
+  | { kind: 'tool_end'; callId: string; hermesTool: string; result: string; isError: boolean; at?: number }
+
+/** Epoch ms of a message row. Hermes stores seconds (a float); a value that is already ms is kept. */
+export function rowAtMs(timestamp: unknown): number | undefined {
+  if (typeof timestamp !== 'number' || !Number.isFinite(timestamp) || timestamp <= 0) return undefined
+  return Math.round(timestamp < 1e11 ? timestamp * 1000 : timestamp)
+}
+
+/** Who and where a session runs, from its `sessions` row (platform = `source`). */
+export interface SessionOrigin {
+  platform?: string
+  sender?: string
+}
 
 export interface ItemOptions {
   /** Maps a Hermes tool name to Agent Flow's name (Bash, Read ...) */
@@ -278,6 +301,12 @@ export interface ItemOptions {
   anonymize?: boolean
   /** Sender and platform of the profile's latest inbound message, for anonymized user messages */
   from?: { user?: string; platform?: string }
+  /**
+   * Sender and platform to attach to messages as fields (the detail views show
+   * them). Unlike `from` this is not part of the anonymized text: it is only the
+   * name of the sender and the platform, never the message.
+   */
+  origin?: SessionOrigin
 }
 
 /**
@@ -290,20 +319,26 @@ export function rowsToItems(rows: TranscriptRow[], calls: Map<string, string>, o
   const anon = opts.anonymize === true
   const body = (role: 'user' | 'assistant' | 'thinking', raw: string, from?: ItemOptions['from']): string =>
     anon ? anonymizeMessage(role, raw.length, from) : cleanText(raw, max)
+  // Anonymized mode keeps its contract (names, paths and sizes only): no times and no sender/platform fields.
+  // The sender and platform already appear in the anonymized message text.
+  const platform = !anon && opts.origin?.platform ? redactSecrets(opts.origin.platform) : undefined
+  const sender = !anon && opts.origin?.sender ? redactSecrets(opts.origin.sender) : undefined
   const items: TranscriptItem[] = []
   for (const row of rows) {
+    const rowAt = anon ? undefined : rowAtMs(row.timestamp)
+    const atField = rowAt !== undefined ? { at: rowAt } : {}
     if (row.role === 'user') {
       const text = row.content?.trim() ? body('user', row.content, opts.from) : ''
-      if (text) items.push({ kind: 'message', role: 'user', content: text })
+      if (text) items.push({ kind: 'message', role: 'user', content: text, ...atField, ...(sender ? { sender } : {}), ...(platform ? { platform } : {}) })
     } else if (row.role === 'assistant') {
       const thinking = row.reasoning?.trim() ? body('thinking', row.reasoning) : ''
-      if (thinking) items.push({ kind: 'message', role: 'thinking', content: thinking })
+      if (thinking) items.push({ kind: 'message', role: 'thinking', content: thinking, ...atField })
       const text = row.content?.trim() ? body('assistant', row.content) : ''
-      if (text) items.push({ kind: 'message', role: 'assistant', content: text })
+      if (text) items.push({ kind: 'message', role: 'assistant', content: text, ...atField, ...(platform ? { platform } : {}) })
       for (const call of parseToolCalls(row.tool_calls)) {
         calls.set(call.id, call.name)
         const input = anon ? anonymizedInput(call.name, call.arguments) : toolInput(call.name, call.arguments, max)
-        items.push({ kind: 'tool_start', callId: call.id, hermesTool: call.name, tool: opts.displayTool(call.name), ...input })
+        items.push({ kind: 'tool_start', callId: call.id, hermesTool: call.name, tool: opts.displayTool(call.name), ...input, ...atField })
       }
     } else if (row.role === 'tool') {
       const callId = row.tool_call_id ?? `row-${row.id}`
@@ -311,7 +346,7 @@ export function rowsToItems(rows: TranscriptRow[], calls: Map<string, string>, o
       const raw = row.content ?? ''
       // max=1 keeps this cheap: only isError is wanted from it when anonymizing
       const res = toolResult(raw, anon ? 1 : max)
-      items.push({ kind: 'tool_end', callId, hermesTool, result: anon ? anonymizeResult(raw) : res.text, isError: res.isError })
+      items.push({ kind: 'tool_end', callId, hermesTool, result: anon ? anonymizeResult(raw) : res.text, isError: res.isError, ...atField })
     }
     // role 'system' (the system prompt) is deliberately skipped.
   }
@@ -365,6 +400,8 @@ function parseToolCalls(raw: string | null): ParsedCall[] {
 
 export interface TranscriptBatch {
   rows: TranscriptRow[]
+  /** Platform and sender of the session, from its `sessions` row */
+  origin?: SessionOrigin
   /** Highest message id of the session at read time; pass it back as `afterId` */
   lastId: number
 }
@@ -375,6 +412,19 @@ export const BACKLOG_MAX_ROWS = 300
 export const BATCH_MAX_ROWS = 500
 
 export type TranscriptReader = (dbFile: string, sid: string, afterId?: number) => TranscriptBatch | undefined
+
+interface SessionRow {
+  source?: string | null
+  display_name?: string | null
+  user_id?: string | null
+}
+
+function originOf(row: SessionRow): SessionOrigin | undefined {
+  const text = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim() : undefined)
+  const platform = text(row.source)
+  const sender = text(row.display_name) ?? text(row.user_id)
+  return platform || sender ? { ...(platform ? { platform } : {}), ...(sender ? { sender } : {}) } : undefined
+}
 
 const COLUMNS = 'id, role, content, tool_calls, tool_call_id, tool_name, reasoning, timestamp'
 
@@ -398,8 +448,15 @@ export const readSessionTranscript: TranscriptReader = (dbFile, sid, afterId) =>
     db = new Ctor(dbFile, { readOnly: true })
     db.exec('PRAGMA query_only = 1')
     db.exec('PRAGMA busy_timeout = 500')
-    const session = db.prepare('select 1 as ok from sessions where id = ?').get(sid)
+    let session: SessionRow | undefined
+    try {
+      session = db.prepare('select source, display_name, user_id from sessions where id = ?').get(sid) as SessionRow | undefined
+    } catch {
+      // An older state.db without these columns: the session still has to be found, only without sender and platform
+      session = db.prepare('select 1 as ok from sessions where id = ?').get(sid) as SessionRow | undefined
+    }
     if (!session) return undefined
+    const origin = originOf(session)
 
     let rows: TranscriptRow[]
     if (afterId === undefined) {
@@ -420,7 +477,7 @@ export const readSessionTranscript: TranscriptReader = (dbFile, sid, afterId) =>
       const top = db.prepare('select max(id) as id from messages where session_id = ?').get(sid) as { id: number | null } | undefined
       lastId = top?.id ?? 0
     }
-    return { rows, lastId }
+    return { rows, lastId, ...(origin ? { origin } : {}) }
   } catch {
     return undefined
   } finally {

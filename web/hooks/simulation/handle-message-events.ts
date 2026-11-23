@@ -56,7 +56,15 @@ export function handleMessage(
     }
   }
 
-  appendConversation(state.conversations, agentName, { type: msgType, content, timestamp: currentTime })
+  const at = typeof payload.at === 'number' && Number.isFinite(payload.at) ? payload.at : undefined
+  const sender = typeof payload.sender === 'string' && payload.sender ? payload.sender : undefined
+  const platform = typeof payload.platform === 'string' && payload.platform ? payload.platform : undefined
+  appendConversation(state.conversations, agentName, {
+    type: msgType, content, timestamp: currentTime,
+    ...(at !== undefined ? { at } : {}),
+    ...(sender ? { sender } : {}),
+    ...(platform ? { platform } : {}),
+  })
 }
 
 /** Validate the billed-usage totals sent with a context update. */

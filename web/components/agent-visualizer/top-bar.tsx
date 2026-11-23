@@ -94,10 +94,11 @@ export interface TopBarProps {
   showFileAttention: boolean
   showTranscript: boolean
   showCostOverlay: boolean
+  showSessionDetail: boolean
   showTimeline: boolean
   showFleet: boolean
   isMuted: boolean
-  onTogglePanel: (panel: 'files' | 'transcript' | 'cost') => void
+  onTogglePanel: (panel: 'files' | 'transcript' | 'cost' | 'session') => void
   onToggleTimeline: () => void
   onToggleFleet: () => void
   onToggleMute: () => void
@@ -108,7 +109,7 @@ export const TopBar = memo(function TopBar({
   onSelectSession, onCloseSession,
   isVSCode, connectionStatus,
   agentCount, totalTokens, totalCostUsd,
-  showFileAttention, showTranscript, showCostOverlay, showTimeline, showFleet, isMuted,
+  showFileAttention, showTranscript, showCostOverlay, showSessionDetail, showTimeline, showFleet, isMuted,
   onTogglePanel, onToggleTimeline, onToggleFleet, onToggleMute,
 }: TopBarProps) {
   return (
@@ -147,6 +148,7 @@ export const TopBar = memo(function TopBar({
         }}>
           <ToggleButton active={showFileAttention} onClick={() => onTogglePanel('files')} style={{ background: showFileAttention ? undefined : 'transparent', border: 'none' }}>Files</ToggleButton>
           <ToggleButton active={showTranscript} onClick={() => onTogglePanel('transcript')} style={{ background: showTranscript ? undefined : 'transparent', border: 'none' }}>Chat</ToggleButton>
+          <ToggleButton active={showSessionDetail} onClick={() => onTogglePanel('session')} style={{ background: showSessionDetail ? undefined : 'transparent', border: 'none' }}>Session</ToggleButton>
           <ToggleButton
             active={showCostOverlay}
             onClick={() => onTogglePanel('cost')}

@@ -59,6 +59,20 @@ export interface ConversationMessage {
   timestamp: number
   toolName?: string
   inputData?: Record<string, unknown>
+  /** tool_call: the argument summary as received (`content` is `> Tool args`) */
+  args?: string
+  /** Pairs a tool_call with its tool_result (absent for sources without call ids) */
+  toolUseId?: string
+  /** tool_result: the result text as received, without the `< ` prefix or token suffix of `content` */
+  result?: string
+  /** tool_result: the call failed */
+  isError?: boolean
+  /** Wall-clock time of the message in epoch ms, when the source gives one */
+  at?: number
+  /** user message: who wrote it (platform user name), when the source gives one */
+  sender?: string
+  /** Platform the message came through (telegram, matrix, kanban ...), when the source gives one */
+  platform?: string
 }
 
 // ── Memory caps ──────────────────────────────────────────────────────

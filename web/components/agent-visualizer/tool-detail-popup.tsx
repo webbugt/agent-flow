@@ -2,7 +2,7 @@
 
 import { POPUP } from '@/lib/agent-types'
 import { COLORS } from '@/lib/colors'
-import { ToolContentRenderer } from './tool-content-renderer'
+import { ToolCallDetail } from './tool-call-detail'
 import { PanelHeader, DetailPopup } from './shared-ui'
 
 interface ToolDetailPopupProps {
@@ -20,13 +20,13 @@ interface ToolDetailPopupProps {
 }
 
 export function ToolDetailPopup({ tool, position, onClose }: ToolDetailPopupProps) {
-  const stateColor = tool.state === 'running' ? COLORS.tool_calling : COLORS.complete
+  const stateColor = tool.state === 'error' ? COLORS.error : tool.state === 'running' ? COLORS.tool_calling : COLORS.complete
 
   return (
     <DetailPopup position={position} width={POPUP.tool.width} estimatedHeight={POPUP.tool.estimatedHeight} onClose={onClose}>
       <PanelHeader onClose={onClose}>
         <span className="text-[9px]" style={{ color: stateColor }}>
-          {tool.state === 'running' ? '⚙' : '✓'}
+          {tool.state === 'running' ? '⚙' : tool.state === 'error' ? '✕' : '✓'}
         </span>
         <span className="text-[11px] font-mono font-semibold" style={{ color: COLORS.tool_calling }}>
           {tool.toolName}
@@ -36,41 +36,17 @@ export function ToolDetailPopup({ tool, position, onClose }: ToolDetailPopupProp
         </span>
       </PanelHeader>
 
-      {/* Rich content */}
-      {tool.inputData ? (
-        <ToolContentRenderer
+      {/* Arguments and result in full, each with a copy button; long text scrolls inside the popup */}
+      <div className="overflow-y-auto pr-0.5" style={{ maxHeight: POPUP.tool.maxHeight }}>
+        <ToolCallDetail
           toolName={tool.toolName}
-          inputData={tool.inputData}
+          state={tool.state}
           args={tool.args}
-          compact={false}
+          inputData={tool.inputData}
+          result={tool.result}
+          tokenCost={tool.tokenCost}
         />
-      ) : (
-        <div className="text-[10px] font-mono" style={{ color: COLORS.textPrimary + '90' }}>
-          {tool.args}
-        </div>
-      )}
-
-      {/* Result */}
-      {tool.result && (
-        <div
-          className="mt-2 rounded px-2 py-1 text-[9px] font-mono"
-          style={{
-            background: COLORS.resultBg,
-            border: `1px solid ${COLORS.resultBorder}`,
-            color: COLORS.complete + '90',
-          }}
-        >
-          <span className="opacity-50 mr-1">Result:</span>
-          {tool.result}
-        </div>
-      )}
-
-      {/* Token cost */}
-      {tool.tokenCost != null && tool.tokenCost > 0 && (
-        <div className="mt-1.5 text-[9px] font-mono" style={{ color: COLORS.textMuted }}>
-          {tool.tokenCost} tokens
-        </div>
-      )}
+      </div>
     </DetailPopup>
   )
 }

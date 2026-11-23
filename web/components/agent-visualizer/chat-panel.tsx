@@ -13,6 +13,8 @@ interface ChatPanelProps {
   agentState: AgentState
   conversation: ConversationMessage[]
   runtime?: 'claude' | 'codex'
+  /** Open the whole session (every message, tool call, model and cost) in the session detail */
+  onOpenDetail?: () => void
   onClose: () => void
 }
 
@@ -22,6 +24,7 @@ export function AgentChatPanel({
   agentState,
   conversation,
   runtime,
+  onOpenDetail,
   onClose,
 }: ChatPanelProps) {
   const { ref: logRef } = useAutoScroll(conversation.length, visible)
@@ -37,7 +40,22 @@ export function AgentChatPanel({
       {...stopPropagationHandlers}
     >
       <div className="glass-card" style={{ display: 'flex', flexDirection: 'column', maxHeight: CARD.chat.maxHeight }}>
-        <PanelHeader onClose={onClose} className="mb-2 flex-shrink-0">
+        <PanelHeader
+          onClose={onClose}
+          className="mb-2 flex-shrink-0"
+          actions={onOpenDetail ? (
+            <button
+              type="button"
+              onClick={onOpenDetail}
+              className="mr-2 text-[9px] font-mono px-1.5 py-0.5 rounded"
+              style={{ border: `1px solid ${COLORS.holoBorder12}`, color: COLORS.textPrimary }}
+              title="Whole conversation, tool calls, model and cost"
+              data-testid="open-session-detail"
+            >
+              details ↗
+            </button>
+          ) : undefined}
+        >
           <div
             className="w-1.5 h-1.5 rounded-full"
             style={{ background: stateColor, boxShadow: `0 0 6px ${stateColor}` }}

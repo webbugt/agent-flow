@@ -190,7 +190,9 @@ test('rows become messages, tool starts and tool ends; the system prompt is skip
     row(4, 'tool', { tool_call_id: 'toolu_1', tool_name: 'terminal', content: JSON.stringify({ output: 'total 0', exit_code: 0, error: null }) }),
   ]
   const items = rowsToItems(rows, calls, { displayTool: displayToolName })
-  assert.deepEqual(items, [
+  // every item also carries `at`, the row time in epoch ms (tested separately below)
+  assert.ok(items.every(i => i.at === (1000 + (i.kind === 'tool_end' ? 4 : i.kind === 'message' && i.role === 'user' ? 2 : 3)) * 1000))
+  assert.deepEqual(items.map(({ at: _at, ...rest }) => rest), [
     { kind: 'message', role: 'user', content: longUser },
     { kind: 'message', role: 'thinking', content: 'Thinking about the plan' },
     { kind: 'message', role: 'assistant', content: 'On it.' },
@@ -381,4 +383,96 @@ test('without readable state.db text the watcher keeps its log-only events', () 
   assert.equal((start.payload as { args: string }).args, '')
   const msg = f.events.find(e => e.type === 'message')!
   assert.equal((msg.payload as { content: string }).content, 'Message from Webbugt via matrix')
+})
+
+// ─── Fields the detail views show: sender, platform, time ───────────────────
+
+test('messages carry the row time; user messages carry sender and platform, assistant messages the platform', () => {
+  const rows: TranscriptRow[] = [
+    row(1, 'user', { content: 'hello', timestamp: 1_700_000_000.5 }),
+    row(2, 'assistant', { content: 'hi', reasoning: 'thinking about it', timestamp: 1_700_000_001 }),
+    row(3, 'assistant', { content: null, timestamp: 1_700_000_002, tool_calls: JSON.stringify([{ call_id: 'c1', function: { name: 'terminal', arguments: '{"command":"ls"}' } }]) }),
+    row(4, 'tool', { tool_call_id: 'c1', content: '{"output":"a","exit_code":0}', timestamp: 1_700_000_003 }),
+  ]
+  const items = rowsToItems(rows, new Map(), { displayTool: displayToolName, origin: { platform: 'telegram', sender: 'Webbugt' } })
+  const user = items[0] as { kind: string; at?: number; sender?: string; platform?: string }
+  assert.equal(user.at, 1_700_000_000_500, 'seconds become epoch ms')
+  assert.equal(user.sender, 'Webbugt')
+  assert.equal(user.platform, 'telegram')
+  const thinking = items.find(i => i.kind === 'message' && i.role === 'thinking') as { sender?: string; at?: number }
+  assert.equal(thinking.sender, undefined)
+  assert.equal(thinking.at, 1_700_000_001_000)
+  const reply = items.find(i => i.kind === 'message' && i.role === 'assistant') as { sender?: string; platform?: string }
+  assert.equal(reply.sender, undefined, 'only user messages name a sender')
+  assert.equal(reply.platform, 'telegram')
+  const start = items.find(i => i.kind === 'tool_start') as { at?: number }
+  const end = items.find(i => i.kind === 'tool_end') as { at?: number }
+  assert.equal(start.at, 1_700_000_002_000)
+  assert.equal(end.at, 1_700_000_003_000)
+})
+
+test('no origin and no timestamp: the fields are left out, not invented', () => {
+  const items = rowsToItems([row(1, 'user', { content: 'x', timestamp: 0 })], new Map(), { displayTool: displayToolName })
+  const user = items[0] as Record<string, unknown>
+  assert.equal(user.sender, undefined)
+  assert.equal(user.platform, undefined)
+  assert.equal(user.at, undefined)
+  assert.ok(!('sender' in user) && !('platform' in user))
+})
+
+test('sender and platform are redacted like every other text', () => {
+  const items = rowsToItems([row(1, 'user', { content: 'x' })], new Map(), {
+    displayTool: displayToolName, origin: { platform: 'telegram', sender: `bot ${FAKE_SK}` },
+  })
+  assert.ok(!JSON.stringify(items).includes(FAKE_SK))
+})
+
+test('state.db: the session row gives platform and sender; an older schema without those columns still reads', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hermes-transcript-'))
+  const file = path.join(dir, 'state.db')
+  const db = openWritable(file)
+  db.exec('create table sessions (id text primary key, title text, source text, display_name text, user_id text)')
+  db.exec('create table messages (id integer primary key autoincrement, session_id text, role text, content text, tool_calls text, tool_call_id text, tool_name text, reasoning text, timestamp real)')
+  db.prepare('insert into sessions values (?, ?, ?, ?, ?)').run('s1', 't', 'telegram', 'Webbugt', '42')
+  db.prepare('insert into sessions values (?, ?, ?, ?, ?)').run('s2', 't', 'kanban', null, 'taxis')
+  db.prepare('insert into messages (session_id, role, content, timestamp) values (?, ?, ?, ?)').run('s1', 'user', 'hi', 1)
+  db.close()
+  assert.deepEqual(readSessionTranscript(file, 's1')!.origin, { platform: 'telegram', sender: 'Webbugt' })
+  assert.deepEqual(readSessionTranscript(file, 's2')!.origin, { platform: 'kanban', sender: 'taxis' })
+
+  const old = path.join(dir, 'old.db')
+  const { db: db2, add } = makeDb(old, 'sess-old')
+  add('user', 'question')
+  db2.close()
+  const batch = readSessionTranscript(old, 'sess-old')
+  assert.ok(batch, 'an older schema is still read')
+  assert.equal(batch!.origin, undefined)
+})
+
+test('the live feed passes sender, platform and time through to the events', () => {
+  const f = watcherFixture('omh-coder')
+  const rows: TranscriptRow[] = [
+    row(1, 'user', { content: 'question', timestamp: 1_700_000_000 }),
+    row(2, 'assistant', { content: 'answer', timestamp: 1_700_000_005, tool_calls: JSON.stringify([{ call_id: 'c1', function: { name: 'terminal', arguments: '{"command":"ls"}' } }]) }),
+    row(3, 'tool', { tool_call_id: 'c1', content: '{"output":"x","exit_code":0}', timestamp: 1_700_000_006 }),
+  ]
+  const w = new HermesLogWatcher({
+    profilesRoot: f.profilesRoot, emit: f.emit, lifecycle: f.lifecycle, now: () => 0, titleFor: () => 'Question',
+    transcriptFor: (_db, _sid, after) => (after === undefined
+      ? { rows, lastId: 3, origin: { platform: 'telegram', sender: 'Webbugt' } }
+      : { rows: [], lastId: after }),
+  })
+  w.poll()
+  fs.appendFileSync(f.logFile, TOOL_LINE + '\n')
+  w.poll()
+  const msgs = f.events.filter(e => e.type === 'message').map(e => e.payload as Record<string, unknown>)
+  assert.equal(msgs[0].sender, 'Webbugt')
+  assert.equal(msgs[0].platform, 'telegram')
+  assert.equal(msgs[0].at, 1_700_000_000_000)
+  assert.equal(msgs[1].sender, undefined)
+  assert.equal(msgs[1].at, 1_700_000_005_000)
+  const start = f.events.find(e => e.type === 'tool_call_start')!.payload as Record<string, unknown>
+  const end = f.events.find(e => e.type === 'tool_call_end')!.payload as Record<string, unknown>
+  assert.equal(start.at, 1_700_000_005_000)
+  assert.equal(end.at, 1_700_000_006_000)
 })

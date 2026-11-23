@@ -283,6 +283,8 @@ interface SessionState {
     cursor: number
     /** Hermes tool-call id to Hermes tool name, to name a result that arrives later */
     calls: Map<string, string>
+    /** Platform and sender of the session (its `sessions` row) */
+    origin?: { platform?: string; sender?: string }
   }
   spend: {
     inputTokens: number
@@ -583,24 +585,38 @@ export class HermesLogWatcher {
     if (!this.transcriptFor || s.sid === UNTAGGED) return
     const batch = this.transcriptFor(p.dbFile, s.sid, s.transcript?.cursor)
     if (!batch) return
-    const tr = s.transcript ?? (s.transcript = { cursor: batch.lastId, calls: new Map() })
+    const tr: NonNullable<SessionState['transcript']> = s.transcript ?? (s.transcript = { cursor: batch.lastId, calls: new Map() })
     tr.cursor = Math.max(tr.cursor, batch.lastId)
+    // Sender and platform: the session's own row first, the profile's latest inbound message as a fallback.
+    if (batch.origin) tr.origin = batch.origin
+    const origin = tr.origin ?? (p.lastInbound ? { sender: p.lastInbound.user, platform: p.lastInbound.platform } : undefined)
     const items = rowsToItems(batch.rows, tr.calls, {
       displayTool: displayToolName,
       anonymize: this.isAnonymized(p),
       from: p.lastInbound,
+      origin,
     })
     if (items.length === 0) return
     const time = this.elapsed(s, this.now())
     for (const item of items) {
+      // `at` (epoch ms of the Hermes message row) is passed through for the detail views.
+      const at = item.at !== undefined ? { at: item.at } : {}
       if (item.kind === 'message') {
-        this.emitFor(p, s, agent => ({ time, type: 'message', payload: { agent, role: item.role, content: item.content } }))
+        this.emitFor(p, s, agent => ({
+          time,
+          type: 'message',
+          payload: {
+            agent, role: item.role, content: item.content, ...at,
+            ...(item.sender ? { sender: item.sender } : {}),
+            ...(item.platform ? { platform: item.platform } : {}),
+          },
+        }))
       } else if (item.kind === 'tool_start') {
         const toolUseId = `${p.sessionId}-${s.tag}-${item.callId}`
         this.emitFor(p, s, agent => ({
           time,
           type: 'tool_call_start',
-          payload: { agent, tool: item.tool, toolUseId, args: item.args, inputData: item.inputData },
+          payload: { agent, tool: item.tool, toolUseId, args: item.args, inputData: item.inputData, ...at },
         }))
       } else {
         const toolUseId = `${p.sessionId}-${s.tag}-${item.callId}`
@@ -608,7 +624,7 @@ export class HermesLogWatcher {
         this.emitFor(p, s, agent => ({
           time,
           type: 'tool_call_end',
-          payload: { agent, tool, toolUseId, result: item.result, isError: item.isError },
+          payload: { agent, tool, toolUseId, result: item.result, isError: item.isError, ...at },
         }))
       }
     }

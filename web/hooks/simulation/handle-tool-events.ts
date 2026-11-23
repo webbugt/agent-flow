@@ -102,7 +102,9 @@ export function handleToolCallStart(
 
     appendConversation(state.conversations, agentName, {
       type: 'tool_call', content: `> ${toolName} ${args}`, timestamp: currentTime,
-      toolName, inputData,
+      toolName, inputData, args,
+      ...(toolUseId ? { toolUseId } : {}),
+      ...(typeof payload.at === 'number' ? { at: payload.at } : {}),
     })
   }
 }
@@ -183,6 +185,10 @@ export function handleToolCallEnd(
       content: `< ${result}${tokenCost ? ` (${tokenCost} tokens)` : ''}`,
       timestamp: currentTime,
       toolName,
+      result,
+      ...(isError ? { isError } : {}),
+      ...(toolUseId ? { toolUseId } : {}),
+      ...(typeof payload.at === 'number' ? { at: payload.at } : {}),
     })
   }
 }

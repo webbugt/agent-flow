@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { COLORS } from '@/lib/colors'
 import { ToolContentRenderer } from './tool-content-renderer'
 import type { ConversationMessage } from '@/hooks/simulation/types'
+import { formatClock, formatOrigin } from '@/lib/session-detail'
 
 // ─── Shared message rendering utilities ──────────────────────────────────────
 
@@ -21,6 +22,15 @@ export function HighlightText({ text, query }: { text: string; query?: string })
   )
 }
 
+/** Sender, platform and time of a message, when the data source gave them: `Webbugt via telegram · 14:02:31`. */
+function MessageMeta({ message, withSender }: { message: ConversationMessage; withSender: boolean }) {
+  const who = formatOrigin(withSender ? message.sender : undefined, message.platform)
+  const when = formatClock(message.at)
+  const text = [who, when].filter(Boolean).join(' · ')
+  if (!text) return null
+  return <span className="ml-2 font-normal tracking-normal opacity-70" data-testid="message-meta">{text}</span>
+}
+
 export function TranscriptMessage({ message, compact = false, searchQuery, assistantLabel = 'CLAUDE' }: { message: ConversationMessage; compact?: boolean; searchQuery?: string; assistantLabel?: string }) {
   const [expanded, setExpanded] = useState(false)
 
@@ -34,7 +44,7 @@ export function TranscriptMessage({ message, compact = false, searchQuery, assis
             border: `1px solid ${COLORS.userMsgBorder}`,
           }}
         >
-          <div className="text-[9px] mb-1 font-semibold tracking-wider" style={{ color: COLORS.userLabel }}>USER</div>
+          <div className="text-[9px] mb-1 font-semibold tracking-wider" style={{ color: COLORS.userLabel }}>USER<MessageMeta message={message} withSender /></div>
           <div style={{ color: COLORS.userText }} className="whitespace-pre-wrap break-words">
             <HighlightText text={message.content} query={searchQuery} />
           </div>
@@ -50,7 +60,7 @@ export function TranscriptMessage({ message, compact = false, searchQuery, assis
             border: `1px solid ${COLORS.holoBorder08}`,
           }}
         >
-          <div className="text-[9px] mb-1 font-semibold tracking-wider" style={{ color: COLORS.assistantLabel }}>{assistantLabel}</div>
+          <div className="text-[9px] mb-1 font-semibold tracking-wider" style={{ color: COLORS.assistantLabel }}>{assistantLabel}<MessageMeta message={message} withSender={false} /></div>
           <div style={{ color: COLORS.assistantText }} className="whitespace-pre-wrap break-words">
             <HighlightText text={compact ? message.content.slice(0, 200) + (message.content.length > 200 ? '...' : '') : message.content} query={searchQuery} />
           </div>

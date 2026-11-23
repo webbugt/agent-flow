@@ -2,8 +2,8 @@ import { test } from 'node:test'
 import { strict as assert } from 'node:assert'
 import {
   allSelectionIds, buildFleetRows, computeAxis, createFleetFixture, formatTick, groupColor, groupInstances,
-  identityFromLabel, instancesFromSessions, kanbanMarkerKind, mergeSpans, niceTicks, DAY_MS,
-  KANBAN_SECTION_ID, SUPERMEMORY_SECTION_ID, type FleetRow,
+  identityFromLabel, instancesFromSessions, kanbanMarkerKind, latestInstance, mergeSpans, niceTicks, DAY_MS,
+  KANBAN_SECTION_ID, SUPERMEMORY_SECTION_ID, type FleetRow, type FleetInstance,
 } from './fleet-model'
 import { selectNone, setMany } from './fleet-selection'
 import type { KanbanBoardNode } from './kanban-source'
@@ -278,4 +278,27 @@ test('formatTick: time of day for short spans, date for multi-day', () => {
   assert.equal(formatTick(Date.UTC(2026, 10, 23, 9, 5, 7), 1_000), '09:05:07')
   assert.equal(formatTick(Date.UTC(2026, 10, 23, 9, 5, 7), 10 * MIN), '09:05')
   assert.equal(formatTick(Date.UTC(2026, 10, 23, 9, 5, 7), DAY_MS), '11-23')
+})
+
+// ─── Rows open a session ────────────────────────────────────────────────────
+
+test('instance rows open their own session, group rows the most recent copy, lanes none', () => {
+  const instances = createFleetFixture(NOW)
+  const rows = buildFleetRows({
+    instances, kanban: [board('media', [[1, 'created', NOW - MIN]])], selection: view(none), expanded: new Set(['taxis']), now: NOW,
+  })
+  assert.equal(row(rows, 'taxis-1').openSessionId, 'taxis-1')
+  assert.equal(row(rows, 'taxis-2').openSessionId, 'taxis-2')
+  assert.equal(row(rows, 'group:hestia').openSessionId, instances.find(i => i.identity === 'hestia')?.id)
+  assert.equal(row(rows, 'kanban:media').openSessionId, undefined)
+  assert.equal(row(rows, KANBAN_SECTION_ID).openSessionId, undefined)
+})
+
+test('latestInstance prefers a running copy, then the latest start', () => {
+  const mk = (id: string, startTime: number, endTime?: number) =>
+    ({ id, identity: 'x', runtime: 'hermes', startTime, endTime, status: endTime ? 'completed' : 'running', markers: [] }) as FleetInstance
+  assert.equal(latestInstance([mk('a', 1, 5), mk('b', 3, 9)])?.id, 'b')
+  assert.equal(latestInstance([mk('a', 1), mk('b', 3, 9)])?.id, 'a')
+  assert.equal(latestInstance([mk('a', 1), mk('b', 3)])?.id, 'b')
+  assert.equal(latestInstance([]), undefined)
 })

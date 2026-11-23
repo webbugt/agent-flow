@@ -170,6 +170,24 @@ export interface FleetRow {
   hidden: boolean
   spans: FleetSpan[]
   markers: FleetMarker[]
+  /**
+   * The session this row opens in the session detail view (clicking the row).
+   * An instance row opens its own session; a group row opens its most recently
+   * active copy. Kanban and Supermemory rows have none.
+   */
+  openSessionId?: string
+}
+
+/** The copy a group row opens: a running one first, then the one that started last. */
+export function latestInstance(instances: readonly FleetInstance[]): FleetInstance | undefined {
+  let best: FleetInstance | undefined
+  for (const inst of instances) {
+    if (!best) { best = inst; continue }
+    const running = inst.endTime === undefined
+    const bestRunning = best.endTime === undefined
+    if (running !== bestRunning ? running : inst.startTime > best.startTime) best = inst
+  }
+  return best
 }
 
 export interface FleetSelectionView {
@@ -305,6 +323,7 @@ export function buildFleetRows(input: BuildRowsInput): FleetRow[] {
       expandable: multi, expanded: isOpen, hidden: shown.length === 0,
       spans: mergeSpans(shown.map(instanceSpan), now),
       markers: shown.flatMap(i => i.markers).sort((a, b) => a.at - b.at),
+      openSessionId: latestInstance(group.instances)?.id,
     })
     if (!isOpen) continue
     group.instances.forEach((inst, idx) => {
@@ -315,6 +334,7 @@ export function buildFleetRows(input: BuildRowsInput): FleetRow[] {
         color: group.color, depth: 1, selectionIds: [inst.id],
         checked: on, indeterminate: false, expandable: false, expanded: false, hidden: !on,
         spans: on ? [instanceSpan(inst)] : [], markers: on ? inst.markers : [],
+        openSessionId: inst.id,
       })
     })
   }

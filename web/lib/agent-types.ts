@@ -202,6 +202,8 @@ export const CARD = {
 
   chat: { width: 300, maxHeight: 360, messagesMinHeight: 100, messagesMaxHeight: 240 },
   transcript: { width: 380 },
+  /** Session detail: wider than the transcript, it shows whole commands, diffs and results */
+  sessionDetail: { width: 540 },
   margin: 8,
   offsetX: 40,     // horizontal offset from agent to detail card
   offsetY: -80,    // vertical offset from agent to detail card
@@ -281,7 +283,9 @@ export const TETHER = {
 // ─── Popup Dimensions ───────────────────────────────────────────────────────
 
 export const POPUP = {
-  tool: { width: 320, estimatedHeight: 200 },
+  // The tool popup shows the whole command / edit / result, so it is wider and
+  // taller than the other popups; its content scrolls past maxHeight.
+  tool: { width: 460, estimatedHeight: 420, maxHeight: 460 },
   discovery: { width: 300, estimatedHeight: 160 },
   controlBarMaxWidth: 680,
 } as const
