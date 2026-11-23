@@ -2,6 +2,7 @@ import { Agent, ToolCallNode, NODE } from '@/lib/agent-types'
 import { COLORS } from '@/lib/colors'
 import { COST_RATE, MODEL_FAMILY_COST, COST_DRAW, COST_PANEL, MIN_VISIBLE_OPACITY } from '@/lib/canvas-constants'
 import { formatTokens } from '@/lib/utils'
+import { spendUsd } from '@/lib/pricing'
 import { truncateText } from './draw-misc'
 
 /** Blended $/M-token rate for a model ID — first matching family wins,
@@ -18,6 +19,13 @@ export function modelCostRate(model?: string): number {
 
 export function agentCost(tokensUsed: number, model?: string): number {
   return (tokensUsed / 1_000_000) * modelCostRate(model)
+}
+
+/** Cost of one agent: billed spend when the runtime reports usage, otherwise the
+ *  context-size estimate. Returns whether the figure is an estimate. */
+export function agentSpendUsd(agent: Agent): { usd: number; estimate: boolean } {
+  if (agent.spend) return { usd: spendUsd(agent.spend, agent.model), estimate: false }
+  return { usd: agentCost(agent.tokensUsed, agent.model), estimate: true }
 }
 
 /** Tool name -> color for mini cost bar */
@@ -50,14 +58,14 @@ export function drawCostLabels(
 
   for (const [, agent] of agents) {
     if (agent.opacity < MIN_VISIBLE_OPACITY) continue
-    const cost = agentCost(agent.tokensUsed, agent.model)
+    const { usd: cost, estimate } = agentSpendUsd(agent)
     if (cost < COST_DRAW.minDisplayCost) continue
 
     const r = agent.isMain ? NODE.radiusMain : NODE.radiusSub
     const pillY = agent.y - r - COST_DRAW.pillYOffset
 
     // Floating cost pill
-    const label = `$${cost < 0.01 ? cost.toFixed(4) : cost.toFixed(3)}`
+    const label = `${estimate ? '~' : ''}$${cost < 0.01 ? cost.toFixed(4) : cost.toFixed(3)}`
     ctx.font = 'bold 9px monospace'
     const labelW = ctx.measureText(label).width
     const pillW = labelW + COST_DRAW.pillPadding
@@ -130,7 +138,7 @@ export function drawCostSummaryPanel(
   agents: Map<string, Agent>,
   toolCalls: Map<string, ToolCallNode>,
 ) {
-  const agentList = Array.from(agents.values()).filter(a => a.tokensUsed > 0)
+  const agentList = Array.from(agents.values()).filter(a => a.tokensUsed > 0 || a.spend)
   if (agentList.length === 0) return
 
   // Compute totals
@@ -138,7 +146,7 @@ export function drawCostSummaryPanel(
 
   // Per-agent breakdown sorted by cost desc
   const agentBreakdown = agentList
-    .map(a => ({ name: a.name, tokens: a.tokensUsed, cost: agentCost(a.tokensUsed, a.model) }))
+    .map(a => ({ name: a.name, tokens: a.tokensUsed, cost: agentSpendUsd(a).usd }))
     .sort((a, b) => b.cost - a.cost)
   const totalCost = agentBreakdown.reduce((s, a) => s + a.cost, 0)
 

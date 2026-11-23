@@ -12,12 +12,24 @@ export interface ContextBreakdown {
   subagentResults: number // results from child agents
 }
 
+/** Cumulative billed token counts for one agent (from the transcript's usage) */
+export interface SpendTotals {
+  inputTokens: number
+  outputTokens: number
+  cacheReadTokens: number
+  cacheWrite5mTokens: number
+  cacheWrite1hTokens: number
+  model?: string
+}
+
 export interface Agent {
   id: string
   name: string
   state: AgentState
   parentId: string | null
   tokensUsed: number
+  /** Real billed usage; absent for runtimes that do not report it (estimate used) */
+  spend?: SpendTotals
   tokensMax: number
   contextBreakdown: ContextBreakdown
   toolCalls: number
