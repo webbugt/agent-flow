@@ -33,6 +33,10 @@ interface BridgeHookResult {
   sessionsWithActivity: Set<string>
   /** Remove a session from the list */
   removeSession: (sessionId: string) => void
+  /** Every event buffered for a session (all sessions are buffered, not only the open tab). */
+  getSessionEvents: (sessionId: string) => readonly SimulationEvent[]
+  /** Sessions whose tab was closed. They are still running, so the fleet view lists them. */
+  getDismissedSessions: () => SessionInfo[]
 }
 
 /**
@@ -310,6 +314,13 @@ export function useVSCodeBridge(): BridgeHookResult {
     })
   }, [])
 
+  const getSessionEvents = useCallback(
+    (sessionId: string): readonly SimulationEvent[] => sessionEventsRef.current.get(sessionId) ?? [],
+    [],
+  )
+
+  const getDismissedSessions = useCallback((): SessionInfo[] => [...dismissedSessionsRef.current.values()], [])
+
   const bridgeOpenFile = useCallback((filePath: string, line?: number) => {
     vscodeBridge?.openFile(filePath, line)
   }, [])
@@ -330,5 +341,7 @@ export function useVSCodeBridge(): BridgeHookResult {
     getSessionEventCount,
     sessionsWithActivity,
     removeSession,
+    getSessionEvents,
+    getDismissedSessions,
   }
 }

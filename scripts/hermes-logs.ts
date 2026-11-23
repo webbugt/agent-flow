@@ -715,6 +715,9 @@ export class HermesLogWatcher {
       parent: p.group,
       group: p.group,
       profile: p.profile,
+      // Epoch ms of this node's time base: its event times are seconds since it. The fleet
+      // view needs it to place each node on the shared wall-clock axis.
+      startedAt: s.startedAt,
       task: s.title ?? (s.sid === UNTAGGED ? `Hermes profile ${p.profile}` : `Hermes session ${s.sid}`),
       ...(s.model ? { model: s.model } : {}),
     }

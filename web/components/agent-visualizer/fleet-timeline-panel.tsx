@@ -4,7 +4,7 @@ import { useRef, useEffect, useMemo, useCallback, useState } from 'react'
 import { Z } from '@/lib/agent-types'
 import { COLORS } from '@/lib/colors'
 import {
-  allSelectionIds, buildFleetRows, computeAxis, formatTick,
+  allSelectionIds, buildFleetRows, computeAxis, formatTick, groupInstances,
   type FleetAxis, type FleetMarker, type FleetRow, type FleetInstance,
 } from '@/lib/fleet/fleet-model'
 import type { useFleetSelection } from '@/hooks/use-fleet-selection'
@@ -243,7 +243,8 @@ function LabelCell({ row, onToggle, onExpand, onOpen }: { row: FleetRow; onToggl
 export function FleetTimelinePanel({ visible, instances, kanban, supermemory, selection, onOpenSession, rightInset = 0, onClose }: FleetTimelinePanelProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const trackRef = useRef<HTMLDivElement>(null)
-  const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set())
+  // Groups start OPEN so every agent node has its own row; the user collapses what they don't need.
+  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set())
   const [now, setNow] = useState(() => Date.now())
   const [trackWidth, setTrackWidth] = useState(MIN_TRACK_WIDTH)
 
@@ -255,6 +256,10 @@ export function FleetTimelinePanel({ visible, instances, kanban, supermemory, se
     return () => clearInterval(timer)
   }, [visible])
 
+  const expanded = useMemo(
+    () => new Set(groupInstances(instances).map(g => g.identity).filter(identity => !collapsed.has(identity))),
+    [instances, collapsed],
+  )
   const rows = useMemo(() => visible
     ? buildFleetRows({ instances, kanban, supermemory, selection: selection.view, expanded, now })
     : [], [visible, instances, kanban, supermemory, selection.view, expanded, now])
@@ -262,7 +267,7 @@ export function FleetTimelinePanel({ visible, instances, kanban, supermemory, se
   const allIds = useMemo(() => allSelectionIds({ instances, kanban, supermemory }), [instances, kanban, supermemory])
 
   const toggleExpanded = useCallback((identity: string) => {
-    setExpanded(prev => {
+    setCollapsed(prev => {
       const next = new Set(prev)
       if (next.has(identity)) next.delete(identity)
       else next.add(identity)

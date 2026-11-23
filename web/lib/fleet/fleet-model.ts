@@ -131,6 +131,131 @@ export function instancesFromSessions(sessions: readonly SessionLike[]): FleetIn
   }))
 }
 
+/** Minimal shape of a buffered bridge event (see lib/agent-types SimulationEvent). */
+export interface SessionEventLike {
+  /** Seconds since the node's own time base (`startedAt` of its spawn event). */
+  time: number
+  type: string
+  payload: Record<string, unknown>
+}
+
+/** Cap on tool-call markers per node, newest kept: a busy node can have thousands. */
+const MAX_MARKERS_PER_INSTANCE = 300
+
+/** Selection id of one agent node inside a session (a profile has one session and many nodes). */
+export function nodeInstanceId(sessionId: string, agentName: string): string {
+  return `${sessionId}::${agentName}`
+}
+
+/** Inverse of nodeInstanceId. A plain session id (no node) gives no agent name. */
+export function splitInstanceId(id: string): { sessionId: string; agentName?: string } {
+  const at = id.indexOf('::')
+  return at === -1 ? { sessionId: id } : { sessionId: id.slice(0, at), agentName: id.slice(at + 2) }
+}
+
+interface NodeDraft {
+  name: string
+  /** Epoch ms that event times of this node count from. */
+  base: number
+  start: number
+  end?: number
+  model?: string
+  markers: FleetMarker[]
+}
+
+/** Agent nodes of one session, rebuilt from its buffered events. Only nodes with an epoch time base (`startedAt`) can be placed. */
+function nodesFromEvents(sessionId: string, events: readonly SessionEventLike[]): NodeDraft[] {
+  const nodes = new Map<string, NodeDraft>()
+  for (const e of events) {
+    const p = e.payload ?? {}
+    if (e.type === 'agent_spawn') {
+      if (p.isMain === true || typeof p.name !== 'string' || typeof p.startedAt !== 'number') continue
+      let node = nodes.get(p.name)
+      if (node) {
+        // Same node active again (a new run): new time base, running again.
+        node.base = p.startedAt
+        node.end = undefined
+      } else {
+        node = { name: p.name, base: p.startedAt, start: p.startedAt, markers: [] }
+        nodes.set(p.name, node)
+      }
+      if (typeof p.model === 'string') node.model = p.model
+    } else if (e.type === 'agent_complete') {
+      const node = typeof p.name === 'string' ? nodes.get(p.name) : undefined
+      if (node) node.end = Math.max(node.start, node.base + e.time * 1000)
+    } else if (e.type === 'tool_call_start') {
+      const node = typeof p.agent === 'string' ? nodes.get(p.agent) : undefined
+      if (!node) continue
+      node.markers.push({
+        id: `${nodeInstanceId(sessionId, node.name)}:t${node.markers.length}`,
+        at: node.base + e.time * 1000,
+        kind: 'tool_call',
+        label: typeof p.tool === 'string' ? p.tool : 'tool',
+      })
+    } else if (e.type === 'model_detected') {
+      const node = typeof p.agent === 'string' ? nodes.get(p.agent) : undefined
+      if (node && typeof p.model === 'string') node.model = p.model
+    }
+  }
+  return [...nodes.values()]
+}
+
+/**
+ * Live adapter for the whole system: EVERY bridge session (one per Hermes profile),
+ * not only the open tab. Each agent node of a session becomes an instance of the
+ * session's identity, so a profile with several nodes shows as one group with an
+ * `xN` badge. A session with no placeable node yet (not started, or a runtime that
+ * sends no `startedAt`) still appears as one instance of its own.
+ */
+export function instancesFromSessionEvents(
+  sessions: readonly SessionLike[],
+  eventsOf: (sessionId: string) => readonly SessionEventLike[],
+): FleetInstance[] {
+  const out: FleetInstance[] = []
+  for (const s of sessions) {
+    const nodes = nodesFromEvents(s.id, eventsOf(s.id))
+    if (nodes.length === 0) {
+      out.push(...instancesFromSessions([s]))
+      continue
+    }
+    const identity = identityFromLabel(s.label)
+    for (const n of nodes) {
+      out.push({
+        id: nodeInstanceId(s.id, n.name),
+        identity,
+        runtime: n.model ?? 'session',
+        startTime: n.start,
+        endTime: n.end,
+        status: n.end === undefined ? 'active' : 'completed',
+        markers: n.markers.slice(-MAX_MARKERS_PER_INSTANCE),
+      })
+    }
+  }
+  return out
+}
+
+/**
+ * Tab strip of the single-profile view. Only while the Fleet view is on may the fleet
+ * selection hide a tab (all of its session's nodes deselected). With Fleet off every
+ * tab shows, as before the Fleet view existed. The open tab always shows. Selection
+ * never closes a session.
+ */
+export function tabSessions<S extends { id: string }>(
+  sessions: readonly S[],
+  selectedSessionId: string | null,
+  showFleet: boolean,
+  instances: readonly FleetInstance[],
+  selection: FleetSelectionView,
+): S[] {
+  if (!showFleet) return [...sessions]
+  return sessions.filter(s => {
+    if (s.id === selectedSessionId) return true
+    const own = instances.filter(i => i.id === s.id || i.id.startsWith(`${s.id}::`))
+    // No fleet data for a session: keep its tab. Otherwise it shows while any of its nodes is selected.
+    return own.length === 0 || own.some(i => selection.isSelected(i.id))
+  })
+}
+
 // ─── Selection ids for lanes ────────────────────────────────────────────────
 
 export const KANBAN_SECTION_ID = 'section:kanban'

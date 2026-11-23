@@ -149,6 +149,8 @@ test('does not replay history; one profile session with a main node and a child 
     ['OMH Coder · Write Release', 'OMH Coder'],
   ])
   assert.deepEqual(w.nodesOf('omh-coder'), ['OMH Coder · Fix PDF', 'OMH Coder · Write Release'])
+  // Child nodes carry the epoch time base of their event times, so the fleet view can place them.
+  for (const child of spawns.slice(1)) assert.equal(typeof child.startedAt, 'number')
 
   // Tool and usage events go to the matching child node.
   const pdf = 'OMH Coder · Fix PDF'

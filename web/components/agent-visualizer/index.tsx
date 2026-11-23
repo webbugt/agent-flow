@@ -17,7 +17,7 @@ import { TimelinePanel } from "./timeline-panel"
 import { FleetTimelinePanel } from "./fleet-timeline-panel"
 import { useFleetSelection } from "@/hooks/use-fleet-selection"
 import { useFleetSources } from "@/hooks/use-fleet-sources"
-import { createFleetFixture, instancesFromSessions } from "@/lib/fleet/fleet-model"
+import { createFleetFixture, instancesFromSessionEvents, splitInstanceId, tabSessions } from "@/lib/fleet/fleet-model"
 import { AgentChatPanel } from "./chat-panel"
 import { SessionTranscriptPanel } from "./session-transcript-panel"
 import { SessionDetailPanel } from "./session-detail-panel"
@@ -85,14 +85,30 @@ export function AgentVisualizer() {
   const fleetSelection = useFleetSelection()
   const fleetSources = useFleetSources(showFleet && !bridge.useMockData)
   const fleetFixture = useMemo(() => createFleetFixture(Date.now()), [])
-  const fleetInstances = useMemo(
-    () => bridge.useMockData ? fleetFixture : instancesFromSessions(bridge.sessions),
-    [bridge.useMockData, bridge.sessions, fleetFixture],
-  )
-  // Deselected sessions drop out of the tab strip (the open tab always stays).
+  // The fleet reads EVERY session of every profile (also closed tabs) and each agent node
+  // inside them, never just the open tab. Their events are buffered in refs, so a slow tick
+  // refreshes the instances while the panel is open.
+  const [fleetTick, setFleetTick] = useState(0)
+  useEffect(() => {
+    if (!showFleet || bridge.useMockData) return
+    const timer = setInterval(() => setFleetTick(n => n + 1), 2000)
+    return () => clearInterval(timer)
+  }, [showFleet, bridge.useMockData])
+  const { sessions: bridgeSessions, getSessionEvents, getDismissedSessions } = bridge
+  const fleetInstances = useMemo(() => {
+    if (bridge.useMockData) return fleetFixture
+    if (!showFleet) return []
+    const open = new Set(bridgeSessions.map(s => s.id))
+    const all = [...bridgeSessions, ...getDismissedSessions().filter(s => !open.has(s.id))]
+    return instancesFromSessionEvents(all, getSessionEvents)
+    // fleetTick: the event buffers are refs, so React does not see new events by itself
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bridge.useMockData, showFleet, bridgeSessions, getSessionEvents, getDismissedSessions, fleetFixture, fleetTick])
+  // Fleet on: nodes deselected in the fleet drop out of the tab strip (the open tab always stays).
+  // Fleet off: the single-profile tab strip is unchanged.
   const visibleSessions = useMemo(
-    () => bridge.sessions.filter(s => s.id === bridge.selectedSessionId || fleetSelection.view.isSelected(s.id)),
-    [bridge.sessions, bridge.selectedSessionId, fleetSelection.view],
+    () => tabSessions(bridgeSessions, bridge.selectedSessionId, showFleet, fleetInstances, fleetSelection.view),
+    [bridgeSessions, bridge.selectedSessionId, showFleet, fleetInstances, fleetSelection.view],
   )
 
   // Mutually exclusive panel toggling — opening one closes the others
@@ -290,10 +306,12 @@ export function AgentVisualizer() {
 
   // Fleet tab row click: switch to that Hermes profile's session, then open its detail.
   // A fixture row (demo data) has no live session behind it, so it opens nothing.
-  const handleFleetOpenSession = useCallback((sessionId: string) => {
+  // The row id is a node id (`<session>::<node name>`) or a plain session id.
+  const handleFleetOpenSession = useCallback((instanceId: string) => {
+    const { sessionId, agentName } = splitInstanceId(instanceId)
     if (!bridge.sessions.some(s => s.id === sessionId)) return
     if (bridge.selectedSessionId !== sessionId) bridge.selectSession(sessionId)
-    openSessionDetail(null)
+    openSessionDetail(agentName ?? null)
   }, [bridge, openSessionDetail])
 
   const currentSessionLabel = useMemo(
