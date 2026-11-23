@@ -117,6 +117,7 @@ export function useVSCodeBridge(): BridgeHookResult {
         type: event.type as SimulationEvent['type'],
         payload: event.payload,
         sessionId: event.sessionId,
+        ...(event.history ? { history: true } : {}),
       }
 
       // Always buffer by session (for replay on session switch)
@@ -284,7 +285,8 @@ export function useVSCodeBridge(): BridgeHookResult {
     sessionSwitchPendingRef.current = false
     const buffered = sessionEventsRef.current.get(sessionId) || []
     pendingEventsRef.current.length = 0
-    pendingEventsRef.current.push(...buffered.slice(fromIndex))
+    // Everything in the buffer already happened: apply it as a snapshot, not as live animation.
+    pendingEventsRef.current.push(...buffered.slice(fromIndex).map(e => e.history ? e : { ...e, history: true }))
     setEventVersion(v => v + 1)
   }, [])
 

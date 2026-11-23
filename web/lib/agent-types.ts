@@ -179,6 +179,8 @@ export interface SimulationEvent {
     | 'permission_requested'
   payload: Record<string, unknown>
   sessionId?: string
+  /** Replayed from a buffer (page connect, session switch): apply as a snapshot, do not animate. */
+  history?: boolean
 }
 
 export interface DepthParticle {

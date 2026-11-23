@@ -32,6 +32,7 @@ import {
 } from '../extension/src/constants'
 import { setLogLevel } from '../extension/src/logger'
 import type { TelemetryClient } from './telemetry'
+import { buildHistoryBatch } from './history-batch'
 
 /** Events kept per session for pages that connect late (oldest are dropped).
  *  A memory cap only: no single event is shortened. Keep it at least as large as
@@ -581,10 +582,9 @@ export async function createRelay(options: RelayOptions): Promise<Relay> {
       for (const session of [...sorted].reverse()) {
         const buffered = eventBuffer.get(session.id)
         if (buffered && buffered.length > 0) {
-          // The page holds events until its playback clock reaches their time, and
-          // the clock starts at 0 on load. Replayed history is a snapshot, so time 0
-          // makes it show at once, in buffer order.
-          sendSSE(res, { type: 'agent-event-batch', events: buffered.map(e => ({ ...e, time: 0 })) })
+          // Keep each event's own time: the page applies the batch as a snapshot (events
+          // marked history, spaced as they really were) and only animates live events.
+          sendSSE(res, buildHistoryBatch(buffered))
         }
       }
     },

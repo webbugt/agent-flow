@@ -17,6 +17,7 @@ import { createEmptyState, MAX_EVENT_LOG } from './simulation/types'
 import { processEvent, type ProcessEventContext } from './simulation/process-event'
 import { computeNextFrame } from './simulation/animate'
 import { snapVisualState } from './simulation/snap-visual-state'
+import { applyExternalEvents } from './simulation/apply-external-events'
 import { shouldCommitFrame } from './simulation/ui-throttle'
 
 export function useAgentSimulation(options: UseAgentSimulationOptions = {}) {
@@ -235,17 +236,16 @@ export function useAgentSimulation(options: UseAgentSimulationOptions = {}) {
         }
         newTime = Math.max(newTime, currentState.currentTime)
       }
-      for (const event of capturedEvents) {
-        const activeFilter = sessionFilterRef.current
-        if (activeFilter && event.sessionId && event.sessionId !== activeFilter) {
-          continue
-        }
-        const eventTime = Math.max(event.time || newTime, newTime)
-        const timedEvent = { ...event, time: eventTime }
-        currentState = { ...currentState, currentTime: eventTime }
-        currentState = processEventWithContext(timedEvent, currentState)
-        newEvents.push(timedEvent)
-      }
+      const activeFilter = sessionFilterRef.current
+      const result = applyExternalEvents(currentState, capturedEvents, newTime, processEventWithContext, {
+        accept: event => !(activeFilter && event.sessionId && event.sessionId !== activeFilter),
+        // History is a snapshot: skip per-event layout work and settle the layout once after.
+        setSnapshotMode: on => { skipForceSyncRef.current = on },
+        onHistoryApplied: st => { setTimeout(() => syncForceSimulation(st.agents, st.edges), 0) },
+      })
+      currentState = result.state
+      newEvents.push(...result.applied)
+      newTime = result.newTime
       // Sync simulation clock to latest event so active state renders correctly
       newTime = Math.max(newTime, currentState.currentTime)
       maxT = Math.max(maxT, newTime)

@@ -11,6 +11,8 @@ export interface AgentEvent {
   type: string
   payload: Record<string, unknown>
   sessionId?: string
+  /** Set by the bridge on events that arrive in an `agent-event-batch` (buffered history). */
+  history?: boolean
 }
 
 export interface SessionInfo {

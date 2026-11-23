@@ -51,9 +51,12 @@ class VSCodeBridge {
         break
 
       case 'agent-event-batch':
+        // A batch is buffered history (the relay replays it on connect): tag it so
+        // the simulation applies it as a snapshot instead of animating each event.
         for (const event of data.events) {
+          const past = { ...event, history: true }
           for (const cb of this.eventListeners) {
-            cb(event)
+            cb(past)
           }
         }
         break
