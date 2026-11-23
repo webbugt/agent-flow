@@ -61,8 +61,9 @@ export const BUBBLE_FADE_OUT = 1.5
 export const BUBBLE_MAX_W = 220
 /** Vertical gap (px) between stacked bubbles */
 export const BUBBLE_GAP = 6
-/** Max visible lines in a bubble before truncation */
-export const BUBBLE_MAX_LINES = 8
+/** Max lines drawn in one canvas bubble; the rest is marked with "..." (layout cap,
+ *  the bubble holds the full text and the message feed panel shows all of it) */
+export const BUBBLE_MAX_LINES = 12
 
 /** Tool card width (px) for overlap detection */
 export const TOOL_CARD_W = 170
@@ -384,6 +385,8 @@ export const PARTICLE_DRAW = {
   labelMaxT: 0.8,
   labelFontSize: 8,
   labelYOffset: -12,
+  /** Widest particle label drawn, in px; longer labels end in an ellipsis (layout fit, not a data limit) */
+  labelMaxW: 160,
 } as const
 
 // ─── Performance overlay constants (debug only, ?perf or ?stress) ────────────

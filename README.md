@@ -42,6 +42,26 @@ Options:
 - `--port <number>` — change the server port (default: 3001)
 - `--no-open` — don't open the browser automatically
 - `--verbose` — show detailed event logs
+- `--anonymize-content[=<all|none|profile,profile>]` — show structure only instead of content (see below). A bare flag means `all`.
+- `--show-content` — same as `--anonymize-content=none`
+
+#### Live Hermes feed: full text, and anonymizing it per profile
+
+For Hermes profiles the relay reads each session's messages from the profile's `state.db` (**read-only**: opened with `readOnly` and `PRAGMA query_only`, SELECT only, nothing is ever written to Hermes) and shows the full user and assistant text, the full Bash command, edit diffs (old and new text), write contents and tool results. If `state.db` or the session can't be read, the feed falls back to what `agent.log` offers (tool name and duration only). Strings that look like secrets (API keys, tokens, `Bearer …`, `password=…`, URL credentials, private keys) are redacted from everything shown, whatever the setting below.
+
+Only item counts and one huge-text guard are capped (memory protection): `MAX_EVENT_LOG`, `MAX_CONVERSATION_MESSAGES` and `MAX_BUBBLES` in `web/hooks/simulation/types.ts`, the relay's `MAX_EVENT_BUFFER`, and `AGENT_FLOW_MAX_TEXT_CHARS` (default 200000 characters per text field, `0` = off).
+
+To show **structure only** for some or all profiles — command name and length instead of the command, file path and line counts instead of a diff, role / sender / platform and length instead of a message body, size instead of a tool result, and task id and length instead of a Kanban task title in the Fleet tab — set, when the relay starts:
+
+| Setting | Meaning |
+|---|---|
+| `AGENT_FLOW_ANONYMIZE_CONTENT=all` | anonymize every profile |
+| `AGENT_FLOW_ANONYMIZE_CONTENT=none` | full content for every profile |
+| `AGENT_FLOW_ANONYMIZE_CONTENT=hestia,sophia` | anonymize only the listed Hermes profiles |
+| `--anonymize-content=<value>` / `--show-content` | same values as flags; a flag wins over the environment variable |
+| `AGENT_FLOW_ANONYMIZE_OVERRIDES=hestia=on,sophia=off` | per-profile override, wins over everything above (relay option `anonymizeOverrides` does the same in code) |
+
+Profiles the setting does not name follow the default, which is **`none`** (full content) — one constant, `DEFAULT_ANONYMIZE` in `web/lib/content-privacy.ts`. A name that is not a Hermes profile on this machine is ignored with a warning in the relay log; the relay still starts. The live feed, the session detail and the Fleet tab all follow the same per-profile setting, and anonymizing happens in the relay, so the hidden text never reaches the browser.
 
 The Fleet tab reads Hermes Kanban boards and Supermemory namespaces (read-only) from `GET /api/fleet`. The endpoint is loopback-only by default: requests with a non-loopback `Host` or proxy headers (`X-Forwarded-For`, `X-Real-IP`, `Forwarded`) get `403`. To serve it through a reverse proxy or to other machines, set `AGENT_FLOW_FLEET_ALLOW_REMOTE=1` — this exposes board names, task titles and namespace names to anyone who can reach the port, so only use it on a trusted network.
 

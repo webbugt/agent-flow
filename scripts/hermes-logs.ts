@@ -17,14 +17,30 @@
  * (for example "Taxis"), and each Hermes session of that profile is a child
  * node named "<Profile> · <short title>" (for example "Taxis · Visualisation").
  * The short title comes from the session's title in Hermes' state database,
- * read-only. Message text is not read. Only the sender and platform are shown.
+ * read-only.
+ *
+ * Full text (see hermes-transcript.ts): agent.log only says which tool ran and
+ * for how long, so the watcher also reads each session's messages from the
+ * profile's state.db, READ-ONLY (opened with readOnly + PRAGMA query_only, SELECT
+ * only). That gives the real user and assistant text, the full tool command or
+ * edit (messages.tool_calls) and the full tool result (role=tool rows, linked by
+ * tool_call_id). For a session found in state.db those replace the log-derived
+ * tool events and the "Message from <user>" placeholder; the log still supplies
+ * model and token usage. If state.db or the session is not readable, the
+ * log-only behaviour above is used. Secrets in that text are redacted before
+ * it leaves hermes-transcript.ts.
  *
  * Nothing is written to Hermes, no synthetic transcripts are created, and no
- * gateway restart is needed.
+ * gateway restart is needed. gateway.log is still read for sender and platform
+ * only, never for message text.
  */
 import * as fs from 'fs'
 import * as path from 'path'
 import type { AgentEvent, SessionInfo } from '../extension/src/protocol'
+import { readSessionTranscript, rowsToItems } from './hermes-transcript'
+import type { TranscriptReader } from './hermes-transcript'
+import { isAnonymized, warnUnknownProfiles } from '../web/lib/content-privacy'
+import type { AnonymizePolicy } from '../web/lib/content-privacy'
 
 /** Minimal shape of node:sqlite's DatabaseSync (loaded at runtime; typed here for older @types/node). */
 export interface SqliteDb {
@@ -206,6 +222,20 @@ export interface HermesLogWatcherOptions {
   defaultLogDir?: string
   /** Session title lookup. Defaults to reading the profile's state.db read-only. */
   titleFor?: (profile: string, dbFile: string, sid: string) => string | undefined
+  /**
+   * Message and tool text lookup. Defaults to reading the profile's state.db
+   * read-only (see hermes-transcript.ts). Pass `false` to keep to agent.log
+   * and gateway.log only.
+   */
+  transcriptFor?: TranscriptReader | false
+  /**
+   * Which profiles show structure only (see web/lib/content-privacy.ts). Without
+   * a policy every profile shows full content. The policy is read per profile,
+   * so one relay can anonymize some profiles and not others.
+   */
+  anonymize?: AnonymizePolicy
+  /** Warning sink for the anonymize setting (unknown profile names). Defaults to console.warn. */
+  warn?: (message: string) => void
   emit: (event: AgentEvent, sessionId?: string) => void
   lifecycle: (type: 'started' | 'ended' | 'updated', sessionId: string, label: string) => void
   now?: () => number
@@ -247,6 +277,13 @@ interface SessionState {
   pending: Builder[]
   model?: string
   toolSeq: number
+  /** Message and tool text read from state.db; set once the session was found there */
+  transcript?: {
+    /** Id of the last message row read */
+    cursor: number
+    /** Hermes tool-call id to Hermes tool name, to name a result that arrives later */
+    calls: Map<string, string>
+  }
   spend: {
     inputTokens: number
     outputTokens: number
@@ -271,6 +308,8 @@ interface ProfileState {
   mainActive: boolean
   /** Inbound messages received before any session node existed */
   pendingInbound: string[]
+  /** Sender and platform of the latest inbound message, shown on anonymized user messages */
+  lastInbound?: { user: string; platform: string }
 }
 
 const READ_CHUNK = 262144
@@ -330,6 +369,7 @@ export class HermesLogWatcher {
   private readonly opts: HermesLogWatcherOptions
   private readonly now: () => number
   private readonly titleFor: (profile: string, dbFile: string, sid: string) => string | undefined
+  private readonly transcriptFor: TranscriptReader | undefined
   private readonly profiles = new Map<string, ProfileState>()
   private timer: NodeJS.Timeout | null = null
   private lastDiscovery = Number.NEGATIVE_INFINITY
@@ -338,6 +378,7 @@ export class HermesLogWatcher {
     this.opts = opts
     this.now = opts.now ?? Date.now
     this.titleFor = opts.titleFor ?? ((_profile, dbFile, sid) => readSessionTitle(dbFile, sid))
+    this.transcriptFor = opts.transcriptFor === false ? undefined : (opts.transcriptFor ?? readSessionTranscript)
   }
 
   start(): void {
@@ -368,6 +409,7 @@ export class HermesLogWatcher {
         if (inbound) this.deliverInbound(p, inbound)
       })
       for (const s of p.sessions.values()) {
+        if (s.active && !s.completed) this.pumpTranscript(p, s)
         this.trySpawn(p, s, t)
         this.updateActivity(p, s)
       }
@@ -405,6 +447,11 @@ export class HermesLogWatcher {
     return [...(this.profiles.get(profile)?.sessions.keys() ?? [])].sort()
   }
 
+  /** True if this profile shows structure only. Without a policy: full content. */
+  private isAnonymized(p: ProfileState): boolean {
+    return this.opts.anonymize ? isAnonymized(this.opts.anonymize, p.profile) : false
+  }
+
   /** Node names of the spawned sessions of one profile, for tests and status views. */
   nodesOf(profile: string): string[] {
     return [...(this.profiles.get(profile)?.sessions.values() ?? [])]
@@ -412,6 +459,8 @@ export class HermesLogWatcher {
       .map(s => s.agentName)
       .sort()
   }
+
+  private warnedUnknown = false
 
   private discover(): void {
     const candidates: Array<{ profile: string; group: string; logDir: string; dbFile: string }> = []
@@ -436,6 +485,12 @@ export class HermesLogWatcher {
         logDir: this.opts.defaultLogDir,
         dbFile: path.join(path.dirname(this.opts.defaultLogDir), 'state.db'),
       })
+    }
+
+    if (this.opts.anonymize && !this.warnedUnknown) {
+      // Once: names in the anonymize setting that are not Hermes profiles here follow the default.
+      this.warnedUnknown = true
+      warnUnknownProfiles(this.opts.anonymize, candidates.map(c => c.profile), this.opts.warn ?? console.warn)
     }
 
     for (const { profile, group, logDir, dbFile } of candidates) {
@@ -469,10 +524,16 @@ export class HermesLogWatcher {
     const s = this.sessionFor(p, sid, t)
     this.activate(p, s, t)
     this.refreshTitle(p, s, t)
+    // First sight of a session: find out whether state.db has it before the log event
+    // is turned into a (text-less) tool event.
+    if (!s.transcript) this.pumpTranscript(p, s)
     this.trySpawn(p, s, t)
 
     const ev = parsed.event
-    if (ev.kind === 'tool') {
+    if (ev.kind === 'tool' && s.transcript) {
+      // state.db supplies this call with its full command and result; the log line only
+      // carries the name and duration.
+    } else if (ev.kind === 'tool') {
       const toolName = displayToolName(ev.tool)
       const toolUseId = `${p.sessionId}-${s.tag}-${++s.toolSeq}`
       const time = this.elapsed(s, t)
@@ -511,6 +572,47 @@ export class HermesLogWatcher {
       }))
     }
     s.lastActivity = t
+  }
+
+  /**
+   * Read new messages of a session from state.db (read-only) and emit them as
+   * the real user and assistant text and the tool calls with their full command
+   * and result. Does nothing when state.db or the session cannot be read.
+   */
+  private pumpTranscript(p: ProfileState, s: SessionState): void {
+    if (!this.transcriptFor || s.sid === UNTAGGED) return
+    const batch = this.transcriptFor(p.dbFile, s.sid, s.transcript?.cursor)
+    if (!batch) return
+    const tr = s.transcript ?? (s.transcript = { cursor: batch.lastId, calls: new Map() })
+    tr.cursor = Math.max(tr.cursor, batch.lastId)
+    const items = rowsToItems(batch.rows, tr.calls, {
+      displayTool: displayToolName,
+      anonymize: this.isAnonymized(p),
+      from: p.lastInbound,
+    })
+    if (items.length === 0) return
+    const time = this.elapsed(s, this.now())
+    for (const item of items) {
+      if (item.kind === 'message') {
+        this.emitFor(p, s, agent => ({ time, type: 'message', payload: { agent, role: item.role, content: item.content } }))
+      } else if (item.kind === 'tool_start') {
+        const toolUseId = `${p.sessionId}-${s.tag}-${item.callId}`
+        this.emitFor(p, s, agent => ({
+          time,
+          type: 'tool_call_start',
+          payload: { agent, tool: item.tool, toolUseId, args: item.args, inputData: item.inputData },
+        }))
+      } else {
+        const toolUseId = `${p.sessionId}-${s.tag}-${item.callId}`
+        const tool = displayToolName(item.hermesTool)
+        this.emitFor(p, s, agent => ({
+          time,
+          type: 'tool_call_end',
+          payload: { agent, tool, toolUseId, result: item.result, isError: item.isError },
+        }))
+      }
+    }
+    s.lastActivity = this.now()
   }
 
   /** Find or create the state for a Hermes session id within its profile. */
@@ -575,7 +677,9 @@ export class HermesLogWatcher {
     this.opts.emit({ time: 0, type: 'agent_spawn', payload: this.spawnPayload(p, s) } as AgentEvent, p.sessionId)
     const buffered = s.pending.splice(0)
     for (const build of buffered) this.opts.emit({ ...build(s.agentName) } as AgentEvent, p.sessionId)
-    for (const content of p.pendingInbound.splice(0)) {
+    const heldInbound = p.pendingInbound.splice(0)
+    // With the real message text from state.db the "Message from <user>" placeholder is redundant.
+    for (const content of s.transcript ? [] : heldInbound) {
       this.emitFor(p, s, agent => ({ time: this.elapsed(s, t), type: 'message', payload: { agent, role: 'user', content } }))
     }
   }
@@ -621,12 +725,14 @@ export class HermesLogWatcher {
   /** A message from outside, shown on the most recently active node of the profile. */
   private deliverInbound(p: ProfileState, inbound: InboundMessage): void {
     const content = `Message from ${inbound.user} via ${inbound.platform}`
+    p.lastInbound = { user: inbound.user, platform: inbound.platform }
     const spawned = [...p.sessions.values()].filter(s => s.spawned)
     const target = spawned.sort((a, b) => Number(b.active && !b.completed) - Number(a.active && !a.completed) || b.lastActivity - a.lastActivity)[0]
     if (!target) {
       p.pendingInbound.push(content)
       return
     }
+    if (target.transcript) return // the real text arrives from state.db
     const time = this.elapsed(target, this.now())
     this.emitFor(p, target, agent => ({ time, type: 'message', payload: { agent, role: 'user', content } }))
   }

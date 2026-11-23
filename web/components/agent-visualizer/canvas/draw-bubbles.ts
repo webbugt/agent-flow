@@ -42,7 +42,12 @@ export function drawMessageBubblesWorld(
       if (bubble._cachedWrappedLines && bubble._cachedWrappedFont === font) {
         allLines = bubble._cachedWrappedLines
       } else {
-        allLines = wrapText(ctx, text, BUBBLE_MAX_W - 16)
+        // Only BUBBLE_MAX_LINES lines are drawn and a line holds at most BUBBLE_MAX_W
+        // characters, so wrapping more than that is wasted work on very long text.
+        // The bubble keeps the full text; the message feed panel shows all of it.
+        const wrapLimit = BUBBLE_MAX_LINES * BUBBLE_MAX_W + 1
+        allLines = wrapText(ctx, text.length > wrapLimit ? text.slice(0, wrapLimit) : text, BUBBLE_MAX_W - 16)
+        if (text.length > wrapLimit && allLines.length <= BUBBLE_MAX_LINES) allLines = [...allLines, '']
         bubble._cachedWrappedLines = allLines
         bubble._cachedWrappedFont = font
       }

@@ -12,6 +12,7 @@
  */
 import type * as http from 'http'
 import { handleFleetRequest, type FleetApiDeps } from '../../web/lib/fleet/fleet-api'
+import type { AnonymizePolicy } from '../../web/lib/content-privacy'
 
 export const FLEET_PATH = '/api/fleet'
 
@@ -22,6 +23,8 @@ export interface FleetRouteOptions {
   loadReaders?: () => Promise<FleetReaders>
   env?: Record<string, string | undefined>
   logError?: FleetApiDeps['logError']
+  /** Same per-profile setting as the live feed: task titles of anonymized profiles are hidden. */
+  anonymize?: AnonymizePolicy
 }
 
 async function loadDefaultReaders(): Promise<FleetReaders> {
@@ -79,6 +82,7 @@ export async function handleFleetHttp(
     readSupermemory: () => { if (!readers) throw loadError; return readers.readSupermemory() },
     env: options.env,
     logError,
+    anonymize: options.anonymize,
   })
 
   const body = await response.text()

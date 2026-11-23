@@ -1,5 +1,7 @@
 import type { KanbanBoardNode } from './kanban-source'
 import type { SupermemoryNamespaceNode } from './supermemory-source'
+import { anonymizeTaskTitle, isAnonymized } from '../content-privacy'
+import type { AnonymizePolicy } from '../content-privacy'
 
 /**
  * Access policy for the read-only /api/fleet endpoint.
@@ -75,6 +77,23 @@ export interface FleetApiDeps {
   now?: () => number
   /** Server-side error sink; the detail never goes to the client. */
   logError?: (message: string, err: unknown) => void
+  /**
+   * Same per-profile setting as the live feed. The title of a task assigned to an
+   * anonymized profile is replaced by its id and length; boards, counts, ids and
+   * assignees stay. Without a policy titles are shown.
+   */
+  anonymize?: AnonymizePolicy
+}
+
+/** Hide task titles of anonymized assignees. Returns new nodes; the input is not changed. */
+export function applyAnonymization(nodes: KanbanBoardNode[], policy: AnonymizePolicy | undefined): KanbanBoardNode[] {
+  if (!policy) return nodes
+  return nodes.map(node => ({
+    ...node,
+    recentEvents: node.recentEvents.map(e =>
+      e.assignee && isAnonymized(policy, e.assignee) ? { ...e, taskTitle: anonymizeTaskTitle(e.taskId, e.taskTitle) } : e,
+    ),
+  }))
 }
 
 /** Pure request handler behind app/api/fleet/route.ts (kept separate so it is testable). */
@@ -86,7 +105,7 @@ export function handleFleetRequest(req: Request, deps: FleetApiDeps): Response {
   try {
     const kanban = deps.readKanban()
     const supermemory = deps.readSupermemory()
-    return Response.json({ readAt: (deps.now ?? Date.now)(), kanban: kanban.nodes, supermemory: supermemory.nodes })
+    return Response.json({ readAt: (deps.now ?? Date.now)(), kanban: applyAnonymization(kanban.nodes, deps.anonymize), supermemory: supermemory.nodes })
   } catch (err) {
     // Errors can contain absolute DB paths: log them here, tell the client nothing specific.
     ;(deps.logError ?? ((m, e) => console.error(m, e)))('[fleet] /api/fleet read failed', err)

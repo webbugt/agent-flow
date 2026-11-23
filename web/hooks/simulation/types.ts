@@ -61,14 +61,27 @@ export interface ConversationMessage {
   inputData?: Record<string, unknown>
 }
 
-/** Max canvas message bubbles kept per agent (oldest are dropped) */
-export const MAX_BUBBLES = 20
+// ── Memory caps ──────────────────────────────────────────────────────
+// These are the ONLY limits applied to live data. They bound how many items
+// are kept, never how much of one item is shown: every label, message, tool
+// argument and result is stored and passed through as the full text.
+// (Long text is only shortened at draw time, to fit the pixels available;
+// see truncateText in canvas/draw-misc.ts. Hermes text is bounded once at the
+// source, see MAX_TEXT_CHARS in scripts/hermes-logs.ts.)
 
-/** Max conversation messages kept per agent (oldest are dropped) */
-export const MAX_CONVERSATION_MESSAGES = 200
+/** Max canvas message bubbles kept per agent (oldest are dropped). Bubbles fade
+ *  after a few seconds, so this only matters for a burst of messages. */
+export const MAX_BUBBLES = 40
 
-/** Max events kept in the event log for seeking (oldest are dropped) */
-export const MAX_EVENT_LOG = 5000
+/** Max conversation messages kept per agent (oldest are dropped). The
+ *  conversation is what the message feed and transcript panels show, so this
+ *  is sized for a long live session rather than a short demo. */
+export const MAX_CONVERSATION_MESSAGES = 2000
+
+/** Max events kept in the event log for seeking (oldest are dropped). Must not
+ *  be smaller than the relay's per-session replay buffer (MAX_EVENT_BUFFER in
+ *  scripts/relay.ts), or a reloaded page would replay events it cannot seek to. */
+export const MAX_EVENT_LOG = 20000
 
 /** Append a message to a conversation, creating the array if needed.
  *  Auto-assigns a unique id if not provided.
@@ -93,14 +106,6 @@ export function edgeId(from: string, to: string): string {
 export function asString(v: unknown, fallback = ''): string { return typeof v === 'string' ? v : fallback }
 export function asNumber(v: unknown, fallback = 0): number { return typeof v === 'number' ? v : fallback }
 export function asBoolean(v: unknown, fallback = false): boolean { return typeof v === 'boolean' ? v : fallback }
-
-// ── Truncation length constants ──────────────────────────────────────
-export const LABEL_LEN_SHORT = 25
-export const LABEL_LEN_PARTICLE = 30
-export const LABEL_LEN_TIMELINE = 40
-export const LABEL_LEN_NAME = 40
-export const LABEL_LEN_TASK = 120
-export const LABEL_LEN_BUBBLE = 200
 
 export interface ForceNode extends SimulationNodeDatum {
   id: string

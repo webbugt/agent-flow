@@ -2,16 +2,23 @@ import { Agent, NODE, CARD, TETHER } from '@/lib/agent-types'
 import { COLORS } from '@/lib/colors'
 import { measureTextCached } from './render-cache'
 
-/** Truncate text with ellipsis to fit within maxWidth pixels */
+/** Shorten text with an ellipsis to fit within maxWidth pixels.
+ *
+ *  This is the only place canvas labels are shortened, and it is purely a
+ *  layout fit: the full text stays in the simulation state (see types.ts).
+ *  A glyph is never narrower than 1px, so only the first maxWidth characters
+ *  can ever be visible; looking at more would only make measuring (and the
+ *  width cache) cost as much as the full text for no visible difference. */
 export function truncateText(ctx: CanvasRenderingContext2D, text: string, maxWidth: number): string {
-  if (measureTextCached(ctx, text) <= maxWidth) return text
-  let lo = 0, hi = text.length
+  const bounded = text.length > maxWidth ? text.slice(0, Math.max(1, Math.floor(maxWidth))) : text
+  if (bounded === text && measureTextCached(ctx, text) <= maxWidth) return text
+  let lo = 0, hi = bounded.length
   while (lo < hi) {
     const mid = (lo + hi + 1) >> 1
-    if (measureTextCached(ctx, text.slice(0, mid) + '\u2026') <= maxWidth) lo = mid
+    if (measureTextCached(ctx, bounded.slice(0, mid) + '\u2026') <= maxWidth) lo = mid
     else hi = mid - 1
   }
-  return lo > 0 ? text.slice(0, lo) + '\u2026' : '\u2026'
+  return lo > 0 ? bounded.slice(0, lo) + '\u2026' : '\u2026'
 }
 
 export function drawTetherLine(ctx: CanvasRenderingContext2D, agent: Agent, transform: { x: number; y: number; scale: number }, canvasH: number) {

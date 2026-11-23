@@ -159,7 +159,9 @@ function drawTimeline(
         ctx.fillStyle = block.color
         ctx.globalAlpha = 0.8
         ctx.textAlign = 'left'
-        ctx.fillText(block.label, x + 4, trackY + trackH / 2 + 3)
+        // The block keeps its full label; only characters that can fit are drawn
+        // (clipped to the block above), so a long tool call stays cheap to paint.
+        ctx.fillText(block.label.length > blockW ? block.label.slice(0, Math.ceil(blockW)) : block.label, x + 4, trackY + trackH / 2 + 3)
         ctx.restore()
       }
     }

@@ -18,6 +18,10 @@ interface ServerOptions {
   openBrowser: boolean
   workspace: string
   verbose?: boolean
+  /** 'all', 'none' or a comma-separated list of Hermes profiles; see web/lib/content-privacy.ts */
+  anonymizeContent?: string
+  /** Per-profile override of anonymizeContent */
+  anonymizeOverrides?: Record<string, boolean>
 }
 
 export async function startServer(options: ServerOptions) {
@@ -30,7 +34,13 @@ export async function startServer(options: ServerOptions) {
   })
   await telemetry.init()
 
-  const relay = await createRelay({ workspace, verbose: options.verbose, telemetry })
+  const relay = await createRelay({
+    workspace,
+    verbose: options.verbose,
+    telemetry,
+    anonymizeContent: options.anonymizeContent,
+    anonymizeOverrides: options.anonymizeOverrides,
+  })
 
   const server = http.createServer((req, res) => {
     // Reject DNS-rebinding requests, which reach 127.0.0.1 under a foreign Host.
@@ -47,7 +57,7 @@ export async function startServer(options: ServerOptions) {
 
     // Read-only Kanban / Supermemory fleet data (loopback-only unless opted in)
     if (isFleetPath(req.url)) {
-      void handleFleetHttp(req, res).catch(err => {
+      void handleFleetHttp(req, res, { anonymize: relay.anonymize }).catch(err => {
         console.error('[fleet] /api/fleet failed', err)
         if (!res.headersSent) res.writeHead(500, { 'Content-Type': 'application/json' })
         res.end(JSON.stringify({ error: 'fleet read failed' }))

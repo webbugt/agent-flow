@@ -49,8 +49,9 @@ export function AgentDetailCard({
           className="w-2 h-2 rounded-full"
           style={{ background: stateColor, boxShadow: `0 0 8px ${stateColor}` }}
         />
-        <div className="flex flex-col">
-          <span className="text-xs font-mono" style={{ color: COLORS.textPrimary }}>
+        <div className="flex flex-col min-w-0">
+          {/* The name can be a whole message: wrap it and scroll rather than cut it */}
+          <span className="text-xs font-mono break-words max-h-24 overflow-y-auto" style={{ color: COLORS.textPrimary }}>
             {agent.name}
           </span>
           {agent.model && (

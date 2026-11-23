@@ -1,6 +1,6 @@
 import type { ContextBreakdown, SpendTotals } from '@/lib/agent-types'
 import type { ConversationMessage } from './types'
-import { appendConversation, asString, asNumber, LABEL_LEN_NAME, LABEL_LEN_TASK, LABEL_LEN_BUBBLE, MAX_BUBBLES } from './types'
+import { appendConversation, asString, asNumber, MAX_BUBBLES } from './types'
 import type { MutableEventState } from './process-event'
 
 export function handleMessage(
@@ -22,8 +22,9 @@ export function handleMessage(
   if (role === 'user') {
     const msgAgentForName = state.agents.get(agentName)
     if (msgAgentForName && msgAgentForName.isMain && msgAgentForName.name === agentName) {
-      const shortName = content.slice(0, LABEL_LEN_NAME).replace(/\n/g, ' ').trim()
-      state.agents.set(agentName, { ...msgAgentForName, name: shortName || agentName, task: content.slice(0, LABEL_LEN_TASK) })
+      // Full text: the canvas fits the name to the node, the detail card shows the task.
+      const fullName = content.replace(/\s+/g, ' ').trim()
+      state.agents.set(agentName, { ...msgAgentForName, name: fullName || agentName, task: content })
     }
   }
 
@@ -34,8 +35,9 @@ export function handleMessage(
     const updates: Partial<typeof msgAgent> = {}
 
     {
-      // Truncate thinking for graph bubbles (full text in message feed panel)
-      const bubbleText = bubbleRole === 'thinking' ? content.slice(0, LABEL_LEN_BUBBLE) + (content.length > LABEL_LEN_BUBBLE ? '...' : '') : content
+      // Bubbles carry the full text for every role, thinking included. The canvas
+      // draws the first lines that fit and the message feed panel shows all of it.
+      const bubbleText = content
       // Dedup: skip if last bubble has the same text (dual event source race)
       const lastBubble = msgAgent.messageBubbles[msgAgent.messageBubbles.length - 1]
       if (!lastBubble || lastBubble.text !== bubbleText) {

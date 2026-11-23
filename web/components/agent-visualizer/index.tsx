@@ -166,7 +166,7 @@ export function AgentVisualizer() {
           cache.events.push({
             id: `event-${cache.idCounter++}`,
             type: msg.type === 'tool_call' ? 'tool_call' : msg.type === 'tool_result' ? 'tool_result' : 'message',
-            label: msg.content.slice(0, 20),
+            label: msg.content,
             timestamp: msg.timestamp,
             nodeId: agentId,
           })

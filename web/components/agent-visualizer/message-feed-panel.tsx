@@ -17,11 +17,16 @@ interface MessageFeedPanelProps {
 // Only show text messages (assistant, user, thinking) — tool calls visible via agent selection
 const TEXT_TYPES = new Set(['assistant', 'user', 'thinking'])
 
-// Truncation limits for compact display
+// Layout fits for the compact views. The messages themselves are never cut in the
+// data: every message keeps its full text, and an expanded message shows all of it.
+/** Agent names in the collapsed header and in tabs (tab labels are small buttons) */
 const COLLAPSED_AGENT_NAME_MAX = 12
 const TAB_AGENT_NAME_MAX = 14
-const PREVIEW_MAX = 50
-const MESSAGE_TRUNCATE_MAX = 120
+/** Characters of the latest message put in the one-line collapsed preview. CSS cuts
+ *  the line to the width; this only keeps a very long message out of the DOM. */
+const PREVIEW_MAX = 400
+/** Messages longer than this start collapsed with a "more" button that shows all of it */
+const MESSAGE_COLLAPSE_AT = 2000
 
 const MESSAGE_GAP = 4
 
@@ -201,7 +206,7 @@ export function MessageFeedPanel({
             {agentName.length > COLLAPSED_AGENT_NAME_MAX ? agentName.slice(0, COLLAPSED_AGENT_NAME_MAX) + '..' : agentName}
           </span>
           <span className="text-[9px] font-mono truncate" style={{ color: role.text + 'cc' }}>
-            {preview}{latestMessage.content.length > PREVIEW_MAX ? '...' : ''}
+            {preview}
           </span>
           <span className="text-[9px] shrink-0" style={{ color: COLORS.textMuted }}>▾</span>
         </div>
@@ -345,8 +350,8 @@ function MessageRow({ message, agentId, agentName, showAgent, isSelected, onClic
   const [expanded, setExpanded] = useState(false)
   const role = ROLE_COLORS[message.type] ?? ROLE_COLORS.assistant
   const roleLabel = message.type === 'assistant' && runtime === 'codex' ? 'CODEX' : role.label
-  const isLong = message.content.length > MESSAGE_TRUNCATE_MAX
-  const displayText = expanded || !isLong ? message.content : message.content.slice(0, MESSAGE_TRUNCATE_MAX) + '...'
+  const isLong = message.content.length > MESSAGE_COLLAPSE_AT
+  const displayText = expanded || !isLong ? message.content : message.content.slice(0, MESSAGE_COLLAPSE_AT) + '...'
 
   return (
     <div

@@ -67,7 +67,8 @@ function EditContent({ data, compact }: { data: Record<string, unknown>; compact
   const filePath = String(data.file_path || '')
   const oldStr = String(data.old_string || '')
   const newStr = String(data.new_string || '')
-  const maxLines = compact ? 4 : 8
+  // The popup shows every line (it scrolls); only the compact inline view is short
+  const maxLines = compact ? 4 : Infinity
 
   const oldLines = oldStr.split('\n').slice(0, maxLines)
   const newLines = newStr.split('\n').slice(0, maxLines)
@@ -75,7 +76,7 @@ function EditContent({ data, compact }: { data: Record<string, unknown>; compact
   return (
     <div>
       <FilePath path={filePath} />
-      <div className="rounded overflow-hidden text-[9px] font-mono leading-snug" style={{ background: COLORS.codeBlockBg }}>
+      <div className="rounded overflow-x-hidden overflow-y-auto text-[9px] font-mono leading-snug" style={{ background: COLORS.codeBlockBg, maxHeight: compact ? undefined : 320 }}>
         {oldLines.map((line, i) => (
           <div key={`old-${i}`} className="px-1.5 py-px" style={{ color: COLORS.diffRemoved, background: COLORS.diffRemovedBg }}>
             <span className="opacity-50 mr-1">-</span>{line || ' '}
@@ -162,15 +163,15 @@ function BashContent({ data, compact }: { data: Record<string, unknown>; compact
 function WriteContent({ data, compact }: { data: Record<string, unknown>; compact: boolean }) {
   const filePath = String(data.file_path || '')
   const content = String(data.content || '')
-  const maxLines = compact ? 4 : 8
+  const maxLines = compact ? 4 : Infinity
   const lines = content.split('\n').slice(0, maxLines)
 
   return (
     <div>
       <FilePath path={filePath} />
-      <div className="rounded px-1.5 py-1 text-[9px] font-mono leading-snug" style={{ background: COLORS.codeBlockBg, color: COLORS.contentDim }}>
+      <div className="rounded px-1.5 py-1 text-[9px] font-mono leading-snug overflow-y-auto" style={{ background: COLORS.codeBlockBg, color: COLORS.contentDim, maxHeight: compact ? undefined : 320 }}>
         {lines.map((line, i) => (
-          <div key={i} className="truncate">{line || ' '}</div>
+          <div key={i} className="whitespace-pre-wrap break-all">{line || ' '}</div>
         ))}
         {content.split('\n').length > maxLines && (
           <div className="opacity-50">...</div>
@@ -238,16 +239,16 @@ function WebFetchContent({ data }: { data: Record<string, unknown> }) {
   const url = String(data.url || '')
   const prompt = String(data.prompt || '')
   let displayUrl = url
-  try { const u = new URL(url); displayUrl = u.hostname + u.pathname.slice(0, 50) } catch { /* keep full */ }
+  try { const u = new URL(url); displayUrl = u.hostname + u.pathname + u.search } catch { /* keep full */ }
 
   return (
     <div>
-      <div className="rounded px-1.5 py-1 text-[9px] font-mono truncate" style={{ background: COLORS.codeBlockBg, color: COLORS.filePathActive }}>
+      <div className="rounded px-1.5 py-1 text-[9px] font-mono break-all" style={{ background: COLORS.codeBlockBg, color: COLORS.filePathActive }}>
         🌐 {displayUrl}
       </div>
       {prompt && (
-        <div className="mt-1 text-[9px] opacity-50 truncate" style={{ color: COLORS.assistantText }}>
-          {prompt.slice(0, 120)}
+        <div className="mt-1 text-[9px] opacity-50 whitespace-pre-wrap break-words" style={{ color: COLORS.assistantText }}>
+          {prompt}
         </div>
       )}
     </div>

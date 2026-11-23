@@ -135,8 +135,9 @@ export function TranscriptMessage({ message, compact = false, searchQuery, assis
               <span className="text-[9px] opacity-60">{message.toolName}</span>
             )}
           </div>
-          <div className={isBash ? 'whitespace-pre-wrap leading-relaxed' : ''}>
-            <HighlightText text={resultText.slice(0, compact ? 80 : 400)} query={searchQuery} />
+          {/* Full result in the transcript (scrolls when long); only the compact inline view is short */}
+          <div className={`${isBash ? 'whitespace-pre-wrap leading-relaxed' : 'whitespace-pre-wrap break-words'} ${compact ? '' : 'max-h-96 overflow-y-auto'}`}>
+            <HighlightText text={compact ? resultText.slice(0, 80) : resultText} query={searchQuery} />
           </div>
         </div>
       )

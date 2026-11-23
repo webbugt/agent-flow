@@ -18,6 +18,14 @@ import { handlePermissionDetection } from '../extension/src/permission-detection
 import { CodexSessionWatcher } from '../extension/src/codex-session-watcher'
 import { HermesLogWatcher, resolveHermesRoot } from './hermes-logs'
 import {
+  ANONYMIZE_ENV,
+  ANONYMIZE_OVERRIDES_ENV,
+  createAnonymizePolicy,
+  describePolicy,
+  parseOverrides,
+} from '../web/lib/content-privacy'
+import type { AnonymizePolicy } from '../web/lib/content-privacy'
+import {
   INACTIVITY_TIMEOUT_MS, SCAN_INTERVAL_MS, ACTIVE_SESSION_AGE_S, POLL_FALLBACK_MS,
   SESSION_ID_DISPLAY, SYSTEM_PROMPT_BASE_TOKENS, ORCHESTRATOR_NAME,
   HOOK_SERVER_NOT_STARTED, WORKSPACE_HASH_LENGTH,
@@ -25,7 +33,11 @@ import {
 import { setLogLevel } from '../extension/src/logger'
 import type { TelemetryClient } from './telemetry'
 
-const MAX_EVENT_BUFFER = 5000
+/** Events kept per session for pages that connect late (oldest are dropped).
+ *  A memory cap only: no single event is shortened. Keep it at least as large as
+ *  MAX_EVENT_LOG in web/hooks/simulation/types.ts, so a reloaded page sees as much
+ *  history as the page itself keeps. */
+const MAX_EVENT_BUFFER = 20000
 const DISCOVERY_DIR = path.join(os.homedir(), '.claude', 'agent-flow')
 const CLAUDE_DIR = path.join(os.homedir(), '.claude', 'projects')
 
@@ -364,6 +376,8 @@ function removeDiscoveryFile() {
 // ─── Public API ─────────────────────────────────────────────────────────────
 
 export interface Relay {
+  /** Which Hermes profiles show structure only. Shared with the fleet endpoint so both honour one setting. */
+  anonymize: AnonymizePolicy
   /** Handle an incoming SSE connection */
   handleSSE: (req: http.IncomingMessage, res: http.ServerResponse) => void
   /** Clean up all resources */
@@ -383,6 +397,13 @@ export interface RelayOptions {
   /** Follow live Hermes profile activity from ~/.hermes/profiles/*\/logs/agent.log.
    *  Defaults to on; set false to disable. Reads logs only. */
   hermesLogs?: boolean
+  /** Which Hermes profiles show structure only instead of content: 'all', 'none' or a
+   *  comma-separated list of profile names. Defaults to AGENT_FLOW_ANONYMIZE_CONTENT, then to
+   *  DEFAULT_ANONYMIZE (web/lib/content-privacy.ts). Read once, at start. */
+  anonymizeContent?: string
+  /** Per-profile override of the setting above (name to anonymized on/off). Merged over
+   *  AGENT_FLOW_ANONYMIZE_OVERRIDES, which has the form `hestia=on,sophia=off`. */
+  anonymizeOverrides?: Record<string, boolean>
 }
 
 function resolveRuntimeMode(explicit?: RelayRuntimeMode): RelayRuntimeMode {
@@ -393,6 +414,11 @@ function resolveRuntimeMode(explicit?: RelayRuntimeMode): RelayRuntimeMode {
 
 export async function createRelay(options: RelayOptions): Promise<Relay> {
   const { workspace } = options
+  const anonymize = createAnonymizePolicy({
+    value: options.anonymizeContent ?? process.env[ANONYMIZE_ENV],
+    overrides: { ...parseOverrides(process.env[ANONYMIZE_OVERRIDES_ENV]), ...options.anonymizeOverrides },
+  })
+  console.log(`[agent-flow] content: ${describePolicy(anonymize)}`)
   verbose = options.verbose ?? false
   // Keep warnings visible without --verbose — actionable hints (e.g. "Codex
   // sessions exist but none match this workspace") must reach the user.
@@ -453,6 +479,7 @@ export async function createRelay(options: RelayOptions): Promise<Relay> {
       defaultLogDir: path.join(hermesHome, 'logs'),
       emit: (event, sessionId) => emitEvent(event, sessionId),
       lifecycle: (type, sessionId, label) => broadcastSessionLifecycle(type, sessionId, label),
+      anonymize,
     })
     hermesLogs.start()
   }
@@ -504,6 +531,7 @@ export async function createRelay(options: RelayOptions): Promise<Relay> {
   })
 
   return {
+    anonymize,
     handleSSE(req: http.IncomingMessage, res: http.ServerResponse) {
       res.writeHead(200, {
         'Content-Type': 'text/event-stream',

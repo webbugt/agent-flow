@@ -1,6 +1,6 @@
 import { COLORS } from '@/lib/colors'
 import type { MutableEventState } from './process-event'
-import { edgeId, asString, LABEL_LEN_SHORT } from './types'
+import { edgeId, asString } from './types'
 
 export function handleSubagentDispatch(
   payload: Record<string, unknown>,
@@ -17,7 +17,7 @@ export function handleSubagentDispatch(
     edgeId: eid, progress: 0,
     type: 'dispatch', color: COLORS.dispatch,
     size: 6, trailLength: 0.2,
-    label: task.slice(0, LABEL_LEN_SHORT),
+    label: task,
   })
 }
 
@@ -36,6 +36,6 @@ export function handleSubagentReturn(
     edgeId: eid, progress: 1,
     type: 'return', color: COLORS.return,
     size: 5, trailLength: 0.2,
-    label: summary.slice(0, LABEL_LEN_SHORT),
+    label: summary,
   })
 }

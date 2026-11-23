@@ -4,6 +4,7 @@ import { PARTICLE_DRAW } from '@/lib/canvas-constants'
 import { alphaHex } from '@/lib/utils'
 import { bezierPoint, resolveEdgeTarget, computeControlPoints } from './draw-edges'
 import { getGlowSprite } from './render-cache'
+import { truncateText } from './draw-misc'
 
 /** Pre-build edge lookup map. Call once per frame, pass to drawParticles. */
 export function buildEdgeMap(edges: Edge[]): Map<string, Edge> {
@@ -91,7 +92,8 @@ export function drawParticles(
       ctx.fillStyle = particle.color + 'aa'
       ctx.font = `${PARTICLE_DRAW.labelFontSize}px monospace`
       ctx.textAlign = 'center'
-      ctx.fillText(particle.label, px, py + PARTICLE_DRAW.labelYOffset)
+      // The particle keeps the full text; the canvas only draws what fits.
+      ctx.fillText(truncateText(ctx, particle.label, PARTICLE_DRAW.labelMaxW), px, py + PARTICLE_DRAW.labelYOffset)
     }
 
     ctx.restore()

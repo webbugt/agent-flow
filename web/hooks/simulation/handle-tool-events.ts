@@ -2,7 +2,7 @@ import { COLORS } from '@/lib/colors'
 import { TOOL_DEDUP_WINDOW_S } from '@/lib/canvas-constants'
 import type { ToolCallNode } from '@/lib/agent-types'
 import { pushTimelineBlock, type ProcessEventContext, type MutableEventState } from './process-event'
-import { appendConversation, asString, asBoolean, LABEL_LEN_PARTICLE, LABEL_LEN_TIMELINE } from './types'
+import { appendConversation, asString, asBoolean } from './types'
 
 /** Extract file path from tool input data or fall back to first token of args */
 function extractFilePath(inputData?: Record<string, unknown>, args?: string): string {
@@ -75,13 +75,13 @@ export function handleToolCallStart(
       edgeId: `edge-${toolId}`, progress: 0,
       type: 'tool_call', color: COLORS.tool,
       size: 4, trailLength: 0.15,
-      label: `${toolName} ${args}`.slice(0, LABEL_LEN_PARTICLE),
+      label: `${toolName} ${args}`,
     })
 
     // Timeline block
     const entry = state.timelineEntries.get(agentName)
     if (entry) {
-      pushTimelineBlock(entry, currentTime, { type: 'tool_call', label: `${toolName}: ${args}`.slice(0, LABEL_LEN_TIMELINE), color: COLORS.tool }, ctx)
+      pushTimelineBlock(entry, currentTime, { type: 'tool_call', label: `${toolName}: ${args}`, color: COLORS.tool }, ctx)
     }
 
     // Track file attention
@@ -147,7 +147,7 @@ export function handleToolCallEnd(
           edgeId, progress: 1,
           type: 'tool_return', color: COLORS.return,
           size: 4, trailLength: 0.15,
-          label: result.slice(0, LABEL_LEN_PARTICLE),
+          label: result,
         })
         break
       }
