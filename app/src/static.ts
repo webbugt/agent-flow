@@ -5,14 +5,23 @@
 import * as http from 'http'
 import * as fs from 'fs'
 import * as path from 'path'
+import { BUILD_INFO, type BuildInfo } from './build-info'
 
 const WEBVIEW_DIR = path.join(__dirname, 'webview')
 
-const HTML_SHELL = `<!DOCTYPE html>
+function escapeAttr(value: string): string {
+  return value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
+
+/** The HTML page around the bundle; the build-branch / build-commit meta tags identify the served build. */
+export function renderHtmlShell(info: BuildInfo = BUILD_INFO): string {
+  return `<!DOCTYPE html>
 <html lang="en" class="dark">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="build-branch" content="${escapeAttr(info.branch)}">
+  <meta name="build-commit" content="${escapeAttr(info.commit)}">
   <title>Agent Flow</title>
   <link rel="stylesheet" href="/index.css">
   <style>html, body { height: 100%; margin: 0; padding: 0; }</style>
@@ -22,6 +31,7 @@ const HTML_SHELL = `<!DOCTYPE html>
   <script src="/index.js"></script>
 </body>
 </html>`
+}
 
 const MIME_TYPES: Record<string, string> = {
   '.js': 'application/javascript',
@@ -34,7 +44,7 @@ export function serveStatic(req: http.IncomingMessage, res: http.ServerResponse)
 
   if (url === '/' || url === '/index.html') {
     res.writeHead(200, { 'Content-Type': 'text/html' })
-    res.end(HTML_SHELL)
+    res.end(renderHtmlShell())
     return
   }
 

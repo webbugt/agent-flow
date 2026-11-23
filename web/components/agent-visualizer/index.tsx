@@ -307,12 +307,19 @@ export function AgentVisualizer() {
   // Fleet tab row click: switch to that Hermes profile's session, then open its detail.
   // A fixture row (demo data) has no live session behind it, so it opens nothing.
   // The row id is a node id (`<session>::<node name>`) or a plain session id.
+  // Only rows of sessions that still have a tab are clickable: a closed (dismissed) tab has
+  // no live session to switch to, so its row stays plain text instead of a button that does nothing.
+  const canOpenFleetSession = useCallback((instanceId: string) => {
+    const { sessionId } = splitInstanceId(instanceId)
+    return bridge.sessions.some(s => s.id === sessionId)
+  }, [bridge.sessions])
+
   const handleFleetOpenSession = useCallback((instanceId: string) => {
     const { sessionId, agentName } = splitInstanceId(instanceId)
-    if (!bridge.sessions.some(s => s.id === sessionId)) return
+    if (!canOpenFleetSession(instanceId)) return
     if (bridge.selectedSessionId !== sessionId) bridge.selectSession(sessionId)
     openSessionDetail(agentName ?? null)
-  }, [bridge, openSessionDetail])
+  }, [bridge, canOpenFleetSession, openSessionDetail])
 
   const currentSessionLabel = useMemo(
     () => bridge.sessions.find(s => s.id === bridge.selectedSessionId)?.label,
@@ -499,6 +506,7 @@ export function AgentVisualizer() {
         supermemory={bridge.useMockData ? undefined : fleetSources.supermemory}
         selection={fleetSelection}
         onOpenSession={bridge.useMockData ? undefined : handleFleetOpenSession}
+        canOpenSession={canOpenFleetSession}
         rightInset={showSessionDetail ? CARD.sessionDetail.width : 0}
         onClose={() => setShowFleet(false)}
       />

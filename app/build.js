@@ -9,12 +9,16 @@
 const { execSync } = require('child_process')
 const esbuild = require('esbuild')
 const path = require('path')
+const { resolveBuildInfo } = require('../scripts/build-info')
 
 const ROOT = path.join(__dirname, '..')
 const APP_DIR = __dirname
 const APP_PKG = require(path.join(APP_DIR, 'package.json'))
+// Git branch + commit (AGENT_FLOW_BUILD_BRANCH / AGENT_FLOW_BUILD_COMMIT override), inlined below.
+const BUILD = resolveBuildInfo()
 
-console.log('Building Agent Flow app...\n')
+console.log('Building Agent Flow app...')
+console.log(`Build: ${BUILD.branch} @ ${BUILD.commit}\n`)
 
 // 1. Build the webview UI
 console.log('[1/2] Building webview...')
@@ -36,6 +40,8 @@ esbuild.buildSync({
   },
   define: {
     AGENT_FLOW_APP_VERSION: JSON.stringify(APP_PKG.version),
+    AGENT_FLOW_BUILD_BRANCH: JSON.stringify(BUILD.branch),
+    AGENT_FLOW_BUILD_COMMIT: JSON.stringify(BUILD.commit),
   },
   banner: {
     js: '#!/usr/bin/env node',

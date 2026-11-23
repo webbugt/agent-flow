@@ -6,7 +6,7 @@ import {
   KANBAN_SECTION_ID, SUPERMEMORY_SECTION_ID, type FleetRow, type FleetInstance,
 } from './fleet-model'
 import { selectNone, setMany } from './fleet-selection'
-import type { KanbanBoardNode } from './kanban-source'
+import type { PublicKanbanBoardNode } from './kanban-source'
 import type { SupermemoryNamespaceNode } from './supermemory-source'
 
 const NOW = Date.UTC(2026, 10, 23, 12, 0, 0)
@@ -20,9 +20,9 @@ const row = (rows: FleetRow[], key: string) => {
   return r
 }
 
-function board(slug: string, events: Array<[number, string, number]>): KanbanBoardNode {
+function board(slug: string, events: Array<[number, string, number]>): PublicKanbanBoardNode {
   return {
-    id: `kanban:${slug}`, type: 'kanban-board', slug, name: slug, description: '', archived: false, dbPath: '/x',
+    id: `kanban:${slug}`, type: 'kanban-board', slug, name: slug, description: '', archived: false,
     taskCounts: { running: 1, blocked: 0, done: 2 }, totalTasks: 3,
     recentEvents: events.map(([id, kind, at]) => ({ id, taskId: `t_${id}`, taskTitle: `task ${id}`, assignee: null, kind, runId: null, at })),
     lastEventAt: events.length ? Math.max(...events.map(e => e[2])) : null,

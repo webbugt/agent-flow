@@ -5,6 +5,11 @@ export const metadata: Metadata = {
   title: 'LLM Agent Visualizer',
   description: 'Real-time visualization of LLM agent execution flows - VS Code extension concept',
   generator: 'v0.app',
+  // Which build is served; filled at build time from git (see next.config.mjs).
+  other: {
+    'build-branch': process.env.NEXT_PUBLIC_BUILD_BRANCH ?? 'unknown',
+    'build-commit': process.env.NEXT_PUBLIC_BUILD_COMMIT ?? 'unknown',
+  },
   icons: {
     icon: [
       {

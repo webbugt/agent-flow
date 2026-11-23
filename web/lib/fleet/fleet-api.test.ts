@@ -73,3 +73,21 @@ test('/api/fleet returns a generic error and logs the detail server-side', async
   assert.equal(logged.length, 1)
   assert.match(String((logged[0][1] as Error).message), /unable to open database file/)
 })
+
+test('/api/fleet does not expose the absolute kanban dbPath, not even through a board error', async () => {
+  const dbPath = '/home/someone/.hermes/kanban/boards/x/kanban.db'
+  const node = (error?: string) => ({
+    id: 'kanban:x', type: 'kanban-board', slug: 'x', name: 'x', description: '', archived: false, dbPath,
+    taskCounts: {}, totalTasks: 0, recentEvents: [], lastEventAt: null, ...(error ? { error } : {}),
+  })
+  const res = handleFleetRequest(req({ host: 'localhost:3000' }), okDeps({
+    readKanban: () => ({ nodes: [node(), node(`unable to open database file ${dbPath}`)] }),
+  }))
+  assert.equal(res.status, 200)
+  const text = await res.text()
+  assert.ok(!text.includes('/home/someone'), 'no filesystem path in the body')
+  const body = JSON.parse(text)
+  assert.equal('dbPath' in body.kanban[0], false)
+  assert.equal(body.kanban[0].slug, 'x')
+  assert.equal(body.kanban[1].error, 'unable to open database file <kanban.db>')
+})

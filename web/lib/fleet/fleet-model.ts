@@ -6,7 +6,7 @@
  * and safe to import from client components. The two source modules are imported
  * as types only: their readers use node:sqlite and must stay server-side.
  */
-import type { KanbanBoardNode } from './kanban-source'
+import type { PublicKanbanBoardNode } from './kanban-source'
 import type { SupermemoryNamespaceNode } from './supermemory-source'
 
 export const DAY_MS = 86_400_000
@@ -371,7 +371,7 @@ export function kanbanMarkerKind(kind: string): FleetMarker['kind'] | null {
   }
 }
 
-function kanbanLaneRow(node: KanbanBoardNode, sel: FleetSelectionView): FleetRow {
+function kanbanLaneRow(node: PublicKanbanBoardNode, sel: FleetSelectionView): FleetRow {
   const id = node.id
   const visible = sel.isSelected(id)
   const markers: FleetMarker[] = []
@@ -414,7 +414,7 @@ function supermemoryLaneRow(node: SupermemoryNamespaceNode, sel: FleetSelectionV
 
 export interface BuildRowsInput {
   instances: readonly FleetInstance[]
-  kanban?: readonly KanbanBoardNode[]
+  kanban?: readonly PublicKanbanBoardNode[]
   supermemory?: readonly SupermemoryNamespaceNode[]
   selection: FleetSelectionView
   /** Group identities that are expanded into their copies. */

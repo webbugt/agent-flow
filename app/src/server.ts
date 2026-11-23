@@ -9,9 +9,8 @@ import { exec, execFile } from 'child_process'
 
 import { createRelay } from '../../scripts/relay'
 import { createTelemetryClient } from '../../scripts/telemetry'
-import { serveStatic } from './static'
-import { handleFleetHttp, isFleetPath } from './fleet-route'
-import { isLoopbackHost } from '../../extension/src/request-guard'
+import { createRequestListener } from './router'
+import { BUILD_INFO } from './build-info'
 
 interface ServerOptions {
   port: number
@@ -42,41 +41,14 @@ export async function startServer(options: ServerOptions) {
     anonymizeOverrides: options.anonymizeOverrides,
   })
 
-  const server = http.createServer((req, res) => {
-    // Reject DNS-rebinding requests, which reach 127.0.0.1 under a foreign Host.
-    if (!isLoopbackHost(req.headers.host)) {
-      res.writeHead(403, { 'Content-Type': 'text/plain' })
-      res.end('Forbidden')
-      return
-    }
-
-    // SSE endpoint
-    if (req.url === '/events') {
-      return relay.handleSSE(req, res)
-    }
-
-    // Read-only Kanban / Supermemory fleet data (loopback-only unless opted in)
-    if (isFleetPath(req.url)) {
-      void handleFleetHttp(req, res, { anonymize: relay.anonymize }).catch(err => {
-        console.error('[fleet] /api/fleet failed', err)
-        if (!res.headersSent) res.writeHead(500, { 'Content-Type': 'application/json' })
-        res.end(JSON.stringify({ error: 'fleet read failed' }))
-      })
-      return
-    }
-
-    // Static files (UI)
-    if (req.method === 'GET') {
-      return serveStatic(req, res)
-    }
-
-    res.writeHead(404)
-    res.end('Not found')
-  })
+  const server = http.createServer(createRequestListener({
+    handleSSE: (req, res) => relay.handleSSE(req, res),
+    fleet: { anonymize: relay.anonymize },
+  }))
 
   server.listen(port, '127.0.0.1', () => {
     const url = `http://127.0.0.1:${port}`
-    console.log(`Server running at ${url}`)
+    console.log(`Server running at ${url} (build ${BUILD_INFO.branch} @ ${BUILD_INFO.commit})`)
     console.log('Waiting for agent events...\n')
 
     if (openBrowser) {

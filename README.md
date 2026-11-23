@@ -49,7 +49,7 @@ Options:
 
 For Hermes profiles the relay reads each session's messages from the profile's `state.db` (**read-only**: opened with `readOnly` and `PRAGMA query_only`, SELECT only, nothing is ever written to Hermes) and shows the full user and assistant text, the full Bash command, edit diffs (old and new text), write contents and tool results. If `state.db` or the session can't be read, the feed falls back to what `agent.log` offers (tool name and duration only). Strings that look like secrets (API keys, tokens, `Bearer …`, `password=…`, URL credentials, private keys) are redacted from everything shown, whatever the setting below.
 
-Only item counts and one huge-text guard are capped (memory protection): `MAX_EVENT_LOG`, `MAX_CONVERSATION_MESSAGES` and `MAX_BUBBLES` in `web/hooks/simulation/types.ts`, the relay's `MAX_EVENT_BUFFER`, and `AGENT_FLOW_MAX_TEXT_CHARS` (default 200000 characters per text field, `0` = off).
+Only item counts and one huge-text guard are capped (memory protection): `MAX_EVENT_LOG`, `MAX_CONVERSATION_MESSAGES` and `MAX_BUBBLES` in `web/hooks/simulation/types.ts`, the relay's `MAX_EVENT_BUFFER`, `MAX_MARKERS_PER_INSTANCE` (300 timeline markers per agent in the Fleet tab, `web/lib/fleet/fleet-model.ts`), `BACKLOG_MAX_ROWS` (300, the rows replayed on a session's first read) and `BATCH_MAX_ROWS` (500, the rows per later read) in `scripts/hermes-transcript.ts`, and `AGENT_FLOW_MAX_TEXT_CHARS` (default 200000 characters per text field, `0` = off).
 
 To show **structure only** for some or all profiles — command name and length instead of the command, file path and line counts instead of a diff, role / sender / platform and length instead of a message body, size instead of a tool result, and task id and length instead of a Kanban task title in the Fleet tab — set, when the relay starts:
 
@@ -63,7 +63,19 @@ To show **structure only** for some or all profiles — command name and length 
 
 Profiles the setting does not name follow the default, which is **`none`** (full content) — one constant, `DEFAULT_ANONYMIZE` in `web/lib/content-privacy.ts`. A name that is not a Hermes profile on this machine is ignored with a warning in the relay log; the relay still starts. The live feed, the session detail and the Fleet tab all follow the same per-profile setting, and anonymizing happens in the relay, so the hidden text never reaches the browser.
 
-The Fleet tab reads Hermes Kanban boards and Supermemory namespaces (read-only) from `GET /api/fleet`. The endpoint is loopback-only by default: requests with a non-loopback `Host` or proxy headers (`X-Forwarded-For`, `X-Real-IP`, `Forwarded`) get `403`. To serve it through a reverse proxy or to other machines, set `AGENT_FLOW_FLEET_ALLOW_REMOTE=1` — this exposes board names, task titles and namespace names to anyone who can reach the port, so only use it on a trusted network.
+The Fleet tab reads Hermes Kanban boards and Supermemory namespaces (read-only) from `GET /api/fleet`. The endpoint is loopback-only by default: requests with a non-loopback `Host` or proxy headers (`X-Forwarded-For`, `X-Real-IP`, `Forwarded`) get `403`. To serve it through a reverse proxy or to other machines, set `AGENT_FLOW_FLEET_ALLOW_REMOTE=1` — this exposes board names, task titles and namespace names to anyone who can reach the port, so only use it on a trusted network. The response never contains filesystem paths: the Kanban database path is dropped and scrubbed from board error messages.
+
+#### Which build is running
+
+Every build records the git branch and commit it was built from (`git rev-parse --abbrev-ref HEAD` / `git rev-parse HEAD` in the repository root; `AGENT_FLOW_BUILD_BRANCH` and `AGENT_FLOW_BUILD_COMMIT` override them, e.g. when building from a tarball; unknown values are `unknown`). `pnpm run build:app` bakes them into `app/dist/app.js`, and `pnpm run build:web` into the Next.js page. They show up in:
+
+- the page: `<meta name="build-branch" content="…">` and `<meta name="build-commit" content="…">` in the HTML head;
+- the relay: `GET /health` returns `{"status":"ok","branch":"…","commit":"…"}`. It has the same loopback `Host` check as every other route (a foreign `Host` gets `403`).
+
+```bash
+curl -s http://127.0.0.1:3001/health
+curl -s http://127.0.0.1:3001/ | grep -o '<meta name="build-[a-z]*" content="[^"]*">'
+```
 
 ### Standalone Web App (from source)
 

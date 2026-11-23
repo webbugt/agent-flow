@@ -68,6 +68,7 @@ export interface KanbanBoardNode {
   name: string
   description: string
   archived: boolean
+  /** Absolute path of the board database. Server-side only: /api/fleet drops it (see fleet-api.ts). */
   dbPath: string
   /** Task count per status (known statuses always present). */
   taskCounts: Record<string, number>
@@ -79,6 +80,9 @@ export interface KanbanBoardNode {
   /** Set when this board could not be read; counts/events are then empty. */
   error?: string
 }
+
+/** A board node as /api/fleet sends it to the browser: no server filesystem path. */
+export type PublicKanbanBoardNode = Omit<KanbanBoardNode, 'dbPath'>
 
 export interface KanbanSourceOptions {
   /** Hermes kanban directory (contains `boards/`). Default: $HERMES_HOME/kanban or ~/.hermes/kanban. */

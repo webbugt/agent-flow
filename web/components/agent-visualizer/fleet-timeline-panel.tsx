@@ -8,19 +8,21 @@ import {
   type FleetAxis, type FleetMarker, type FleetRow, type FleetInstance,
 } from '@/lib/fleet/fleet-model'
 import type { useFleetSelection } from '@/hooks/use-fleet-selection'
-import type { KanbanBoardNode } from '@/lib/fleet/kanban-source'
+import type { PublicKanbanBoardNode } from '@/lib/fleet/kanban-source'
 import type { SupermemoryNamespaceNode } from '@/lib/fleet/supermemory-source'
 import { PanelHeader, SlidingPanel } from './shared-ui'
 
 interface FleetTimelinePanelProps {
   visible: boolean
   instances: readonly FleetInstance[]
-  kanban?: readonly KanbanBoardNode[]
+  kanban?: readonly PublicKanbanBoardNode[]
   supermemory?: readonly SupermemoryNamespaceNode[]
   /** Selection state from useFleetSelection (hide/show only, never stops anything). */
   selection: ReturnType<typeof useFleetSelection>
   /** Click on a group or copy row: open that session's detail. Omitted = rows are not clickable. */
   onOpenSession?: (sessionId: string) => void
+  /** Only rows whose session this accepts are clickable (a closed tab has nothing to open). Default: all. */
+  canOpenSession?: (sessionId: string) => boolean
   /** Pixels to keep free on the right (a side panel is open there), so the timeline is not covered. */
   rightInset?: number
   onClose: () => void
@@ -165,8 +167,8 @@ function hoverTitle(row: FleetRow | undefined, axis: FleetAxis | null, x: number
 
 // ─── Row label column (DOM: checkboxes need real inputs) ────────────────────
 
-function LabelCell({ row, onToggle, onExpand, onOpen }: { row: FleetRow; onToggle: () => void; onExpand: () => void; onOpen?: (sessionId: string) => void }) {
-  const openId = onOpen ? row.openSessionId : undefined
+function LabelCell({ row, onToggle, onExpand, onOpen, canOpen }: { row: FleetRow; onToggle: () => void; onExpand: () => void; onOpen?: (sessionId: string) => void; canOpen?: (sessionId: string) => boolean }) {
+  const openId = onOpen && row.openSessionId && (!canOpen || canOpen(row.openSessionId)) ? row.openSessionId : undefined
   const checkboxRef = useRef<HTMLInputElement>(null)
   useEffect(() => {
     if (checkboxRef.current) checkboxRef.current.indeterminate = row.indeterminate
@@ -240,7 +242,7 @@ function LabelCell({ row, onToggle, onExpand, onOpen }: { row: FleetRow; onToggl
 
 // ─── Component ──────────────────────────────────────────────────────────────
 
-export function FleetTimelinePanel({ visible, instances, kanban, supermemory, selection, onOpenSession, rightInset = 0, onClose }: FleetTimelinePanelProps) {
+export function FleetTimelinePanel({ visible, instances, kanban, supermemory, selection, onOpenSession, canOpenSession, rightInset = 0, onClose }: FleetTimelinePanelProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const trackRef = useRef<HTMLDivElement>(null)
   // Groups start OPEN so every agent node has its own row; the user collapses what they don't need.
@@ -364,6 +366,7 @@ export function FleetTimelinePanel({ visible, instances, kanban, supermemory, se
                   onToggle={() => selection.toggleIds(row.selectionIds)}
                   onExpand={() => toggleExpanded(row.label)}
                   onOpen={onOpenSession}
+                  canOpen={canOpenSession}
                 />
               ))}
               {rows.length === 0 && (

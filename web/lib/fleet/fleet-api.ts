@@ -1,4 +1,4 @@
-import type { KanbanBoardNode } from './kanban-source'
+import type { KanbanBoardNode, PublicKanbanBoardNode } from './kanban-source'
 import type { SupermemoryNamespaceNode } from './supermemory-source'
 import { anonymizeTaskTitle, isAnonymized } from '../content-privacy'
 import type { AnonymizePolicy } from '../content-privacy'
@@ -85,8 +85,18 @@ export interface FleetApiDeps {
   anonymize?: AnonymizePolicy
 }
 
+/**
+ * Drop the absolute database path from a board node (the browser has no use for
+ * it) and scrub it from the node's error text, which can quote it.
+ */
+export function toPublicNode(node: KanbanBoardNode): PublicKanbanBoardNode {
+  const { dbPath, ...rest } = node
+  if (rest.error && dbPath) rest.error = rest.error.split(dbPath).join('<kanban.db>')
+  return rest
+}
+
 /** Hide task titles of anonymized assignees. Returns new nodes; the input is not changed. */
-export function applyAnonymization(nodes: KanbanBoardNode[], policy: AnonymizePolicy | undefined): KanbanBoardNode[] {
+export function applyAnonymization(nodes: PublicKanbanBoardNode[], policy: AnonymizePolicy | undefined): PublicKanbanBoardNode[] {
   if (!policy) return nodes
   return nodes.map(node => ({
     ...node,
@@ -105,7 +115,7 @@ export function handleFleetRequest(req: Request, deps: FleetApiDeps): Response {
   try {
     const kanban = deps.readKanban()
     const supermemory = deps.readSupermemory()
-    return Response.json({ readAt: (deps.now ?? Date.now)(), kanban: applyAnonymization(kanban.nodes, deps.anonymize), supermemory: supermemory.nodes })
+    return Response.json({ readAt: (deps.now ?? Date.now)(), kanban: applyAnonymization(kanban.nodes.map(toPublicNode), deps.anonymize), supermemory: supermemory.nodes })
   } catch (err) {
     // Errors can contain absolute DB paths: log them here, tell the client nothing specific.
     ;(deps.logError ?? ((m, e) => console.error(m, e)))('[fleet] /api/fleet read failed', err)

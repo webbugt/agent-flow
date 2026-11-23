@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react'
-import type { KanbanBoardNode } from '@/lib/fleet/kanban-source'
+import type { PublicKanbanBoardNode } from '@/lib/fleet/kanban-source'
 import type { SupermemoryNamespaceNode } from '@/lib/fleet/supermemory-source'
 
 export interface FleetSources {
-  kanban: KanbanBoardNode[]
+  kanban: PublicKanbanBoardNode[]
   supermemory: SupermemoryNamespaceNode[]
 }
 
