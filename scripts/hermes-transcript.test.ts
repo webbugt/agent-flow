@@ -6,6 +6,7 @@ import * as path from 'path'
 import * as crypto from 'crypto'
 import {
   redactSecrets,
+  sanitizeDeep,
   limitText,
   maxTextChars,
   MAX_TEXT_CHARS,
@@ -62,6 +63,34 @@ test('redaction leaves ordinary text alone and stays fast on a long base64 run',
   const t0 = Date.now()
   assert.equal(redactSecrets(blob), blob)
   assert.ok(Date.now() - t0 < 2000, 'linear time on long unbroken text')
+})
+
+test('redacts Telegram, GitLab, HuggingFace, npm tokens and Slack/Discord webhooks', () => {
+  const tg = '123456789:' + 'AAH' + 'x'.repeat(32)
+  const cases: Array<[string, string]> = [
+    [`curl https://api.telegram.org/bot${tg}/sendMessage`, tg.split(':')[1]],
+    [`chat 1 via ${tg} done`, tg.split(':')[1]],
+    [`clone --token glpat-${'a1B2c3D4e5'.repeat(2)}`, 'glpat-a1B2c3D4e5'],
+    [`export X=hf_${'aB3dE5gH7j'.repeat(4)}`, 'hf_aB3dE5gH7j'],
+    [`registry auth npm_${'aB3dE5gH7j'.repeat(4)}`, 'npm_aB3dE5gH7j'],
+    ['post https://hooks.slack.com/services/T0123ABCD/B0123ABCD/abcDEF123456ghIJKL', 'abcDEF123456ghIJKL'],
+    ['post https://discord.com/api/webhooks/123456789012345678/AbCdEf_gh-IjKlMnOp', 'AbCdEf_gh-IjKlMnOp'],
+  ]
+  for (const [input, secret] of cases) {
+    const out = redactSecrets(input)
+    assert.ok(!out.includes(secret), `still present: ${secret.slice(0, 10)}…`)
+  }
+  assert.ok(redactSecrets(`https://api.telegram.org/bot${tg}/sendMessage`).endsWith('/sendMessage'), 'the rest of the URL stays')
+  assert.equal(redactSecrets('version 2026:11 build 12345678:short'), 'version 2026:11 build 12345678:short')
+})
+
+test('a secret nested deeper than the depth limit is still redacted', () => {
+  let deep: unknown = { k: FAKE_SK, ok: 'visible' }
+  for (let i = 0; i < 10; i++) deep = { n: deep }
+  const input = toolInput('mcp_x', JSON.stringify(deep))
+  assert.ok(!input.args.includes(FAKE_SK), 'args')
+  assert.ok(!JSON.stringify(input.inputData).includes(FAKE_SK), 'inputData')
+  assert.ok(!JSON.stringify(sanitizeDeep(deep)).includes(FAKE_SK), 'sanitizeDeep')
 })
 
 // ─── Size cap ───────────────────────────────────────────────────────────────

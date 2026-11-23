@@ -93,6 +93,14 @@ const SECRET_PATTERNS: Array<[RegExp, string | ((...m: string[]) => string)]> = 
   [/\bAKIA[0-9A-Z]{16}\b/g, REDACTED],
   [/\bAIza[0-9A-Za-z_-]{30,}/g, REDACTED],
   [/\bsyt_[A-Za-z0-9_]{16,}/g, REDACTED],
+  [/\bglpat-[A-Za-z0-9_-]{20,}/g, REDACTED],
+  [/\bhf_[A-Za-z0-9]{30,}/g, REDACTED],
+  [/\bnpm_[A-Za-z0-9]{30,}/g, REDACTED],
+  // Telegram bot token: <8-10 digit bot id>:<35 chars>, bare or inside api.telegram.org/bot<token>/...
+  [/(?<![0-9])[0-9]{8,10}:[A-Za-z0-9_-]{35}(?![A-Za-z0-9_-])/g, REDACTED],
+  // Slack / Discord webhook URLs carry the secret in the path
+  [/https:\/\/hooks\.slack\.com\/(?:services|workflows|triggers)\/[A-Za-z0-9/_-]+/g, 'https://hooks.slack.com/[REDACTED]'],
+  [/https:\/\/(?:discord(?:app)?\.com)\/api\/webhooks\/[0-9]+\/[A-Za-z0-9_-]+/g, 'https://discord.com/api/webhooks/[REDACTED]'],
   [/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g, REDACTED],
   // Authorization headers
   [/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{12,}/g, (_m, scheme) => `${scheme} ${REDACTED}`],
@@ -130,7 +138,10 @@ function cleanText(text: string, max: number): string {
 /** Redact and cap every string in a JSON-like value. */
 export function sanitizeDeep(value: unknown, max: number = MAX_TEXT_CHARS, depth = 0): unknown {
   if (typeof value === 'string') return cleanText(value, max)
-  if (value === null || typeof value !== 'object' || depth > 8) return value
+  if (value === null || typeof value !== 'object') return value
+  // Past the depth limit the value is not walked: it is redacted as one string, so
+  // a secret nested deeper than the limit can never pass through raw.
+  if (depth > 8) return cleanText(JSON.stringify(value) ?? '', max)
   if (Array.isArray(value)) return value.map(v => sanitizeDeep(v, max, depth + 1))
   const out: Record<string, unknown> = {}
   for (const [k, v] of Object.entries(value as Record<string, unknown>)) out[k] = sanitizeDeep(v, max, depth + 1)
