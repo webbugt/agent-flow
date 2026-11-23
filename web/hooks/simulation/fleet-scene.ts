@@ -357,13 +357,20 @@ export function buildFleetScene(input: FleetSceneInput): FleetScene {
   return { state, sessionOfAgent, clusters: centers }
 }
 
-/** What a click on a node of the scene opens: the session detail of that agent. Resources open nothing. */
-export function openTargetOf(scene: FleetScene, nodeId: string | null): { sessionId: string; instanceId: string } | null {
+/**
+ * What a click on a node of the scene opens: the session detail of that agent. Resources open nothing.
+ * `instanceId` is the node that is selected on the map. `openId` is what the detail panel opens:
+ * the node itself, or, for a profile's main node (it has no conversation of its own), the plain
+ * session id, so the panel shows that profile's most recently active session node.
+ */
+export function openTargetOf(scene: FleetScene, nodeId: string | null): { sessionId: string; instanceId: string; openId: string } | null {
   if (!nodeId) return null
   const agent = scene.state.agents.get(nodeId)
   const toolAgent = scene.state.toolCalls.get(nodeId)?.agentId
   const id = agent ? agent.id : toolAgent
   if (!id) return null
   const sessionId = scene.sessionOfAgent.get(id)
-  return sessionId ? { sessionId, instanceId: id } : null
+  if (!sessionId) return null
+  const isMain = scene.state.agents.get(id)?.isMain === true
+  return { sessionId, instanceId: id, openId: isMain ? sessionId : id }
 }

@@ -9,9 +9,10 @@ import { TranscriptMessage } from './transcript-message'
 import { ToolCallDetail } from './tool-call-detail'
 import { CloseButton, SlidingPanel, stopPropagationHandlers } from './shared-ui'
 import { useAutoScroll } from '@/hooks/use-auto-scroll'
+import { useViewportWidth } from '@/hooks/use-viewport-width'
 import type { ConversationMessage } from '@/hooks/simulation/types'
 import {
-  buildSessionItems, pickDefaultAgentId, formatClock, formatCostUsd, formatOrigin,
+  buildSessionItems, pickDefaultAgentId, sessionDetailWidth, formatClock, formatCostUsd, formatOrigin,
   type SessionItem,
 } from '@/lib/session-detail'
 
@@ -106,6 +107,7 @@ function ToolRow({ item, open, onToggle }: { item: ToolItem; open: boolean; onTo
  * the canvas's own state, so what it shows is what the canvas is animating.
  */
 export function SessionDetailPanel({ visible, agents, conversations, agentId, sessionLabel, onSelectAgent, onClose }: SessionDetailPanelProps) {
+  const viewportWidth = useViewportWidth(CARD.sessionDetail.width)
   const [query, setQuery] = useState('')
   const [showSearch, setShowSearch] = useState(false)
   const [openAll, setOpenAll] = useState(false)
@@ -166,7 +168,7 @@ export function SessionDetailPanel({ visible, agents, conversations, agentId, se
       visible={visible}
       position={{ right: 0, bottom: 0, top: 36 }}
       zIndex={Z.transcriptPanel + 5}
-      width={CARD.sessionDetail.width}
+      width={sessionDetailWidth(viewportWidth, CARD.sessionDetail.width)}
       {...stopPropagationHandlers}
     >
       <div

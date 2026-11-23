@@ -126,7 +126,7 @@ export function FleetMap({
     const target = openTargetOf(scene, nodeId)
     if (!target) return
     setSelectedId(target.instanceId)
-    onOpenSession?.(target.instanceId)
+    onOpenSession?.(target.openId)
   }
 
   return (

@@ -86,6 +86,22 @@ export function pickDefaultAgentId(
   return first
 }
 
+/** Session detail panel width: the fixed card width, but never wider than the viewport (phones). */
+export function sessionDetailWidth(viewportWidth: number, cardWidth = 540): number {
+  if (!Number.isFinite(viewportWidth) || viewportWidth <= 0) return cardWidth
+  return Math.min(cardWidth, Math.floor(viewportWidth))
+}
+
+/**
+ * Space the Fleet map and timeline leave on the right for the open detail panel. On a phone the
+ * panel covers the whole screen, so the map keeps its full area underneath instead of collapsing to 0px.
+ */
+export function detailInset(open: boolean, viewportWidth: number, cardWidth = 540, minMapWidth = 280): number {
+  if (!open) return 0
+  const w = sessionDetailWidth(viewportWidth, cardWidth)
+  return viewportWidth - w >= minMapWidth ? w : 0
+}
+
 // ─── Tool detail text ───────────────────────────────────────────────────────
 
 function str(v: unknown): string {

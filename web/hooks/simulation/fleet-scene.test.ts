@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import { strict as assert } from 'node:assert'
 import type { SimulationEvent } from '@/lib/agent-types'
-import { instancesFromSessionEvents, type FleetSelectionView, type SessionLike } from '@/lib/fleet/fleet-model'
+import { instancesFromSessionEvents, splitInstanceId, type FleetSelectionView, type SessionLike } from '@/lib/fleet/fleet-model'
 import { buildFleetGraph } from '@/lib/fleet/fleet-graph'
 import type { PublicKanbanBoardNode } from '@/lib/fleet/kanban-source'
 import type { SupermemoryNamespaceNode } from '@/lib/fleet/supermemory-source'
@@ -105,11 +105,27 @@ test('fleet scene: the two profiles are laid out apart, not on top of each other
 
 test('fleet scene: clicking an agent, or one of its satellites, opens that agent in its session', () => {
   const { scene } = sceneFor(fixture())
-  assert.deepEqual(openTargetOf(scene, 'hermes-sophia::sophia · Report'), { sessionId: 'hermes-sophia', instanceId: 'hermes-sophia::sophia · Report' })
+  assert.deepEqual(openTargetOf(scene, 'hermes-sophia::sophia · Report'), { sessionId: 'hermes-sophia', instanceId: 'hermes-sophia::sophia · Report', openId: 'hermes-sophia::sophia · Report' })
   const card = [...scene.state.toolCalls.values()].find(tc => tc.agentId === 'hermes-taxis::taxis · Plan')!
-  assert.deepEqual(openTargetOf(scene, card.id), { sessionId: 'hermes-taxis', instanceId: 'hermes-taxis::taxis · Plan' })
+  assert.deepEqual(openTargetOf(scene, card.id), { sessionId: 'hermes-taxis', instanceId: 'hermes-taxis::taxis · Plan', openId: 'hermes-taxis::taxis · Plan' })
   assert.equal(openTargetOf(scene, null), null)
   assert.equal(openTargetOf(scene, 'nope'), null)
+})
+
+test('fleet scene: clicking a profile main node opens that profile session (default node), not the empty main node', () => {
+  const { scene } = sceneFor(fixture())
+  const main = scene.state.agents.get('hermes-taxis::taxis')!
+  assert.equal(main.isMain, true)
+  // The main node has no conversation: the detail must not be asked for it.
+  assert.deepEqual(openTargetOf(scene, main.id), { sessionId: 'hermes-taxis', instanceId: 'hermes-taxis::taxis', openId: 'hermes-taxis' })
+  assert.equal(splitInstanceId('hermes-taxis').agentName, undefined, 'a plain session id lets the panel pick the most recent session node')
+  // A satellite that belongs to the main node (e.g. a Kanban event) opens the same default.
+  const kanban = [board('b1', 'taxis')]
+  const withBoard = sceneFor(fixture(), all, new FleetReplay(), { kanban }).scene
+  const sat = [...withBoard.state.toolCalls.values()].find(tc => tc.agentId === 'hermes-taxis::taxis')
+  if (sat) assert.equal(openTargetOf(withBoard, sat.id)?.openId, 'hermes-taxis')
+  // Resource nodes open nothing.
+  assert.equal(openTargetOf(withBoard, 'kanban:b1'), null)
 })
 
 test('fleet scene: anonymize on one profile hides its content while the other shows content', () => {

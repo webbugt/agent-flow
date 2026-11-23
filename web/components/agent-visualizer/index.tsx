@@ -32,6 +32,8 @@ import { MOCK_DURATION } from "@/lib/mock-scenario"
 import { MessageFeedPanel } from "./message-feed-panel"
 import { TopBar } from "./top-bar"
 import { useAudioEffects } from "@/hooks/use-audio-effects"
+import { useViewportWidth } from "@/hooks/use-viewport-width"
+import { detailInset } from "@/lib/session-detail"
 
 export function AgentVisualizer() {
   const bridge = useVSCodeBridge()
@@ -81,6 +83,7 @@ export function AgentVisualizer() {
   // Session detail: the whole conversation + tool calls of ONE Hermes session (agent node)
   const [showSessionDetail, setShowSessionDetail] = useState(false)
   const [detailAgentId, setDetailAgentId] = useState<string | null>(null)
+  const viewportWidth = useViewportWidth(1280)
 
   // Fleet view: agent instances grouped by identity + Kanban/Supermemory lanes.
   // Selection only hides things from the views; it never stops a session.
@@ -522,7 +525,7 @@ export function AgentVisualizer() {
         onOpenSession={bridge.useMockData ? undefined : handleFleetOpenSession}
         insetTop={48}
         insetBottom={380}
-        insetRight={showSessionDetail ? CARD.sessionDetail.width : 0}
+        insetRight={detailInset(showSessionDetail, viewportWidth, CARD.sessionDetail.width)}
       />
 
       {/* Fleet timeline panel (grouped agents + Kanban/Supermemory lanes) */}
@@ -534,7 +537,7 @@ export function AgentVisualizer() {
         selection={fleetSelection}
         onOpenSession={bridge.useMockData ? undefined : handleFleetOpenSession}
         canOpenSession={canOpenFleetSession}
-        rightInset={showSessionDetail ? CARD.sessionDetail.width : 0}
+        rightInset={detailInset(showSessionDetail, viewportWidth, CARD.sessionDetail.width)}
         onClose={() => setShowFleet(false)}
       />
 

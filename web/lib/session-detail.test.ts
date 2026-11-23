@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import type { ConversationMessage } from '@/hooks/simulation/types'
 import {
   buildSessionItems, pickDefaultAgentId, hasRichInput, toolCopyText, toolCopyAll, toolInputJson,
-  formatClock, formatCostUsd, formatOrigin,
+  formatClock, formatCostUsd, formatOrigin, sessionDetailWidth, detailInset,
 } from './session-detail'
 
 let n = 0
@@ -131,4 +131,21 @@ test('formatting: clock, cost and origin', () => {
   assert.equal(formatOrigin(undefined, 'kanban'), 'kanban')
   assert.equal(formatOrigin('Webbugt', undefined), 'Webbugt')
   assert.equal(formatOrigin(), '')
+})
+
+test('sessionDetailWidth: the panel never exceeds the viewport (390px phone)', () => {
+  assert.equal(sessionDetailWidth(1440), 540)
+  assert.equal(sessionDetailWidth(540), 540)
+  assert.equal(sessionDetailWidth(390), 390)
+  assert.equal(sessionDetailWidth(389.6), 389)
+  assert.equal(sessionDetailWidth(0), 540, 'unknown viewport keeps the card width')
+  assert.equal(sessionDetailWidth(NaN), 540)
+})
+
+test('detailInset: the fleet map keeps its area under a full-width panel on a phone', () => {
+  assert.equal(detailInset(false, 1440), 0)
+  assert.equal(detailInset(true, 1440), 540, 'desktop: the map shrinks to the left of the panel')
+  assert.equal(detailInset(true, 390), 0, 'phone: the panel covers the map, the map is not squeezed to 0px')
+  assert.equal(detailInset(true, 800), 0, 'less than 280px would remain')
+  assert.equal(detailInset(true, 900), 540)
 })
