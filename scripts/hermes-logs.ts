@@ -1,28 +1,38 @@
 /**
  * Live Hermes activity, read straight from Hermes' own logs.
  *
- * Each Hermes profile writes `logs/agent.log` under ~/.hermes/profiles/<name>/
- * (the default profile writes ~/.hermes/logs/agent.log). This watcher tails
- * those files without changing them and turns the lines it understands into
- * Agent Flow events:
+ * Each Hermes profile writes `logs/agent.log` and `logs/gateway.log` under
+ * ~/.hermes/profiles/<name>/ (the default profile uses ~/.hermes/logs/). This
+ * watcher tails those files without changing them and turns the lines it
+ * understands into Agent Flow events:
  *
  *   agent.tool_executor:     tool <name> completed (<secs>s, ...)
  *       -> tool_call_start + tool_call_end
  *   agent.conversation_loop: API call #N: model=M ... in=I out=O ... cache=R/I write=W
  *       -> context_update (context size + billed usage) and model_detected
+ *   gateway.run:             inbound message: platform=P user=U chat=...
+ *       -> message (role user, "Message from U via P"), direction into the agent
  *
- * Grouping: one Agent Flow session per Hermes session id, so a profile running
- * several sessions gets several sessions. Every session carries its profile in
- * `group` (on agent_spawn and in the session label), which the planned fleet
- * view uses to draw a profile as one group with its sessions as nodes.
+ * Layout: one Agent Flow session per profile. The profile is a main node
+ * (for example "Taxis"), and each Hermes session of that profile is a child
+ * node named "<Profile> · <short title>" (for example "Taxis · Visualisation").
+ * The short title comes from the session's title in Hermes' state database,
+ * read-only. Message text is not read. Only the sender and platform are shown.
  *
  * Nothing is written to Hermes, no synthetic transcripts are created, and no
- * gateway restart is needed. Only profile names, session ids, tool names,
- * timing and token counts are read from the log; message text is not.
+ * gateway restart is needed.
  */
 import * as fs from 'fs'
 import * as path from 'path'
 import type { AgentEvent, SessionInfo } from '../extension/src/protocol'
+
+/** Minimal shape of node:sqlite's DatabaseSync (loaded at runtime; typed here for older @types/node). */
+export interface SqliteDb {
+  exec(sql: string): void
+  prepare(sql: string): { get(...params: unknown[]): unknown; run(...params: unknown[]): unknown }
+  close(): void
+}
+export type SqliteCtor = new (file: string, options?: { readOnly?: boolean }) => SqliteDb
 
 // ─── Line parsing (pure) ────────────────────────────────────────────────────
 
@@ -85,6 +95,20 @@ export function parseHermesLogLine(line: string): ParsedHermesLine | null {
   return null
 }
 
+export interface InboundMessage {
+  platform: string
+  user: string
+}
+
+const INBOUND_RE = /^\S+ \S+ \w+ [^:]+: inbound message: platform=(\S+) user=(.*?) chat=/
+
+/** Parse one gateway.log line. Only the platform and sender are kept; message text is ignored. */
+export function parseGatewayInbound(line: string): InboundMessage | null {
+  const m = INBOUND_RE.exec(line)
+  if (!m) return null
+  return { platform: m[1], user: m[2] }
+}
+
 // ─── Naming ─────────────────────────────────────────────────────────────────
 
 /** Hermes tool names mapped to the names Agent Flow's tool renderers know. */
@@ -132,6 +156,47 @@ export function shortSessionTag(sid: string): string {
   return last.length > 0 ? last.slice(-8) : sid.slice(-8)
 }
 
+const TITLE_STOP_WORDS = new Set([
+  'a', 'an', 'the', 'of', 'and', 'or', 'for', 'to', 'in', 'on', 'with', 'my', 'our', 'your',
+  'from', 'by', 'at', 'as', 'is', 'are', 'be', 'this', 'that', 'about', 'vs', 'how',
+  'session', 'report', 'chat', 'new', 'update',
+])
+const MAX_SHORT_NAME = 18
+
+/**
+ * A 1-2 word node name from a session title: drops filler words, keeps the
+ * first two meaningful words. Deterministic, no model call.
+ * "Agentic system visualisation options PDF report" -> "Agentic System".
+ */
+export function shortSessionName(title: string): string {
+  const words = title.replace(/[^\p{L}\p{N}\s-]+/gu, ' ').split(/\s+/).filter(Boolean)
+  const meaningful = words.filter(w => !TITLE_STOP_WORDS.has(w.toLowerCase()))
+  const pick = (meaningful.length > 0 ? meaningful : words).slice(0, 2)
+  const cap = (w: string) => w.charAt(0).toUpperCase() + w.slice(1)
+  const name = pick.map(cap).join(' ')
+  return name.length <= MAX_SHORT_NAME ? name : cap(pick[0] ?? '').slice(0, MAX_SHORT_NAME)
+}
+
+/**
+ * Title of a Hermes session from the profile's state database. Opened
+ * read-only; any failure (missing db, no row, locked) returns undefined.
+ */
+export function readSessionTitle(dbFile: string, sid: string): string | undefined {
+  try {
+    const DatabaseSync = (require('node:sqlite') as { DatabaseSync: SqliteCtor }).DatabaseSync
+    const db = new DatabaseSync(dbFile, { readOnly: true })
+    try {
+      const row = db.prepare('select title from sessions where id = ?').get(sid) as { title?: string | null } | undefined
+      const title = row?.title?.trim()
+      return title ? title : undefined
+    } finally {
+      db.close()
+    }
+  } catch {
+    return undefined
+  }
+}
+
 // ─── Watcher ────────────────────────────────────────────────────────────────
 
 export interface HermesLogWatcherOptions {
@@ -139,30 +204,47 @@ export interface HermesLogWatcherOptions {
   profilesRoot: string
   /** Log directory of the default profile, e.g. ~/.hermes/logs (optional) */
   defaultLogDir?: string
+  /** Session title lookup. Defaults to reading the profile's state.db read-only. */
+  titleFor?: (profile: string, dbFile: string, sid: string) => string | undefined
   emit: (event: AgentEvent, sessionId?: string) => void
   lifecycle: (type: 'started' | 'ended' | 'updated', sessionId: string, label: string) => void
   now?: () => number
   pollMs?: number
-  /** Quiet period after which a session's agent is shown idle */
+  /** Quiet period after which a session's node is shown idle */
   idleMs?: number
-  /** Quiet period after which a session is shown ended */
+  /** Quiet period after which a session's node is shown complete */
   endMs?: number
 }
 
+/** Builds an event for a node. The node name is only known after the node is spawned. */
+type Builder = (agent: string) => Omit<AgentEvent, 'sessionId'>
+
+interface Tail {
+  file: string
+  /** Byte offset of the next unread byte */
+  pos: number
+  /** Bytes of an unfinished trailing line, carried to the next read */
+  partial: Buffer
+}
+
 interface SessionState {
-  /** Agent Flow session id, unique per profile and Hermes session */
-  sessionId: string
-  /** Node name, unique within the profile group */
-  agentName: string
-  profile: string
-  group: string
   sid: string
+  tag: string
+  /** Title once known; empty until then */
+  title?: string
+  /** When the watcher first saw this session */
+  firstSeen: number
+  lastTitleCheck: number
   startedAt: number
   lastActivity: number
+  /** True once the session has logged anything */
+  hasStarted: boolean
   active: boolean
   completed: boolean
-  /** True once the session has been announced at least once */
-  hasStarted: boolean
+  /** Node created in the visualizer */
+  spawned: boolean
+  agentName: string
+  pending: Builder[]
   model?: string
   toolSeq: number
   spend: {
@@ -176,24 +258,78 @@ interface SessionState {
 
 interface ProfileState {
   profile: string
+  /** Display name, also the main node's name */
   group: string
-  logFile: string
-  /** Byte offset of the next unread line */
-  pos: number
-  /** Unfinished trailing line carried to the next read */
-  partial: string
+  /** Agent Flow session id for the whole profile */
+  sessionId: string
+  dbFile: string
+  agentTail: Tail
+  gatewayTail: Tail
   /** Hermes session id of the most recent tagged line, used for untagged lines */
   currentSid?: string
   sessions: Map<string, SessionState>
+  mainActive: boolean
+  /** Inbound messages received before any session node existed */
+  pendingInbound: string[]
 }
 
 const READ_CHUNK = 262144
 const DISCOVER_EVERY_MS = 5000
+const TITLE_RETRY_MS = 15_000
+/** How long a new session waits for its title before it gets a tag name */
+const TITLE_WAIT_MS = 45_000
 const UNTAGGED = 'untagged'
+
+/** Read new complete lines from a tail. Keeps bytes, so multi-byte characters split across reads survive. */
+function readTail(tail: Tail, onLine: (line: string) => void): void {
+  let size: number
+  try {
+    size = fs.statSync(tail.file).size
+  } catch {
+    return
+  }
+  if (size < tail.pos) {
+    // Rotated or truncated: start again from the top of the new file.
+    tail.pos = 0
+    tail.partial = Buffer.alloc(0)
+  }
+  if (size === tail.pos) return
+
+  const len = Math.min(size - tail.pos, READ_CHUNK)
+  const buf = Buffer.alloc(len)
+  let fd: number | null = null
+  try {
+    fd = fs.openSync(tail.file, 'r')
+    fs.readSync(fd, buf, 0, len, tail.pos)
+  } catch {
+    return
+  } finally {
+    if (fd !== null) fs.closeSync(fd)
+  }
+  tail.pos += len
+
+  const data = Buffer.concat([tail.partial, buf])
+  const lastNewline = data.lastIndexOf(0x0a)
+  if (lastNewline === -1) {
+    tail.partial = data
+    return
+  }
+  tail.partial = data.subarray(lastNewline + 1)
+  for (const line of data.subarray(0, lastNewline).toString('utf8').split('\n')) onLine(line)
+}
+
+function fileSize(file: string): number {
+  try {
+    return fs.statSync(file).size
+  } catch {
+    return 0
+  }
+}
 
 export class HermesLogWatcher {
   private readonly opts: HermesLogWatcherOptions
   private readonly now: () => number
+  private readonly titleFor: (profile: string, dbFile: string, sid: string) => string | undefined
   private readonly profiles = new Map<string, ProfileState>()
   private timer: NodeJS.Timeout | null = null
   private lastDiscovery = Number.NEGATIVE_INFINITY
@@ -201,6 +337,7 @@ export class HermesLogWatcher {
   constructor(opts: HermesLogWatcherOptions) {
     this.opts = opts
     this.now = opts.now ?? Date.now
+    this.titleFor = opts.titleFor ?? ((_profile, dbFile, sid) => readSessionTitle(dbFile, sid))
   }
 
   start(): void {
@@ -214,16 +351,27 @@ export class HermesLogWatcher {
     this.timer = null
   }
 
-  /** Discover profiles, read new lines and update idle/ended state. */
+  /** Discover profiles, read new lines, update node state. */
   poll(): void {
     const t = this.now()
     if (t - this.lastDiscovery >= DISCOVER_EVERY_MS) {
       this.lastDiscovery = t
       this.discover()
     }
-    for (const state of this.profiles.values()) {
-      this.readNew(state)
-      for (const session of state.sessions.values()) this.updateActivity(session)
+    for (const p of this.profiles.values()) {
+      readTail(p.agentTail, line => {
+        const parsed = parseHermesLogLine(line)
+        if (parsed) this.handle(p, parsed)
+      })
+      readTail(p.gatewayTail, line => {
+        const inbound = parseGatewayInbound(line)
+        if (inbound) this.deliverInbound(p, inbound)
+      })
+      for (const s of p.sessions.values()) {
+        this.trySpawn(p, s, t)
+        this.updateActivity(p, s)
+      }
+      this.checkProfileEnd(p)
     }
   }
 
@@ -233,225 +381,284 @@ export class HermesLogWatcher {
   }
 
   /**
-   * Hermes sessions for the relay's session list, so a page that loads after
-   * a session started still knows about it (it ignores events for unknown ids).
+   * Profiles for the relay's session list. Each profile is one Agent Flow
+   * session, so a page that loads late still sees it.
    */
   getActiveSessions(): SessionInfo[] {
     const out: SessionInfo[] = []
-    for (const state of this.profiles.values()) {
-      for (const s of state.sessions.values()) {
-        if (!s.hasStarted) continue
-        out.push({
-          id: s.sessionId,
-          label: `${s.group} · ${s.sid === UNTAGGED ? 'profile' : shortSessionTag(s.sid)}`,
-          status: s.completed ? 'completed' : 'active',
-          startTime: s.startedAt,
-          lastActivityTime: s.lastActivity,
-        })
-      }
+    for (const p of this.profiles.values()) {
+      const started = [...p.sessions.values()].filter(s => s.hasStarted)
+      if (started.length === 0) continue
+      out.push({
+        id: p.sessionId,
+        label: p.group,
+        status: p.mainActive ? 'active' : 'completed',
+        startTime: Math.min(...started.map(s => s.startedAt)),
+        lastActivityTime: Math.max(...started.map(s => s.lastActivity)),
+      })
     }
     return out
   }
 
-  /** Sessions of one profile, for tests and status views. */
+  /** Hermes session ids seen for one profile, for tests and status views. */
   sessionsOf(profile: string): string[] {
     return [...(this.profiles.get(profile)?.sessions.keys() ?? [])].sort()
   }
 
+  /** Node names of the spawned sessions of one profile, for tests and status views. */
+  nodesOf(profile: string): string[] {
+    return [...(this.profiles.get(profile)?.sessions.values() ?? [])]
+      .filter(s => s.spawned)
+      .map(s => s.agentName)
+      .sort()
+  }
+
   private discover(): void {
-    const candidates: Array<{ profile: string; group: string; logFile: string }> = []
+    const candidates: Array<{ profile: string; group: string; logDir: string; dbFile: string }> = []
     try {
       for (const entry of fs.readdirSync(this.opts.profilesRoot, { withFileTypes: true })) {
         if (!entry.isDirectory()) continue
+        const dir = path.join(this.opts.profilesRoot, entry.name)
         candidates.push({
           profile: entry.name,
           group: displayProfileName(entry.name),
-          logFile: path.join(this.opts.profilesRoot, entry.name, 'logs', 'agent.log'),
+          logDir: path.join(dir, 'logs'),
+          dbFile: path.join(dir, 'state.db'),
         })
       }
     } catch {
       // profiles root missing: nothing to watch yet
     }
     if (this.opts.defaultLogDir) {
-      candidates.push({ profile: 'default', group: displayProfileName('default'), logFile: path.join(this.opts.defaultLogDir, 'agent.log') })
+      candidates.push({
+        profile: 'default',
+        group: displayProfileName('default'),
+        logDir: this.opts.defaultLogDir,
+        dbFile: path.join(path.dirname(this.opts.defaultLogDir), 'state.db'),
+      })
     }
 
-    for (const { profile, group, logFile } of candidates) {
+    for (const { profile, group, logDir, dbFile } of candidates) {
       if (this.profiles.has(profile)) continue
-      let size: number
-      try {
-        size = fs.statSync(logFile).size
-      } catch {
-        continue
-      }
+      const agentLog = path.join(logDir, 'agent.log')
+      if (!fs.existsSync(agentLog)) continue
+      const gatewayLog = path.join(logDir, 'gateway.log')
       // Start at the end: history from before the watcher attached is not replayed.
-      this.profiles.set(profile, { profile, group, logFile, pos: size, partial: '', sessions: new Map() })
+      this.profiles.set(profile, {
+        profile,
+        group,
+        sessionId: `hermes-${profile}`,
+        dbFile,
+        agentTail: { file: agentLog, pos: fileSize(agentLog), partial: Buffer.alloc(0) },
+        gatewayTail: { file: gatewayLog, pos: fileSize(gatewayLog), partial: Buffer.alloc(0) },
+        sessions: new Map(),
+        mainActive: false,
+        pendingInbound: [],
+      })
     }
   }
 
-  private readNew(state: ProfileState): void {
-    let size: number
-    try {
-      size = fs.statSync(state.logFile).size
-    } catch {
-      return
-    }
-    if (size < state.pos) {
-      // Rotated or truncated: start again from the top of the new file.
-      state.pos = 0
-      state.partial = ''
-    }
-    if (size === state.pos) return
-
-    const len = Math.min(size - state.pos, READ_CHUNK)
-    const buf = Buffer.alloc(len)
-    let fd: number | null = null
-    try {
-      fd = fs.openSync(state.logFile, 'r')
-      fs.readSync(fd, buf, 0, len, state.pos)
-    } catch {
-      return
-    } finally {
-      if (fd !== null) fs.closeSync(fd)
-    }
-    state.pos += len
-
-    const text = state.partial + buf.toString('utf8')
-    const lastNewline = text.lastIndexOf('\n')
-    if (lastNewline === -1) {
-      state.partial = text
-      return
-    }
-    state.partial = text.slice(lastNewline + 1)
-    for (const line of text.slice(0, lastNewline).split('\n')) {
-      const parsed = parseHermesLogLine(line)
-      if (parsed) this.handle(state, parsed)
-    }
-  }
-
-  private handle(state: ProfileState, parsed: ParsedHermesLine): void {
+  private handle(p: ProfileState, parsed: ParsedHermesLine): void {
     const t = this.now()
     let sid = parsed.sid
     if (sid) {
-      state.currentSid = sid
+      p.currentSid = sid
     } else {
-      sid = state.currentSid ?? UNTAGGED
+      sid = p.currentSid ?? UNTAGGED
     }
-    const session = this.sessionFor(state, sid, t)
-    this.activate(session, t)
+    const s = this.sessionFor(p, sid, t)
+    this.activate(p, s, t)
+    this.refreshTitle(p, s, t)
+    this.trySpawn(p, s, t)
 
     const ev = parsed.event
     if (ev.kind === 'tool') {
       const toolName = displayToolName(ev.tool)
-      const toolUseId = `${session.sessionId}-${++session.toolSeq}`
-      const time = this.elapsed(session, t)
-      this.emit(session, { time, type: 'tool_call_start', payload: { agent: session.agentName, tool: toolName, toolUseId, args: '', inputData: {} } })
-      this.emit(session, {
+      const toolUseId = `${p.sessionId}-${s.tag}-${++s.toolSeq}`
+      const time = this.elapsed(s, t)
+      this.emitFor(p, s, agent => ({ time, type: 'tool_call_start', payload: { agent, tool: toolName, toolUseId, args: '', inputData: {} } }))
+      this.emitFor(p, s, agent => ({
         time,
         type: 'tool_call_end',
-        payload: {
-          agent: session.agentName,
-          tool: toolName,
-          toolUseId,
-          result: `${ev.status} in ${ev.seconds}s`,
-          isError: ev.status === 'failed',
-        },
-      })
+        payload: { agent, tool: toolName, toolUseId, result: `${ev.status} in ${ev.seconds}s`, isError: ev.status === 'failed' },
+      }))
     } else {
-      if (ev.model && ev.model !== session.model) {
-        session.model = ev.model
-        this.emit(session, { time: this.elapsed(session, t), type: 'model_detected', payload: { agent: session.agentName, model: ev.model } })
+      if (ev.model && ev.model !== s.model) {
+        s.model = ev.model
+        const time = this.elapsed(s, t)
+        this.emitFor(p, s, agent => ({ time, type: 'model_detected', payload: { agent, model: ev.model } }))
       }
       const newInput = Math.max(0, ev.inputTokens - ev.cacheReadTokens - ev.cacheWriteTokens)
-      session.spend = {
-        inputTokens: session.spend.inputTokens + newInput,
-        outputTokens: session.spend.outputTokens + ev.outputTokens,
-        cacheReadTokens: session.spend.cacheReadTokens + ev.cacheReadTokens,
+      s.spend = {
+        inputTokens: s.spend.inputTokens + newInput,
+        outputTokens: s.spend.outputTokens + ev.outputTokens,
+        cacheReadTokens: s.spend.cacheReadTokens + ev.cacheReadTokens,
         // Hermes does not say which cache TTL it used; the default 5-minute bucket is assumed.
-        cacheWrite5mTokens: session.spend.cacheWrite5mTokens + ev.cacheWriteTokens,
-        cacheWrite1hTokens: session.spend.cacheWrite1hTokens,
+        cacheWrite5mTokens: s.spend.cacheWrite5mTokens + ev.cacheWriteTokens,
+        cacheWrite1hTokens: s.spend.cacheWrite1hTokens,
       }
-      this.emit(session, {
-        time: this.elapsed(session, t),
+      const spend = { ...s.spend, model: ev.model }
+      const time = this.elapsed(s, t)
+      this.emitFor(p, s, agent => ({
+        time,
         type: 'context_update',
         payload: {
-          agent: session.agentName,
+          agent,
           tokens: ev.inputTokens,
           breakdown: { systemPrompt: 0, userMessages: 0, toolResults: 0, reasoning: 0, subagentResults: 0 },
-          spend: { ...session.spend, model: ev.model },
+          spend,
         },
-      })
+      }))
     }
-    session.lastActivity = t
+    s.lastActivity = t
   }
 
-  /** Find or create the session for a Hermes session id within its profile. */
-  private sessionFor(state: ProfileState, sid: string, t: number): SessionState {
-    const existing = state.sessions.get(sid)
+  /** Find or create the state for a Hermes session id within its profile. */
+  private sessionFor(p: ProfileState, sid: string, t: number): SessionState {
+    const existing = p.sessions.get(sid)
     if (existing) return existing
     const tag = sid === UNTAGGED ? UNTAGGED : shortSessionTag(sid)
-    const session: SessionState = {
-      sessionId: `hermes-${state.profile}-${tag}`,
-      agentName: `${state.group} ${tag}`,
-      profile: state.profile,
-      group: state.group,
+    const s: SessionState = {
       sid,
+      tag,
+      firstSeen: t,
+      lastTitleCheck: Number.NEGATIVE_INFINITY,
       startedAt: t,
       lastActivity: t,
+      hasStarted: false,
       active: false,
       completed: true,
-      hasStarted: false,
+      spawned: false,
+      agentName: '',
+      pending: [],
       toolSeq: 0,
       spend: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWrite5mTokens: 0, cacheWrite1hTokens: 0 },
     }
-    state.sessions.set(sid, session)
-    return session
+    p.sessions.set(sid, s)
+    return s
   }
 
-  /** Mark a session active, emitting its start (or restart after an end) once. */
-  private activate(session: SessionState, t: number): void {
-    if (session.active && !session.completed) return
-    // A session that already ended and then got activity again starts a new run.
-    if (session.hasStarted) session.startedAt = t
-    session.hasStarted = true
-    session.active = true
-    session.completed = false
-    session.lastActivity = t
-    this.opts.lifecycle('started', session.sessionId, `${session.group} · ${session.sid}`)
-    this.emit(session, {
-      time: 0,
-      type: 'agent_spawn',
-      payload: {
-        name: session.agentName,
-        isMain: true,
-        group: session.group,
-        profile: session.profile,
-        task: session.sid === UNTAGGED ? `Hermes profile ${session.profile}` : `Hermes session ${session.sid}`,
-        ...(session.model ? { model: session.model } : {}),
-      },
-    })
-  }
-
-  private updateActivity(session: SessionState): void {
-    if (!session.active || session.completed) return
-    const quiet = this.now() - session.lastActivity
-    const idleMs = this.opts.idleMs ?? 60_000
-    const endMs = this.opts.endMs ?? 600_000
-    if (quiet > endMs) {
-      session.completed = true
-      session.active = false
-      this.emit(session, { time: this.elapsed(session, this.now()), type: 'agent_complete', payload: { name: session.agentName } })
-      this.opts.lifecycle('ended', session.sessionId, `${session.group} · ${session.sid}`)
-    } else if (quiet > idleMs) {
-      this.emit(session, { time: this.elapsed(session, this.now()), type: 'agent_idle', payload: { name: session.agentName } })
+  /** Mark a session active. A session that ended and got activity again starts a new run. */
+  private activate(p: ProfileState, s: SessionState, t: number): void {
+    if (s.active && !s.completed) return
+    if (s.hasStarted) s.startedAt = t
+    s.hasStarted = true
+    s.active = true
+    s.completed = false
+    s.lastActivity = t
+    this.ensureMain(p)
+    if (s.spawned) {
+      // Known node that was idle or complete: reactivate it.
+      this.emitFor(p, s, () => ({ time: 0, type: 'agent_spawn', payload: this.spawnPayload(p, s) }))
     }
   }
 
-  private elapsed(session: SessionState, t: number): number {
-    return Math.max(0, (t - session.startedAt) / 1000)
+  /** Title lookup for a session that has no node yet. Retried every TITLE_RETRY_MS. */
+  private refreshTitle(p: ProfileState, s: SessionState, t: number): void {
+    if (s.spawned || s.title || s.sid === UNTAGGED) return
+    if (t - s.lastTitleCheck < TITLE_RETRY_MS) return
+    s.lastTitleCheck = t
+    const found = this.titleFor(p.profile, p.dbFile, s.sid)
+    if (found) s.title = found
   }
 
-  private emit(session: SessionState, event: Omit<AgentEvent, 'sessionId'>): void {
-    this.opts.emit({ ...event } as AgentEvent, session.sessionId)
+  /**
+   * Create the session's node once its name is known: the title, or a tag
+   * after TITLE_WAIT_MS. Events for the node are buffered until then.
+   */
+  private trySpawn(p: ProfileState, s: SessionState, t: number): void {
+    if (s.spawned || !s.hasStarted) return
+    if (!s.title && s.sid !== UNTAGGED && t - s.firstSeen < TITLE_WAIT_MS) return
+    s.agentName = this.uniqueName(p, s)
+    s.spawned = true
+    this.ensureMain(p)
+    this.opts.emit({ time: 0, type: 'agent_spawn', payload: this.spawnPayload(p, s) } as AgentEvent, p.sessionId)
+    const buffered = s.pending.splice(0)
+    for (const build of buffered) this.opts.emit({ ...build(s.agentName) } as AgentEvent, p.sessionId)
+    for (const content of p.pendingInbound.splice(0)) {
+      this.emitFor(p, s, agent => ({ time: this.elapsed(s, t), type: 'message', payload: { agent, role: 'user', content } }))
+    }
+  }
+
+  private uniqueName(p: ProfileState, s: SessionState): string {
+    const short = s.sid === UNTAGGED ? 'Activity' : (s.title ? shortSessionName(s.title) : '') || s.tag
+    const base = `${p.group} · ${short}`
+    const taken = new Set(
+      [...p.sessions.values()].filter(o => o !== s && o.spawned).map(o => o.agentName),
+    )
+    return taken.has(base) ? `${base} ${s.tag}` : base
+  }
+
+  private spawnPayload(p: ProfileState, s: SessionState): Record<string, unknown> {
+    return {
+      name: s.agentName,
+      parent: p.group,
+      group: p.group,
+      profile: p.profile,
+      task: s.title ?? (s.sid === UNTAGGED ? `Hermes profile ${p.profile}` : `Hermes session ${s.sid}`),
+      ...(s.model ? { model: s.model } : {}),
+    }
+  }
+
+  /** The profile's main node: created once, reactivated after it completed. */
+  private ensureMain(p: ProfileState): void {
+    if (p.mainActive) return
+    p.mainActive = true
+    this.opts.lifecycle('started', p.sessionId, p.group)
+    this.opts.emit({
+      time: 0,
+      type: 'agent_spawn',
+      payload: { name: p.group, isMain: true, profile: p.profile, group: p.group, task: `Hermes profile ${p.profile}` },
+    } as AgentEvent, p.sessionId)
+  }
+
+  /** Emit for a session's node, or buffer until the node exists. */
+  private emitFor(p: ProfileState, s: SessionState, build: Builder): void {
+    if (s.spawned) this.opts.emit({ ...build(s.agentName) } as AgentEvent, p.sessionId)
+    else s.pending.push(build)
+  }
+
+  /** A message from outside, shown on the most recently active node of the profile. */
+  private deliverInbound(p: ProfileState, inbound: InboundMessage): void {
+    const content = `Message from ${inbound.user} via ${inbound.platform}`
+    const spawned = [...p.sessions.values()].filter(s => s.spawned)
+    const target = spawned.sort((a, b) => Number(b.active && !b.completed) - Number(a.active && !a.completed) || b.lastActivity - a.lastActivity)[0]
+    if (!target) {
+      p.pendingInbound.push(content)
+      return
+    }
+    const time = this.elapsed(target, this.now())
+    this.emitFor(p, target, agent => ({ time, type: 'message', payload: { agent, role: 'user', content } }))
+  }
+
+  private updateActivity(p: ProfileState, s: SessionState): void {
+    if (!s.active || s.completed) return
+    const t = this.now()
+    const quiet = t - s.lastActivity
+    const idleMs = this.opts.idleMs ?? 60_000
+    const endMs = this.opts.endMs ?? 600_000
+    if (quiet > endMs) {
+      s.completed = true
+      s.active = false
+      if (s.spawned) {
+        this.opts.emit({ time: this.elapsed(s, t), type: 'agent_complete', payload: { name: s.agentName } } as AgentEvent, p.sessionId)
+      }
+    } else if (quiet > idleMs && s.spawned) {
+      this.opts.emit({ time: this.elapsed(s, t), type: 'agent_idle', payload: { name: s.agentName } } as AgentEvent, p.sessionId)
+    }
+  }
+
+  /** When every session of a profile has completed, the main node completes too. */
+  private checkProfileEnd(p: ProfileState): void {
+    if (!p.mainActive) return
+    const anyActive = [...p.sessions.values()].some(s => s.active && !s.completed)
+    if (anyActive) return
+    p.mainActive = false
+    this.opts.emit({ time: 0, type: 'agent_complete', payload: { name: p.group } } as AgentEvent, p.sessionId)
+    this.opts.lifecycle('ended', p.sessionId, p.group)
+  }
+
+  private elapsed(s: SessionState, t: number): number {
+    return Math.max(0, (t - s.startedAt) / 1000)
   }
 }
