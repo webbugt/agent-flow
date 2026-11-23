@@ -16,6 +16,7 @@ import { scanSubagentsDir, readSubagentNewLines, newestSubagentMtime } from '../
 import { followSession } from '../extension/src/session-relocation'
 import { handlePermissionDetection } from '../extension/src/permission-detection'
 import { CodexSessionWatcher } from '../extension/src/codex-session-watcher'
+import { HermesLogWatcher } from './hermes-logs'
 import {
   INACTIVITY_TIMEOUT_MS, SCAN_INTERVAL_MS, ACTIVE_SESSION_AGE_S, POLL_FALLBACK_MS,
   SESSION_ID_DISPLAY, SYSTEM_PROMPT_BASE_TOKENS, ORCHESTRATOR_NAME,
@@ -201,6 +202,7 @@ function watchSession(sessionId: string, filePath: string) {
     pendingToolCalls: new Map(),
     seenToolUseIds: new Set(),
     seenMessageHashes: new Set(),
+    spendByAgent: new Map(), seenUsageIds: new Set(),
     sessionDetected: false, sessionCompleted: false,
     lastActivityTime: Date.now(),
     inactivityTimer: null,
@@ -374,6 +376,9 @@ export interface RelayOptions {
    *  Mirrors the extension's `agentVisualizer.runtime` setting so users of the
    *  dev relay and `npx agent-flow-app` have a way to opt out of one runtime. */
   runtime?: RelayRuntimeMode
+  /** Follow live Hermes profile activity from ~/.hermes/profiles/*\/logs/agent.log.
+   *  Defaults to on; set false to disable. Reads logs only. */
+  hermesLogs?: boolean
 }
 
 function resolveRuntimeMode(explicit?: RelayRuntimeMode): RelayRuntimeMode {
@@ -428,6 +433,21 @@ export async function createRelay(options: RelayOptions): Promise<Relay> {
         })
       } catch {}
     }
+  }
+
+  // ─── Hermes profiles ──────────────────────────────────────────────────────
+  // Read-only tail of Hermes' own agent logs: one session per Hermes session,
+  // grouped by profile. No files are written, no gateway restart is needed.
+  let hermesLogs: HermesLogWatcher | null = null
+  if (options.hermesLogs !== false) {
+    const hermesHome = process.env.HERMES_HOME || path.join(os.homedir(), '.hermes')
+    hermesLogs = new HermesLogWatcher({
+      profilesRoot: path.join(hermesHome, 'profiles'),
+      defaultLogDir: path.join(hermesHome, 'logs'),
+      emit: (event, sessionId) => emitEvent(event, sessionId),
+      lifecycle: (type, sessionId, label) => broadcastSessionLifecycle(type, sessionId, label),
+    })
+    hermesLogs.start()
   }
 
   // ─── Codex runtime ────────────────────────────────────────────────────────
@@ -503,6 +523,7 @@ export async function createRelay(options: RelayOptions): Promise<Relay> {
         })
       }
       if (codexWatcher) sessionList.push(...codexWatcher.getActiveSessions())
+      if (hermesLogs) sessionList.push(...hermesLogs.getActiveSessions())
       if (sessionList.length > 0) {
         sendSSE(res, { type: 'session-list', sessions: sessionList })
       }
@@ -549,6 +570,7 @@ export async function createRelay(options: RelayOptions): Promise<Relay> {
         }
       }
       codexWatcher?.dispose()
+      hermesLogs?.dispose()
     },
   }
 }

@@ -61,6 +61,8 @@ function makeSession(): WatchedSession {
     permissionTimer: null,
     permissionEmitted: false,
     contextBreakdown: { systemPrompt: 0, userMessages: 0, toolResults: 0, reasoning: 0, subagentResults: 0 },
+    spendByAgent: new Map(),
+    seenUsageIds: new Set(),
   }
 }
 
