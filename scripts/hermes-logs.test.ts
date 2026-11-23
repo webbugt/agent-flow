@@ -8,6 +8,7 @@ import {
   displayProfileName,
   displayToolName,
   shortSessionTag,
+  resolveHermesRoot,
   HermesLogWatcher,
 } from './hermes-logs'
 import type { AgentEvent } from '../extension/src/protocol'
@@ -170,4 +171,11 @@ test('reports Hermes sessions for the session list, so late page loads see them'
   assert.equal(list[0].id, 'hermes-taxis-d0ddaef5')
   assert.equal(list[0].status, 'active')
   assert.equal(list[0].label, 'Taxis · d0ddaef5')
+})
+
+test('resolves the Hermes root from a profile-shell HERMES_HOME', () => {
+  assert.equal(resolveHermesRoot('/home/u/.hermes'), '/home/u/.hermes')
+  assert.equal(resolveHermesRoot('/home/u/.hermes/profiles'), '/home/u/.hermes')
+  assert.equal(resolveHermesRoot('/home/u/.hermes/profiles/taxis'), '/home/u/.hermes')
+  assert.equal(resolveHermesRoot('/home/u/.hermes/profiles/taxis/'), '/home/u/.hermes')
 })

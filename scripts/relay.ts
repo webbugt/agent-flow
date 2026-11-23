@@ -16,7 +16,7 @@ import { scanSubagentsDir, readSubagentNewLines, newestSubagentMtime } from '../
 import { followSession } from '../extension/src/session-relocation'
 import { handlePermissionDetection } from '../extension/src/permission-detection'
 import { CodexSessionWatcher } from '../extension/src/codex-session-watcher'
-import { HermesLogWatcher } from './hermes-logs'
+import { HermesLogWatcher, resolveHermesRoot } from './hermes-logs'
 import {
   INACTIVITY_TIMEOUT_MS, SCAN_INTERVAL_MS, ACTIVE_SESSION_AGE_S, POLL_FALLBACK_MS,
   SESSION_ID_DISPLAY, SYSTEM_PROMPT_BASE_TOKENS, ORCHESTRATOR_NAME,
@@ -440,7 +440,10 @@ export async function createRelay(options: RelayOptions): Promise<Relay> {
   // grouped by profile. No files are written, no gateway restart is needed.
   let hermesLogs: HermesLogWatcher | null = null
   if (options.hermesLogs !== false) {
-    const hermesHome = process.env.HERMES_HOME || path.join(os.homedir(), '.hermes')
+    // Do not trust HERMES_HOME blindly: a shell that runs as one profile exports
+    // it as .../profiles/<name>, which would make the relay watch only that
+    // profile and mislabel its log as "default". Use the real root instead.
+    const hermesHome = resolveHermesRoot(process.env.AGENT_FLOW_HERMES_ROOT || path.join(os.homedir(), '.hermes'))
     hermesLogs = new HermesLogWatcher({
       profilesRoot: path.join(hermesHome, 'profiles'),
       defaultLogDir: path.join(hermesHome, 'logs'),

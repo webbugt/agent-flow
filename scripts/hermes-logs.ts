@@ -114,6 +114,18 @@ export function displayProfileName(profile: string): string {
     .join(' ')
 }
 
+/**
+ * Map a Hermes home-like path to the Hermes root that holds `profiles/` and `logs/`.
+ * `~/.hermes` -> `~/.hermes`; `~/.hermes/profiles` -> `~/.hermes`;
+ * `~/.hermes/profiles/taxis` -> `~/.hermes` (what a profile shell exports as HERMES_HOME).
+ */
+export function resolveHermesRoot(p: string): string {
+  const normalized = path.resolve(p)
+  if (path.basename(normalized) === 'profiles') return path.dirname(normalized)
+  if (path.basename(path.dirname(normalized)) === 'profiles') return path.dirname(path.dirname(normalized))
+  return normalized
+}
+
 /** Short, readable tag for a Hermes session id (`20261123_103037_d0ddaef5` -> `d0ddaef5`). */
 export function shortSessionTag(sid: string): string {
   const last = sid.split('_').pop() ?? sid
