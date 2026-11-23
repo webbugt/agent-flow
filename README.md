@@ -43,6 +43,8 @@ Options:
 - `--no-open` — don't open the browser automatically
 - `--verbose` — show detailed event logs
 
+The Fleet tab reads Hermes Kanban boards and Supermemory namespaces (read-only) from `GET /api/fleet`. The endpoint is loopback-only by default: requests with a non-loopback `Host` or proxy headers (`X-Forwarded-For`, `X-Real-IP`, `Forwarded`) get `403`. To serve it through a reverse proxy or to other machines, set `AGENT_FLOW_FLEET_ALLOW_REMOTE=1` — this exposes board names, task titles and namespace names to anyone who can reach the port, so only use it on a trusted network.
+
 ### Standalone Web App (from source)
 
 ```bash
