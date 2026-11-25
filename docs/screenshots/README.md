@@ -138,3 +138,8 @@ do not change between runs.
   set `AGENT_FLOW_SHOT_NO_SANDBOX=1`.
 - `timed out ... the top bar`: run with `-v` to see the app and page console; the error also prints page state.
 - Port in use: omit `--port`.
+
+## Notes on the Costs screenshot sets
+
+- **Duplicate `20`-`24` prefixes.** `t_a46b5d1e` and `t_08ca9bf6` both hold files numbered 20-24 (e.g. `20-unit-kwh-local-desktop.png` in both). The numbers come from two plans (the P4 plan and the final D1 set) that each numbered their own steps; the same-named files are recaptures and the `t_08ca9bf6` copy is the final one. Later numbers (`70`-`74`, limits) only exist in `t_08ca9bf6`.
+- **`74-chip-hover-desktop-hover.png` shows no tooltip.** The LIMITS chip (`data-testid="limits-chip"`) uses a native `title` attribute, and headless Chromium never paints native title tooltips, so a hover capture cannot show it. The text a user sees on hover is the chip's `title`, and the same string is its `aria-label`; read it from the DOM (`[data-testid="limits-chip"]` `aria-label`) or from `buildObservedLimitsView(...).chip.title` rather than from the PNG. The pill tooltips in `70`-`73` are DOM tooltips and do render.
