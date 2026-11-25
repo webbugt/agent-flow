@@ -62,7 +62,12 @@ export function readSettingsFile(settingsPath: string): SettingsReadResult {
 }
 
 /** Write JSON via temp file + rename so a crash mid-write can't truncate the file. */
-export function writeJsonAtomic(filePath: string, value: unknown): void {
+export function writeJsonAtomic(requestedPath: string, value: unknown): void {
+  // Write through a symlinked file (dotfile managers) instead of replacing the link.
+  let filePath = requestedPath
+  try {
+    if (fs.lstatSync(requestedPath).isSymbolicLink()) filePath = fs.realpathSync(requestedPath)
+  } catch { /* missing file: create it at the requested path */ }
   fs.mkdirSync(path.dirname(filePath), { recursive: true })
   const tmpPath = `${filePath}.${process.pid}.tmp`
   fs.writeFileSync(tmpPath, JSON.stringify(value, null, 2) + '\n')

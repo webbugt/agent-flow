@@ -124,4 +124,17 @@ describe('writeJsonAtomic', () => {
     assert.equal(fs.readFileSync(file, 'utf-8'), '{\n  "a": 1\n}\n')
     assert.deepEqual(fs.readdirSync(path.dirname(file)), ['settings.json'])
   })
+
+  it('writes through a symlinked file and keeps the link', () => {
+    const dir = tmpDir()
+    const target = path.join(dir, 'dotfiles', 'settings.json')
+    fs.mkdirSync(path.dirname(target), { recursive: true })
+    fs.writeFileSync(target, '{}\n')
+    const link = path.join(dir, 'claude', 'settings.json')
+    fs.mkdirSync(path.dirname(link), { recursive: true })
+    fs.symlinkSync(target, link)
+    writeJsonAtomic(link, { a: 2 })
+    assert.ok(fs.lstatSync(link).isSymbolicLink())
+    assert.equal(fs.readFileSync(target, 'utf-8'), '{\n  "a": 2\n}\n')
+  })
 })
