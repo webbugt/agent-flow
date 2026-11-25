@@ -1,20 +1,15 @@
 import { Agent, ToolCallNode, NODE } from '@/lib/agent-types'
 import { COLORS } from '@/lib/colors'
-import { COST_RATE, MODEL_FAMILY_COST, COST_DRAW, COST_PANEL, MIN_VISIBLE_OPACITY } from '@/lib/canvas-constants'
+import { COST_DRAW, COST_PANEL, MIN_VISIBLE_OPACITY } from '@/lib/canvas-constants'
 import { formatTokens } from '@/lib/utils'
 import { spendUsd } from '@/lib/pricing'
+import { blendedRateForModel } from '@/lib/costs/catalog'
 import { truncateText } from './draw-misc'
 
-/** Blended $/M-token rate for a model ID — first matching family wins,
- *  unknown models fall back to the Sonnet-class rate. */
+/** Blended $/M-token rate for a model ID, from the price catalog: the exact model,
+ *  else the newest model of its family, else the Sonnet-class fallback. */
 export function modelCostRate(model?: string): number {
-  if (model) {
-    const id = model.toLowerCase()
-    for (const { pattern, rate } of MODEL_FAMILY_COST) {
-      if (pattern.test(id)) return rate
-    }
-  }
-  return COST_RATE
+  return blendedRateForModel(model)
 }
 
 export function agentCost(tokensUsed: number, model?: string): number {
