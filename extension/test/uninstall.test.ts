@@ -100,3 +100,53 @@ describe('uninstall script: chained statusLine wrapper (P6a)', { skip: process.p
     assert.equal(fs.existsSync(p.settings), false)
   })
 })
+
+describe('uninstall script: symlinked settings.json and limits history (R2 M1, L1)', { skip: process.platform === 'win32' && 'HOME override and symlinks are POSIX-only' }, () => {
+  const run = (home: string) => execFileSync(process.execPath, [SCRIPT], { env: { ...process.env, HOME: home } })
+
+  async function linkedSandbox(original: Record<string, unknown>) {
+    const { installStatusLine, paths } = await import('../src/statusline-installer')
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-flow-uninstall-link-'))
+    const p = paths(home)
+    const target = path.join(home, 'dotfiles', 'settings.json')
+    fs.mkdirSync(path.dirname(target), { recursive: true })
+    fs.writeFileSync(target, JSON.stringify(original, null, 2) + '\n', { mode: 0o640 }); fs.chmodSync(target, 0o640)
+    fs.mkdirSync(path.dirname(p.settings), { recursive: true })
+    fs.symlinkSync(path.join('..', 'dotfiles', 'settings.json'), p.settings)
+    const r = installStatusLine({ home, nodePath: process.execPath, managedSettingsPaths: [path.join(home, 'none.json')], claudeConfigDir: path.join(home, '.claude') })
+    assert.equal(r.ok, true)
+    assert.equal(fs.lstatSync(p.settings).isSymbolicLink(), true, 'install kept the link')
+    return { home, p, target }
+  }
+
+  it('restores the statusLine through the link: still a symlink, target deep-equal to the original, mode kept', async () => {
+    const original = { model: 'opus', statusLine: { type: 'command', command: 'echo \"a|b\"', padding: 1 } }
+    const { home, p, target } = await linkedSandbox(original)
+    run(home)
+    assert.equal(fs.lstatSync(p.settings).isSymbolicLink(), true, 'still a symlink after uninstall')
+    assert.deepEqual(JSON.parse(fs.readFileSync(target, 'utf-8')), original)
+    assert.equal(fs.statSync(target).mode & 0o777, 0o640)
+    assert.deepEqual(fs.readdirSync(path.dirname(target)), ['settings.json'], 'no tmp file left')
+  })
+
+  it('removes the hooks through the link as well', async () => {
+    const hookCmd = (h: string) => `\"node\" \"${h}/.claude/agent-flow/hook.js\"`
+    const { home, p, target } = await linkedSandbox({ model: 'opus' })
+    const s = JSON.parse(fs.readFileSync(target, 'utf-8'))
+    s.hooks = { Stop: [{ hooks: [{ type: 'command', command: hookCmd(home) }] }] }
+    fs.writeFileSync(target, JSON.stringify(s, null, 2))
+    run(home)
+    assert.equal(fs.lstatSync(p.settings).isSymbolicLink(), true)
+    assert.deepEqual(JSON.parse(fs.readFileSync(target, 'utf-8')), { model: 'opus' })
+  })
+
+  it('(L1) deletes claude-history.json and removes the limits directory', async () => {
+    const { home, p } = await linkedSandbox({ model: 'opus' })
+    fs.mkdirSync(p.limitsDir, { recursive: true })
+    fs.writeFileSync(p.limits, '{\"v\":1}'); fs.writeFileSync(p.limitsHistory, '{\"v\":1,\"readings\":[]}')
+    run(home)
+    assert.equal(fs.existsSync(p.limitsHistory), false)
+    assert.equal(fs.existsSync(p.limits), false)
+    assert.equal(fs.existsSync(p.limitsDir), false)
+  })
+})

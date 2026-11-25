@@ -381,6 +381,30 @@ export const BUILTIN_PLANS: Record<string, ShotPlan> = {
       { name: 'limits-5h-hover', viewports: ['desktop'], steps: [{ key: '$' }, { wait: 3500 }, { hover: '[data-testid="limits-row-5h"]' }, { wait: 400 }] },
     ],
   },
+  // Costs P6-fix (R2 evidence). Three runs, each its own --limits state and --start-index:
+  //   p6fix_optin  --limits L-4                 opt-in text (usage percentages and reset times of each window, history file)
+  //   p6fix_stale  --limits L-3                 stale chip + drawer at 390 px (R2 L4: tabs must not be cut at the left)
+  //   p6fix_rows   --limits L-1 --config C-limits   5h / 7d LIMITS-row tooltips: hover on desktop, tap on a phone; chip hover
+  p6fix_optin: {
+    shots: [
+      { name: 'optin-drawer', viewports: ['desktop', 'phone'], steps: [{ key: '$' }, { wait: 3000 }, ...OPEN_DRAWER, { eval: SCROLL_TO('claude-limits') }, { wait: 400 }] },
+    ],
+  },
+  p6fix_stale: {
+    shots: [
+      { name: 'stale-topbar', viewports: ['desktop', 'phone'], steps: [{ key: '$' }, { wait: 3000 }] },
+      { name: 'stale-chip-hover', viewports: ['desktop'], steps: [{ key: '$' }, { wait: 3000 }, { hover: '[data-testid="limits-chip"]' }, { wait: 400 }] },
+    ],
+  },
+  p6fix_rows: {
+    shots: [
+      { name: 'row-5h-hover', viewports: ['desktop'], steps: [{ key: '$' }, { wait: 3500 }, { hover: '[data-testid="limits-row-5h"]' }, { wait: 400 }] },
+      { name: 'row-7d-hover', viewports: ['desktop'], steps: [{ key: '$' }, { wait: 3500 }, { hover: '[data-testid="limits-row-7d"]' }, { wait: 400 }] },
+      { name: 'row-5h-tap', viewports: ['phone'], steps: [{ key: '$' }, { wait: 3500 }, { tap: '[data-testid="limits-row-5h"]' }, { wait: 400 }] },
+      { name: 'row-7d-tap', viewports: ['phone'], steps: [{ key: '$' }, { wait: 3500 }, { tap: '[data-testid="limits-row-7d"]' }, { wait: 400 }] },
+      { name: 'chip-hover', viewports: ['desktop'], steps: [{ key: '$' }, { wait: 3500 }, { hover: '[data-testid="limits-chip"]' }, { wait: 400 }] },
+    ],
+  },
   h0: {
     shots: [
       { name: 'baseline-overlay-off', viewports: ['desktop'] },

@@ -12,7 +12,9 @@
  *  3. A project / local settings file with its own statusLine shadows the user scope: reported as a warning, not a refusal.
  *  4. Before writing, settings.json is copied to `settings.json.agent-flow.bak` (0600); the write is temp + rename and
  *     keeps every other key, the key order, the indentation and the file mode.
- *  5. Uninstall puts the original statusLine back exactly (deep equal) and removes only Agent Flow's files. If the
+ *  4b. A symlinked settings.json (stow, chezmoi, home-manager) is written THROUGH: the link stays a link, the target changes;
+ *     a dangling or looping link is refused.
+ *  5. Uninstall puts the original statusLine back (deep equal) and removes only Agent Flow's files. If the
  *     statusLine changed after install it is left alone and nothing is removed.
  *
  * Refusing is a normal result, not an error: the caller shows `reason` and the UI falls back to estimates.
@@ -81,6 +83,7 @@ export function paths(home: string) {
     record: path.join(af, ORIGINAL_RECORD_FILE),
     limitsDir: path.join(af, 'limits'),
     limits: path.join(af, LIMITS_RELATIVE),
+    limitsHistory: path.join(af, 'limits', 'claude-history.json'),
   }
 }
 
@@ -109,23 +112,37 @@ export function isWrapperCommand(command: unknown): boolean {
 
 // ─── Reading ────────────────────────────────────────────────────────────────
 
-type ReadResult = { ok: true; settings: Obj; raw: string; exists: boolean } | { ok: false; code: RefuseCode; message: string }
+/** `target` is where writes go: the file itself, or what a symlink at `file` resolves to (dotfile managers link settings.json). */
+type ReadResult = { ok: true; settings: Obj; raw: string; exists: boolean; target: string } | { ok: false; code: RefuseCode; message: string }
+
+function lstatOk(file: string): boolean {
+  try { fs.lstatSync(file); return true } catch { return false }
+}
 
 function readSettings(file: string): ReadResult {
   let raw: string
+  let target = file
   try {
-    const st = fs.statSync(file)
-    if (st.size > MAX_SETTINGS_BYTES) return { ok: false, code: 'settings-invalid', message: `${file} is too large to be a settings file` }
-    raw = fs.readFileSync(file, 'utf-8')
+    // A symlink is written THROUGH (tmp file next to the real target, rename onto the target), so the link stays a link
+    // and the dotfiles copy is the one that changes. A dangling or looping link is refused, never replaced.
+    if (fs.lstatSync(file).isSymbolicLink()) target = fs.realpathSync(file)
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { ok: true, settings: {}, raw: '', exists: false }
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT' && !lstatOk(file)) return { ok: true, settings: {}, raw: '', exists: false, target: file }
+    return { ok: false, code: 'settings-unreadable', message: `${file} is a symbolic link that cannot be followed (missing target or a loop); fix the link first` }
+  }
+  try {
+    const st = fs.statSync(target)
+    if (st.size > MAX_SETTINGS_BYTES) return { ok: false, code: 'settings-invalid', message: `${file} is too large to be a settings file` }
+    raw = fs.readFileSync(target, 'utf-8')
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { ok: true, settings: {}, raw: '', exists: false, target: file }
     return { ok: false, code: 'settings-unreadable', message: `could not read ${file}` }
   }
-  if (raw.trim() === '') return { ok: true, settings: {}, raw, exists: true }
+  if (raw.trim() === '') return { ok: true, settings: {}, raw, exists: true, target }
   try {
     const parsed: unknown = JSON.parse(raw)
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return { ok: false, code: 'settings-invalid', message: `${file} is not a JSON object` }
-    return { ok: true, settings: parsed as Obj, raw, exists: true }
+    return { ok: true, settings: parsed as Obj, raw, exists: true, target }
   } catch {
     // Parser messages can quote file content: say only that it does not parse.
     return { ok: false, code: 'settings-invalid', message: `${file} is not valid JSON; fix it first (Agent Flow never rewrites a file it cannot parse)` }
@@ -288,8 +305,8 @@ export function installStatusLine(env: InstallerEnv): ActionResult {
     writeFileAtomic(p.record, JSON.stringify(record, null, 2) + '\n', 0o600)
     if (!recordExisted) created.push(p.record)
     if (r.exists) writeFileAtomic(p.backup, r.raw, 0o600)
-    const mode = r.exists ? fs.statSync(p.settings).mode & 0o777 : 0o600
-    writeFileAtomic(p.settings, serializeLike(r.raw, next), mode)
+    const mode = r.exists ? fs.statSync(r.target).mode & 0o777 : 0o600
+    writeFileAtomic(r.target, serializeLike(r.raw, next), mode) // through a symlink: the link stays a link
   } catch {
     for (const f of created) { try { fs.unlinkSync(f) } catch { /* best effort */ } }
     return refusal('io-error', 'Not installed: a file could not be written. settings.json was not changed.')
@@ -306,7 +323,7 @@ export function installStatusLine(env: InstallerEnv): ActionResult {
 
 function removeOurFiles(env: InstallerEnv): void {
   const p = paths(env.home)
-  for (const f of [p.shim, p.record, p.limits, p.backup]) { try { fs.unlinkSync(f) } catch { /* not there */ } }
+  for (const f of [p.shim, p.record, p.limits, p.limitsHistory, p.backup]) { try { fs.unlinkSync(f) } catch { /* not there */ } }
   try { fs.rmdirSync(p.limitsDir) } catch { /* not empty or not there: leave it */ }
 }
 
@@ -318,7 +335,7 @@ export function uninstallStatusLine(env: InstallerEnv): ActionResult {
   const ours = hasKey(r.settings, 'statusLine') && !!sl && typeof sl === 'object' && !Array.isArray(sl) && isWrapperCommand((sl as Obj).command)
 
   if (!ours) {
-    const leftovers = [p.shim, p.record, p.limits].some(f => fs.existsSync(f))
+    const leftovers = [p.shim, p.record, p.limits, p.limitsHistory].some(f => fs.existsSync(f))
     if (!leftovers) return { ok: true, action: 'nothing-to-remove', message: 'The statusLine wrapper is not installed. Nothing to remove.' }
     removeOurFiles(env)
     return { ok: true, action: 'left-alone', message: 'Your statusLine setting no longer points to Agent Flow, so it was left as it is. Agent Flow\'s own files were removed.' }
@@ -334,17 +351,17 @@ export function uninstallStatusLine(env: InstallerEnv): ActionResult {
   if (rec.hadStatusLine) next.statusLine = rec.original // the key keeps its position
   else delete next.statusLine
   try {
-    if (rec.createdSettings === true && Object.keys(next).length === 0) {
+    if (rec.createdSettings === true && Object.keys(next).length === 0 && r.target === p.settings) {
       fs.unlinkSync(p.settings) // we created the file for the wrapper alone: leave no empty file behind
     } else {
-      const mode = fs.statSync(p.settings).mode & 0o777
-      writeFileAtomic(p.settings, serializeLike(r.raw, next), mode)
+      const mode = fs.statSync(r.target).mode & 0o777
+      writeFileAtomic(r.target, serializeLike(r.raw, next), mode) // through a symlink: the link stays a link
     }
   } catch {
     return refusal('io-error', 'Not removed: settings.json could not be written. It was not changed.')
   }
   removeOurFiles(env)
-  return { ok: true, action: 'uninstalled', message: rec.hadStatusLine ? 'Removed. Your original status line is back exactly as it was.' : 'Removed. The statusLine entry is gone again.' }
+  return { ok: true, action: 'uninstalled', message: rec.hadStatusLine ? 'Removed. Your original status line is back (same content; the file may be re-indented).' : 'Removed. The statusLine entry is gone again.' }
 }
 
 // ─── Environment ────────────────────────────────────────────────────────────

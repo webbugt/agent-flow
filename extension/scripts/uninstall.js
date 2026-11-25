@@ -25,6 +25,16 @@ const STATUSLINE_MARKER = 'agent-flow/statusline-shim.js';
 const AF_HOME = path.join(os.homedir(), '.agent-flow');
 const STATUSLINE_RECORD = path.join(AF_HOME, 'statusline-original.json');
 const LIMITS_FILE = path.join(AF_HOME, 'limits', 'claude.json');
+const LIMITS_HISTORY_FILE = path.join(AF_HOME, 'limits', 'claude-history.json');
+
+// A settings.json that is a symlink (stow, chezmoi, home-manager) is written THROUGH: tmp + rename next to the real
+// target, so the link stays a link. A link that cannot be followed is left alone (null).
+function writeTarget(file) {
+  try {
+    if (fs.lstatSync(file).isSymbolicLink()) { return fs.realpathSync(file); }
+  } catch { return null; }
+  return file;
+}
 
 function isPlainObject(v) { return !!v && typeof v === 'object' && !Array.isArray(v); }
 
@@ -39,9 +49,10 @@ function deepEqual(a, b) {
 
 // ─── Restore the user's statusLine ──────────────────────────────────────────
 
-function restoreStatusLine(settingsPath) {
+function restoreStatusLine(linkPath) {
   try {
-    if (!fs.existsSync(settingsPath)) { return; }
+    const settingsPath = writeTarget(linkPath);
+    if (!settingsPath || !fs.existsSync(settingsPath)) { return; }
     const raw = fs.readFileSync(settingsPath, 'utf-8');
     const settings = JSON.parse(raw);
     if (!isPlainObject(settings)) { return; }
@@ -59,7 +70,7 @@ function restoreStatusLine(settingsPath) {
       delete settings.statusLine; // there was none, or the original is unknown: a call to a deleted script would only error
     }
 
-    if (Object.keys(settings).length === 0 && recOk && rec.createdSettings === true) {
+    if (Object.keys(settings).length === 0 && recOk && rec.createdSettings === true && settingsPath === linkPath) {
       fs.unlinkSync(settingsPath);
       return;
     }
@@ -71,16 +82,17 @@ function restoreStatusLine(settingsPath) {
 }
 
 function removeStatusLineFiles() {
-  for (const f of [STATUSLINE_RECORD, LIMITS_FILE]) { try { fs.unlinkSync(f); } catch { /* not there */ } }
+  for (const f of [STATUSLINE_RECORD, LIMITS_FILE, LIMITS_HISTORY_FILE]) { try { fs.unlinkSync(f); } catch { /* not there */ } }
   try { fs.rmdirSync(path.dirname(LIMITS_FILE)); } catch { /* not empty or not there */ }
   try { fs.unlinkSync(path.join(os.homedir(), '.claude', 'settings.json.agent-flow.bak')); } catch { /* not there */ }
 }
 
 // ─── Remove hooks from a settings file ─────────────────────────────────────
 
-function removeHooksFromFile(settingsPath) {
+function removeHooksFromFile(linkPath) {
   try {
-    if (!fs.existsSync(settingsPath)) { return; }
+    const settingsPath = writeTarget(linkPath);
+    if (!settingsPath || !fs.existsSync(settingsPath)) { return; }
     const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
     const hooks = settings.hooks;
     if (!hooks || typeof hooks !== 'object') { return; }
@@ -108,11 +120,11 @@ function removeHooksFromFile(settingsPath) {
 
     if (Object.keys(hooks).length === 0) { delete settings.hooks; }
 
-    if (Object.keys(settings).length === 0) {
+    if (Object.keys(settings).length === 0 && settingsPath === linkPath) {
       fs.unlinkSync(settingsPath);
     } else {
       const tmpPath = `${settingsPath}.${process.pid}.tmp`;
-      fs.writeFileSync(tmpPath, JSON.stringify(settings, null, 2) + '\n');
+      fs.writeFileSync(tmpPath, JSON.stringify(settings, null, 2) + '\n', { mode: fs.statSync(settingsPath).mode & 0o777 });
       fs.renameSync(tmpPath, settingsPath);
     }
   } catch { /* best effort */ }

@@ -355,3 +355,101 @@ describe('statusLine installer: helpers', () => {
     assert.match(defaultManagedSettingsPaths('win32')[0], /ClaudeCode\\managed-settings\.json$/)
   })
 })
+
+describe('statusLine installer: symlinked settings.json and limits history (R2 M1, L1)', { skip: process.platform === 'win32' && 'POSIX symlinks and modes' }, () => {
+  /** $home/dotfiles/settings.json is the real file; $home/.claude/settings.json -> ../dotfiles/settings.json. */
+  function linked(text: string, fileMode = 0o640) {
+    const t = mk()
+    const target = path.join(t.home, 'dotfiles', 'settings.json')
+    fs.mkdirSync(path.dirname(target), { recursive: true })
+    fs.writeFileSync(target, text, { mode: fileMode }); fs.chmodSync(target, fileMode)
+    fs.mkdirSync(path.dirname(t.p.settings), { recursive: true })
+    fs.symlinkSync(path.join('..', 'dotfiles', 'settings.json'), t.p.settings)
+    return { ...t, target }
+  }
+  const isLink = (f: string) => fs.lstatSync(f).isSymbolicLink()
+
+  it('install writes through the link: it stays a link, the dotfiles target holds the wrapper, the mode is kept', () => {
+    const orig = { type: 'command', command: 'echo \"x|y\"', padding: 1 }
+    const raw = JSON.stringify({ hooks: HOOKS, statusLine: orig, model: 'm' }, null, 2) + '\n'
+    const t = linked(raw)
+    const r = installStatusLine(t.env)
+    assert.equal(r.ok && r.action, 'installed')
+    assert.equal(isLink(t.p.settings), true, 'still a symlink')
+    assert.equal(fs.readlinkSync(t.p.settings), path.join('..', 'dotfiles', 'settings.json'))
+    assert.equal(fs.lstatSync(t.target).isSymbolicLink(), false)
+    const after = JSON.parse(read(t.target))
+    assert.equal(isWrapperCommand(after.statusLine.command), true, 'the target holds the wrapper')
+    assert.equal(mode(t.target), 0o640)
+    assert.equal(read(t.p.backup), raw, 'backup is the byte-identical original')
+    assert.deepEqual(fs.readdirSync(path.dirname(t.target)), ['settings.json'], 'no tmp file left next to the target')
+  })
+
+  it('uninstall writes through too: link intact, target content deep-equal to the original', () => {
+    const orig = { type: 'command', command: 'echo \"x|y\"', padding: 1, extra: { a: [1, 2] } }
+    const original = { hooks: HOOKS, statusLine: orig, model: 'm' }
+    const t = linked(JSON.stringify(original, null, 2) + '\n')
+    assert.equal(installStatusLine(t.env).ok, true)
+    const u = uninstallStatusLine(t.env)
+    assert.equal(u.ok && u.action, 'uninstalled')
+    assert.equal(isLink(t.p.settings), true, 'still a symlink after uninstall')
+    assert.ok(deepEqual(JSON.parse(read(t.target)), original), 'round-trips deep-equal')
+    assert.equal(mode(t.target), 0o640)
+    for (const f of [t.p.shim, t.p.record, t.p.backup]) assert.equal(fs.existsSync(f), false, path.basename(f))
+  })
+
+  it('a link without a statusLine round-trips too (key removed again)', () => {
+    const original = { model: 'm', env: { A: '1' } }
+    const t = linked(JSON.stringify(original) + '\n')
+    assert.equal(installStatusLine(t.env).ok, true)
+    assert.equal(isLink(t.p.settings), true)
+    assert.equal(uninstallStatusLine(t.env).ok, true)
+    assert.equal(isLink(t.p.settings), true)
+    assert.ok(deepEqual(JSON.parse(read(t.target)), original))
+  })
+
+  it('a dangling link is refused and nothing changes (the link is not replaced)', () => {
+    const t = mk()
+    fs.mkdirSync(path.dirname(t.p.settings), { recursive: true })
+    fs.symlinkSync(path.join('..', 'dotfiles', 'missing.json'), t.p.settings)
+    const r = installStatusLine(t.env)
+    assert.equal(r.ok, false)
+    if (!r.ok) assert.equal(r.code, 'settings-unreadable')
+    assert.equal(isLink(t.p.settings), true)
+    assert.equal(fs.existsSync(path.join(t.home, 'dotfiles')), false)
+    for (const f of ours(t.home).slice(0, 3)) assert.equal(fs.existsSync(f), false, path.basename(f))
+  })
+
+  it('a link loop is refused', () => {
+    const t = mk()
+    fs.mkdirSync(path.dirname(t.p.settings), { recursive: true })
+    fs.symlinkSync('settings.json', t.p.settings)
+    const r = installStatusLine(t.env)
+    assert.equal(r.ok, false)
+    assert.equal(isLink(t.p.settings), true)
+  })
+
+  it('(L1) uninstall deletes the limits history file too, and the limits directory goes with it', () => {
+    const t = mk()
+    writeSettings(t.p, JSON.stringify({ model: 'm' }) + '\n')
+    assert.equal(installStatusLine(t.env).ok, true)
+    fs.mkdirSync(t.p.limitsDir, { recursive: true })
+    fs.writeFileSync(t.p.limits, '{\"v\":1}'); fs.writeFileSync(t.p.limitsHistory, '{\"v\":1,\"readings\":[]}')
+    assert.equal(uninstallStatusLine(t.env).ok, true)
+    assert.equal(fs.existsSync(t.p.limitsHistory), false, 'claude-history.json is gone')
+    assert.equal(fs.existsSync(t.p.limits), false)
+    assert.equal(fs.existsSync(t.p.limitsDir), false, 'the limits directory could be removed')
+  })
+
+  it('(L1) the history is also removed when the statusLine no longer points to Agent Flow (left-alone path)', () => {
+    const t = mk()
+    writeSettings(t.p, JSON.stringify({ model: 'm' }) + '\n')
+    assert.equal(installStatusLine(t.env).ok, true)
+    fs.mkdirSync(t.p.limitsDir, { recursive: true })
+    fs.writeFileSync(t.p.limitsHistory, '{\"v\":1,\"readings\":[]}')
+    fs.writeFileSync(t.p.settings, JSON.stringify({ statusLine: { type: 'command', command: 'mine' } }))
+    const u = uninstallStatusLine(t.env)
+    assert.equal(u.ok && u.action, 'left-alone')
+    assert.equal(fs.existsSync(t.p.limitsHistory), false)
+  })
+})

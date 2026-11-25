@@ -175,8 +175,9 @@ export const TopBar = memo(function TopBar({
           )}
         </span>
 
-        {/* Mutually exclusive panel group */}
-        <div className="flex items-center gap-1 px-1 py-0.5 rounded" style={{
+        {/* Mutually exclusive panel group. It wraps (and may not exceed the bar) so a wide limits chip drops to a second
+            line instead of pushing Files / Chat off the left edge at phone width. */}
+        <div className="flex min-w-0 max-w-full flex-wrap items-center gap-1 px-1 py-0.5 rounded" style={{
           background: COLORS.holoBg03,
           border: `1px solid ${COLORS.holoBorder06}`,
         }}>

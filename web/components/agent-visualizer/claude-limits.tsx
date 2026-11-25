@@ -98,10 +98,10 @@ export function ClaudeLimitsSection({ view: given }: { view?: ObservedLimitsView
           <p style={{ margin: '0 0 4px' }}>Until then the 5-hour and weekly values are estimated from this machine only, which is a lower bound.</p>
           <p style={{ margin: '0 0 4px' }}>
             Agent Flow can read the usage percentages Claude Code already computes. It chains your status line command (yours keeps running unchanged) and
-            saves only the 5-hour and weekly percentages with their reset times, the session id, the model id and a timestamp to <code>~/.agent-flow/limits/claude.json</code> (private file).
+            saves only the usage percentages and reset times of each limit window (5-hour, weekly and any other the meter reports), the session id, the model id and a timestamp to <code>~/.agent-flow/limits/claude.json</code>, plus a short history of those readings in <code>claude-history.json</code> next to it (private files).
             No prompts or transcripts.
           </p>
-          <p style={{ margin: '0 0 6px', color: COLORS.textMuted }}>You can remove it at any time and your original status line comes back exactly. If it cannot chain your status line safely it does nothing.</p>
+          <p style={{ margin: '0 0 6px', color: COLORS.textMuted }}>You can remove it at any time and your original status line comes back (same content) and both files are deleted. If it cannot chain your status line safely it does nothing.</p>
           {view.canInstall && (
             <button type="button" data-testid="limits-install" disabled={busy !== null} onClick={() => run('install')} style={{ ...buttonStyle, opacity: busy ? 0.5 : 1 }}>
               {busy === 'install' ? 'Waiting for confirmation…' : 'Install wrapper…'}
