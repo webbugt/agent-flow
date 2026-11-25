@@ -387,6 +387,8 @@ const DISCOVER_EVERY_MS = 5000
 const TITLE_RETRY_MS = 15_000
 /** How long a new session waits for its title before it gets a tag name */
 const TITLE_WAIT_MS = 45_000
+/** How far back the time base of a session moves to fit its replayed backlog rows. */
+const BACKLOG_SPAN_MS = 60 * 60_000
 const UNTAGGED = 'untagged'
 
 /** Read new complete lines from a tail. Keeps bytes, so multi-byte characters split across reads survive. */
@@ -700,6 +702,7 @@ export class HermesLogWatcher {
     if (!this.transcriptFor || s.sid === UNTAGGED) return
     const batch = this.transcriptFor(p.dbFile, s.sid, s.transcript?.cursor)
     if (!batch) return
+    const firstRead = !s.transcript
     const tr: NonNullable<SessionState['transcript']> = s.transcript ?? (s.transcript = { cursor: batch.lastId, calls: new Map() })
     tr.cursor = Math.max(tr.cursor, batch.lastId)
     // Sender and platform: the session's own row first, the profile's latest inbound message as a fallback.
@@ -712,14 +715,27 @@ export class HermesLogWatcher {
       origin,
     })
     if (items.length === 0) return
-    const time = this.elapsed(s, this.now())
+    // First sight replays the backlog. Stamping it all with the instant it was read piled every
+    // card on top of each other when a page loaded; the rows know when they happened, so the
+    // node's time base moves back to the first of them (at most BACKLOG_SPAN_MS) and each item
+    // keeps its own time. Later polls are live: they stay stamped at now.
+    if (firstRead) this.rebaseToBacklog(p, s, items)
+    const now = this.elapsed(s, this.now())
+    let last = 0
     for (const item of items) {
       // `at` (epoch ms of the Hermes message row) is passed through for the detail views.
       const at = item.at !== undefined ? { at: item.at } : {}
+      // The backlog already happened: the page applies it as a snapshot, not as live activity.
+      const past = firstRead ? { history: true as const } : {}
+      // Monotonic and never later than now (a row stamped after the clock, or none at all).
+      const time = firstRead && item.at !== undefined
+        ? (last = Math.max(last, Math.min(now, Math.max(0, (item.at - s.startedAt) / 1000))))
+        : now
       if (item.kind === 'message') {
         this.emitFor(p, s, agent => ({
           time,
           type: 'message',
+          ...past,
           payload: {
             agent, role: item.role, content: item.content, ...at,
             ...(item.sender ? { sender: item.sender } : {}),
@@ -731,6 +747,7 @@ export class HermesLogWatcher {
         this.emitFor(p, s, agent => ({
           time,
           type: 'tool_call_start',
+          ...past,
           payload: { agent, tool: item.tool, toolUseId, args: item.args, inputData: item.inputData, ...at },
         }))
       } else {
@@ -739,11 +756,25 @@ export class HermesLogWatcher {
         this.emitFor(p, s, agent => ({
           time,
           type: 'tool_call_end',
+          ...past,
           payload: { agent, tool, toolUseId, result: item.result, isError: item.isError, ...at },
         }))
       }
     }
     s.lastActivity = this.now()
+  }
+
+  /**
+   * Move a session's time base back to its first backlog row, so replayed rows keep their
+   * real spacing. Capped at BACKLOG_SPAN_MS (older rows land on the start). A node that was
+   * already announced is announced again with the new base (its spawn carries `startedAt`).
+   */
+  private rebaseToBacklog(p: ProfileState, s: SessionState, items: ReadonlyArray<{ at?: number }>): void {
+    let earliest = Infinity
+    for (const item of items) if (item.at !== undefined && item.at < earliest) earliest = item.at
+    if (!(earliest < s.startedAt)) return
+    s.startedAt = Math.max(earliest, s.startedAt - BACKLOG_SPAN_MS)
+    if (s.spawned) this.emitFor(p, s, () => ({ time: 0, type: 'agent_spawn', payload: this.spawnPayload(p, s) }))
   }
 
   /** Find or create the state for a Hermes session id within its profile. */
