@@ -2,6 +2,8 @@ import { useRef, useEffect, useCallback, type MutableRefObject } from 'react'
 import { Agent, ToolCallNode, Discovery, ANIM, NODE } from '@/lib/agent-types'
 import { SHOT_MODE } from '@/lib/shot-mode'
 import { cloudGeometries, type CloudView } from '@/lib/fleet/fleet-cloud-geometry'
+import { zoomAt } from '@/lib/fleet/fleet-camera'
+import { CAMERA } from '@/lib/canvas-constants'
 import { BUBBLE_HOLD, BUBBLE_FADE_OUT, BUBBLE_MAX_W, TOOL_CARD_W, TOOL_CARD_H, DISC_BOUNDS_HALF_W, DISC_BOUNDS_HALF_H } from '@/lib/canvas-constants'
 
 /** Extra padding added to agent node radii for auto-fit bounding box */
@@ -34,6 +36,11 @@ interface CameraOptions {
   agentCount: number
   zoomToFitTrigger?: number
   selectedAgentId: string | null
+  /**
+   * Fleet map: selecting a node neither focuses the camera on it nor re-engages auto-fit,
+   * so a click never undoes the user's zoom or pan.
+   */
+  fleetView?: boolean
 }
 
 export function useCanvasCamera({
@@ -44,6 +51,7 @@ export function useCanvasCamera({
   agentCount,
   zoomToFitTrigger,
   selectedAgentId,
+  fleetView = false,
 }: CameraOptions) {
   const transformRef = useRef<Transform>({ x: 0, y: 0, scale: 1 })
   const userHasNavigatedRef = useRef(false)
@@ -99,7 +107,7 @@ export function useCanvasCamera({
 
     // Determine focus scope: if a non-main agent is selected, focus on it + descendants
     let focusScope: Set<string> | null = null
-    if (selectedAgentId) {
+    if (selectedAgentId && !fleetView) {
       const selected = agents.get(selectedAgentId)
       if (selected && !selected.isMain) {
         focusScope = getDescendantIds(agents, selectedAgentId)
@@ -171,7 +179,7 @@ export function useCanvasCamera({
     }
     fitCacheRef.current = { agents, toolCalls, discoveries, selectedAgentId, result }
     return result
-  }, [getDescendantIds, drawPropsRef, simTimeRef])
+  }, [getDescendantIds, drawPropsRef, simTimeRef, fleetView])
 
   const doZoomToFit = useCallback(() => {
     userHasNavigatedRef.current = false
@@ -183,11 +191,21 @@ export function useCanvasCamera({
     if (zoomToFitTrigger && zoomToFitTrigger > 0) doZoomToFit()
   }, [zoomToFitTrigger, doZoomToFit])
 
-  // Re-engage auto-fit when selection changes
+  // Re-engage auto-fit when selection changes (not in the fleet map: a click keeps the user's view)
   useEffect(() => {
+    if (fleetView) return
     userHasNavigatedRef.current = false
     targetTransformRef.current = null
-  }, [selectedAgentId])
+  }, [selectedAgentId, fleetView])
+
+  /** Zoom by `factor` around the centre of the canvas (on-screen buttons). Counts as user navigation. */
+  const zoomBy = useCallback((factor: number) => {
+    userHasNavigatedRef.current = true
+    targetTransformRef.current = null
+    panVelocityRef.current = { vx: 0, vy: 0, active: false }
+    const { width, height } = drawPropsRef.current.dimensions
+    transformRef.current = zoomAt(transformRef.current, width / 2, height / 2, factor, { min: CAMERA.minZoom, max: CAMERA.maxZoom })
+  }, [drawPropsRef])
 
   const screenToCanvas = useCallback((screenX: number, screenY: number) => {
     const canvas = mainCanvasRef.current
@@ -245,6 +263,7 @@ export function useCanvasCamera({
     panVelocityRef,
     screenToCanvas,
     doZoomToFit,
+    zoomBy,
     updateCamera,
   }
 }

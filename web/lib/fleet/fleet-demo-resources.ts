@@ -85,3 +85,15 @@ export function addDemoEvent(src: FleetSources, kind: DemoEventKind, now: number
     }),
   }
 }
+
+/**
+ * Demo of a poll that brings NEW nodes: one new Kanban board and one new Supermemory namespace
+ * (new ids, higher node count). Used to show that a poll keeps the user's zoom.
+ */
+export function addDemoNodes(src: FleetSources, now: number, seq: number): FleetSources {
+  const profile = DEMO_PROFILES[seq % DEMO_PROFILES.length]
+  return {
+    kanban: [...src.kanban, board(`poll-${seq}`, `New board ${seq}`, now, [[profile, 'claimed', 3]], 3)],
+    supermemory: [...src.supermemory, space(`poll_ns_${seq}`, now, [[profile, 'store', 5]])],
+  }
+}

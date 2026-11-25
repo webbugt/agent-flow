@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { COLORS } from "@/lib/colors"
 import { Z, type SimulationEvent } from "@/lib/agent-types"
 import type { FleetInstance, FleetSelectionView, SessionLike } from "@/lib/fleet/fleet-model"
@@ -10,7 +10,8 @@ import { buildFleetGraph, EMPTY_GRAPH } from "@/lib/fleet/fleet-graph"
 import { inspectResource } from "@/lib/fleet/fleet-inspect"
 import { useFleetScene } from "@/hooks/use-fleet-scene"
 import { openTargetOf, type FleetReplay } from "@/hooks/simulation/fleet-scene"
-import { AgentCanvas } from "./canvas"
+import { BUTTON_ZOOM_STEP, shouldRefit, type FitBasis } from "@/lib/fleet/fleet-camera"
+import { AgentCanvas, type CanvasControls } from "./canvas"
 import { FleetInspector } from "./fleet-inspector"
 
 interface FleetMapProps {
@@ -40,6 +41,8 @@ interface FleetMapProps {
 
 const NARROW_WIDTH = 720
 const noop = () => {}
+/** Touch-friendly: at least 36 px on a phone. */
+const ZOOM_BUTTON_PX = 40
 
 /**
  * The Fleet node map. It draws with the same canvas as the single-session view: every agent
@@ -110,10 +113,26 @@ export function FleetMap({
     visible, sessions, eventsOf, instances, selection, graph, columns, tick, replay,
   })
 
-  // Re-fit the camera when the set of nodes or the free area changes (the user's own pan/zoom is kept otherwise).
-  const nodeKey = useMemo(() => [...scene.state.agents.keys()].sort().join('|'), [scene])
+  // Camera. Fit on first load and on real layout changes only (node count, or the free area changes
+  // by more than a threshold); node ids churning on polls and clock ticks never move the camera, and
+  // once the user zoomed or panned only the fit button / double click puts the whole map back.
+  const controlsRef = useRef<CanvasControls | null>(null)
+  const lastFitRef = useRef<FitBasis | null>(null)
   const [fitTrigger, setFitTrigger] = useState(0)
-  useEffect(() => { setFitTrigger(n => n + 1) }, [nodeKey, Math.round(freeW / 40), Math.round(freeH / 40)])
+  const nodeCount = scene.state.agents.size
+  useEffect(() => {
+    const next: FitBasis = { nodeCount, width: freeW, height: freeH }
+    const navigated = controlsRef.current?.hasNavigated() ?? false
+    if (!shouldRefit(lastFitRef.current, next, navigated)) return
+    lastFitRef.current = next
+    setFitTrigger(n => n + 1)
+  }, [nodeCount, freeW, freeH])
+  const zoomIn = () => controlsRef.current?.zoomBy(BUTTON_ZOOM_STEP)
+  const zoomOut = () => controlsRef.current?.zoomBy(1 / BUTTON_ZOOM_STEP)
+  const fitView = () => {
+    lastFitRef.current = { nodeCount, width: freeW, height: freeH }
+    controlsRef.current?.fit()
+  }
 
   // A node that left the map (deselected) cannot stay selected.
   useEffect(() => {
@@ -172,6 +191,8 @@ export function FleetMap({
           hoveredAgentId={hoveredId}
           showStats={false}
           showHexGrid
+          fleetView
+          controlsRef={controlsRef}
           zoomToFitTrigger={fitTrigger}
           onAgentClick={id => { if (id) open(id); else { setSelectedId(null); setInspectId(null) } }}
           onAgentHover={setHoveredId}
@@ -179,6 +200,34 @@ export function FleetMap({
           onContextMenu={noop}
           onToolCallClick={id => { if (id) open(id) }}
         />
+      </div>
+      {/* Zoom controls: bottom-left of the map area, clear of the timeline toggle (bottom-right) and the session detail. */}
+      <div
+        data-testid="fleet-zoom-controls"
+        className="absolute flex flex-col gap-1.5"
+        style={{ left: 12, bottom: bottom + 8, zIndex: 6 }}
+      >
+        {([
+          ['fleet-zoom-in', 'Zoom in', '+', zoomIn],
+          ['fleet-zoom-out', 'Zoom out', '\u2212', zoomOut],
+          ['fleet-zoom-fit', 'Fit to view', '\u2922', fitView],
+        ] as const).map(([testid, label, glyph, onClick]) => (
+          <button
+            key={testid}
+            type="button"
+            data-testid={testid}
+            aria-label={label}
+            title={label}
+            onClick={onClick}
+            className="font-mono rounded flex items-center justify-center select-none"
+            style={{
+              width: ZOOM_BUTTON_PX, height: ZOOM_BUTTON_PX, fontSize: 20, lineHeight: 1, touchAction: 'manipulation',
+              background: 'rgba(8,12,24,0.88)', border: `1px solid ${COLORS.holoBase}66`, color: COLORS.textPrimary,
+            }}
+          >
+            {glyph}
+          </button>
+        ))}
       </div>
       {inspection && (
         <FleetInspector inspection={inspection} now={now} top={top} right={insetRight} narrow={narrow}

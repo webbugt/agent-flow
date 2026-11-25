@@ -51,12 +51,26 @@ interface CanvasProps {
   onDiscoveryClick?: (discoveryId: string | null) => void
   selectedDiscoveryId?: string | null
   showCostOverlay?: boolean
+  /**
+   * Fleet map mode: the plain wheel zooms, a click on a node keeps the camera where it is.
+   * `controlsRef` is filled with the on-screen button actions.
+   */
+  fleetView?: boolean
+  controlsRef?: React.MutableRefObject<CanvasControls | null>
+}
+
+/** Camera actions for on-screen buttons. */
+export interface CanvasControls {
+  zoomBy: (factor: number) => void
+  fit: () => void
+  /** True once the user zoomed or panned (auto-fit is off until the next explicit fit). */
+  hasNavigated: () => boolean
 }
 
 export function AgentCanvas({
   simulationRef,
   selectedAgentId, hoveredAgentId, showStats, showHexGrid, zoomToFitTrigger, pauseAutoFit,
-  onAgentClick, onAgentHover, onAgentDrag, onContextMenu, onToolCallClick, selectedToolCallId, onDiscoveryClick, selectedDiscoveryId, showCostOverlay,
+  onAgentClick, onAgentHover, onAgentDrag, onContextMenu, onToolCallClick, selectedToolCallId, onDiscoveryClick, selectedDiscoveryId, showCostOverlay, fleetView = false, controlsRef,
 }: CanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const mainCanvasRef = useRef<HTMLCanvasElement>(null)
@@ -127,18 +141,24 @@ export function AgentCanvas({
   // ─── Camera ─────────────────────────────────────────────────────────────
   const {
     transformRef, userHasNavigatedRef, panVelocityRef,
-    screenToCanvas, doZoomToFit, updateCamera,
+    screenToCanvas, doZoomToFit, zoomBy, updateCamera,
   } = useCanvasCamera({
     mainCanvasRef, drawPropsRef, simTimeRef, dimensions,
-    agentCount: sim.agents.size, zoomToFitTrigger, selectedAgentId,
+    agentCount: sim.agents.size, zoomToFitTrigger, selectedAgentId, fleetView,
   })
+
+  useEffect(() => {
+    if (!controlsRef) return
+    controlsRef.current = { zoomBy, fit: doZoomToFit, hasNavigated: () => userHasNavigatedRef.current }
+    return () => { controlsRef.current = null }
+  }, [controlsRef, zoomBy, doZoomToFit, userHasNavigatedRef])
 
   // ─── Interaction ────────────────────────────────────────────────────────
   const {
     isDragging, handlers, updateDragLerp,
   } = useCanvasInteraction({
     drawPropsRef, transformRef, userHasNavigatedRef, panVelocityRef,
-    simTimeRef, screenToCanvas, doZoomToFit, mainCanvasRef,
+    simTimeRef, screenToCanvas, doZoomToFit, mainCanvasRef, wheelZooms: fleetView,
   })
 
   // Keep drawPropsRef in sync with interaction state

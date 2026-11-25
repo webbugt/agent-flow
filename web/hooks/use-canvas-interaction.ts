@@ -9,6 +9,7 @@ import {
 } from '@/components/agent-visualizer/canvas/index'
 import { findCostPillAt } from '@/lib/costs/overlay'
 import { getCostPillRects } from '@/lib/cost-overlay-store'
+import { FLEET_WHEEL_STEP, wheelZoomFactor, zoomAt } from '@/lib/fleet/fleet-camera'
 import type { Transform } from './use-canvas-camera'
 
 /** A cost pill under the pointer: the agent and the pill's rectangle in viewport (client) coordinates. */
@@ -44,6 +45,8 @@ interface InteractionOptions {
   screenToCanvas: (screenX: number, screenY: number) => { x: number; y: number }
   doZoomToFit: () => void
   mainCanvasRef: MutableRefObject<HTMLCanvasElement | null>
+  /** Fleet map: the plain scroll wheel zooms (centred on the pointer) instead of panning. */
+  wheelZooms?: boolean
 }
 
 export function useCanvasInteraction({
@@ -55,6 +58,7 @@ export function useCanvasInteraction({
   screenToCanvas,
   doZoomToFit,
   mainCanvasRef,
+  wheelZooms = false,
 }: InteractionOptions) {
   const [isDragging, setIsDragging] = useState(false)
   const isDraggingRef = useRef(false)
@@ -218,6 +222,15 @@ export function useCanvasInteraction({
   handleWheelRef.current = (e: WheelEvent) => {
     e.preventDefault()
     userHasNavigatedRef.current = true
+    if (wheelZooms) {
+      // Fleet map: wheel, ctrl+wheel and trackpad pinch (ctrl+wheel) all zoom around the pointer; drag pans.
+      const rect = mainCanvasRef.current?.getBoundingClientRect()
+      if (!rect) return
+      panVelocityRef.current = { vx: 0, vy: 0, active: false }
+      const factor = wheelZoomFactor(e.deltaY, e.deltaMode, FLEET_WHEEL_STEP)
+      transformRef.current = zoomAt(transformRef.current, e.clientX - rect.left, e.clientY - rect.top, factor, { min: CAMERA.minZoom, max: CAMERA.maxZoom })
+      return
+    }
     if (e.ctrlKey || e.metaKey) {
       const delta = e.deltaY > 0 ? CAMERA.zoomStepDown : CAMERA.zoomStepUp
       const rect = mainCanvasRef.current?.getBoundingClientRect()

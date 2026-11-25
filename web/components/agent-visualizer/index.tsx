@@ -20,7 +20,7 @@ import { FileAttentionPanel } from "./file-attention-panel"
 import { TimelinePanel } from "./timeline-panel"
 import { FleetTimelinePanel } from "./fleet-timeline-panel"
 import { FleetMap } from "./fleet-map"
-import { createDemoResources, addDemoEvent, type DemoEventKind } from "@/lib/fleet/fleet-demo-resources"
+import { createDemoResources, addDemoEvent, addDemoNodes, type DemoEventKind } from "@/lib/fleet/fleet-demo-resources"
 import { loadTimelineVisible, saveTimelineVisible, mapInsetBottom } from "@/lib/fleet/fleet-timeline-pref"
 import { useFleetSelection } from "@/hooks/use-fleet-selection"
 import { useFleetSources } from "@/hooks/use-fleet-sources"
@@ -124,9 +124,15 @@ export function AgentVisualizer() {
       const at = Date.now()
       setDemoSources(prev => addDemoEvent(prev, kind, at, seq))
     }
-    // Handle for the demo only (screenshots, manual checks): `__fleetDemo.emit('kanban' | 'memory')`.
-    const w = window as unknown as { __fleetDemo?: { emit: (kind: DemoEventKind) => void } }
-    w.__fleetDemo = { emit }
+    // A poll that brings new nodes (a new board and a new namespace): the user's zoom must survive it.
+    const poll = () => {
+      const seq = demoSeqRef.current++
+      const at = Date.now()
+      setDemoSources(prev => addDemoNodes(prev, at, seq))
+    }
+    // Handle for the demo only (screenshots, manual checks): `__fleetDemo.emit('kanban' | 'memory')`, `__fleetDemo.poll()`.
+    const w = window as unknown as { __fleetDemo?: { emit: (kind: DemoEventKind) => void; poll: () => void } }
+    w.__fleetDemo = { emit, poll }
     const timer = setInterval(() => emit(demoSeqRef.current % 2 ? 'kanban' : 'memory'), 20_000)
     return () => { clearInterval(timer); delete w.__fleetDemo }
   }, [bridge.useMockData, showFleet])
