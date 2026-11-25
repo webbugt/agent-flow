@@ -206,7 +206,8 @@ export const CONFIG_FIXTURES: Record<string, unknown> = {
   'C-invalid': { currency: { display: 3 }, pricing: { unknownModel: { policy: 'nonsense' } } },
   // A valid custom price: Sonnet at 4x the list price, so the change is visible at a glance (task P3)
   'C-custom-price': { schemaVersion: 1, pricing: { models: [{ match: { provider: 'anthropic', model: 'claude-sonnet-*' }, rate: { input: 12, output: 60, cacheRead: 1.2, cacheWrite5m: 15, cacheWrite1h: 24 } }] } },
-  'C-local-energy': { energy: { profiles: { ollama: { loadWatts: 220, idleWatts: 40 } }, tariff: { perKwh: 0.18 } } },
+  // Local box: 40 W idle / 220 W under load, marginal attribution, 0.18 per kWh (schema as in web/lib/costs/validate.ts)
+  'C-local-energy': { schemaVersion: 1, pricing: { providers: { ollama: { billing: 'local', energyProfile: 'box' } } }, energy: { profiles: { box: { powerW: { idle: 40, load: 220 }, throughput: { genTokPerSec: 40, prefillTokPerSec: 800 } } }, tariff: { currency: 'USD', flatPerKWh: 0.18 } } },
 }
 
 export const FIXTURE_IDS = [
@@ -438,6 +439,34 @@ export function appendHermesLines(m: Materialized, scenario: string, now = Date.
     const lines = hermesLiveLines(f, now)
     fs.appendFileSync(logFile, lines.join('\n') + '\n')
     n += lines.length
+  }
+  return n
+}
+
+/**
+ * Claude Code: the session watcher attaches to a transcript at its END and counts billed usage only for lines
+ * written afterwards (the prescan counts context tokens, not spend). So the one API-billed demo session (F-A) gets one
+ * more assistant turn once the app is up; its pill then shows a BILLED figure (`$0.0xx`, no tilde) instead of an
+ * estimate. Returns the number of lines appended.
+ */
+export function appendClaudeLiveLines(m: Materialized, scenario: string, now = Date.now()): number {
+  const { claude } = loadScenario(scenario)
+  let n = 0
+  for (const f of claude) {
+    if (f.id !== 'F-A') continue
+    const file = m.claudeFiles.find(p => p.endsWith(`${f.sessionId}.jsonl`))
+    if (!file) continue
+    const line = JSON.stringify({
+      sessionId: f.sessionId, cwd: m.workspace, version: 'fixture', gitBranch: 'main', type: 'assistant', uuid: `${f.sessionId}-live`,
+      timestamp: new Date(now).toISOString(),
+      message: {
+        id: `msg_${f.id.replace('-', '')}_live`, role: 'assistant', model: 'claude-sonnet-5-5',
+        content: [{ type: 'text', text: 'Synthetic live turn for F-A.' }],
+        usage: { input_tokens: 3_000, output_tokens: 800, cache_read_input_tokens: 24_000, cache_creation_input_tokens: 1_500, cache_creation: { ephemeral_5m_input_tokens: 1_500, ephemeral_1h_input_tokens: 0 } },
+      },
+    })
+    fs.appendFileSync(file, line + '\n')
+    n++
   }
   return n
 }

@@ -1,6 +1,6 @@
 "use client"
 
-import { memo, useSyncExternalStore } from "react"
+import { memo, useLayoutEffect, useRef, useSyncExternalStore } from "react"
 import { Z } from "@/lib/agent-types"
 import { COLORS } from "@/lib/colors"
 import { formatTokens } from "@/lib/utils"
@@ -8,6 +8,7 @@ import { effectiveCosts } from "@/lib/costs/active"
 import { costToggleLabel, unitName } from "@/lib/costs/overlay"
 import { cycleOverlayUnit, getOverlayUnit, overlayUnitVersion, subscribeOverlayUnit } from "@/lib/cost-overlay-store"
 import { useActiveCostsVersion } from "@/hooks/use-costs-config"
+import { useViewportWidth } from "@/hooks/use-viewport-width"
 import { SessionTabs } from "./session-tabs"
 import type { SessionInfo, ConnectionStatus } from "@/lib/bridge-types"
 
@@ -127,11 +128,25 @@ export const TopBar = memo(function TopBar({
   useActiveCostsVersion()
   const cfg = effectiveCosts()
   const unit = getOverlayUnit()
+  const narrow = useViewportWidth(1280) < 640
+  // Publish the bar's bottom edge so panels below it (message card) never sit under a wrapped bar
+  const barRef = useRef<HTMLDivElement>(null)
+  useLayoutEffect(() => {
+    const el = barRef.current
+    if (!el) return
+    const publish = () => document.documentElement.style.setProperty('--af-top-bar-bottom', `${Math.ceil(el.getBoundingClientRect().bottom)}px`)
+    publish()
+    if (typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(publish)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
   return (
     // flex-wrap: on a narrow screen (phone, 390px) the controls drop to a second row instead
     // of running off the right edge, so Timeline / Fleet / mute stay reachable.
     <div
       data-testid="top-bar"
+      ref={barRef}
       className="absolute top-3 left-3 right-3 flex flex-wrap items-center gap-x-4 gap-y-1.5 font-mono text-[10px]"
       style={{ zIndex: Z.info }}
     >
@@ -181,13 +196,13 @@ export const TopBar = memo(function TopBar({
               <ToggleButton
                 active={false}
                 onClick={cycleOverlayUnit}
-                style={{ background: 'transparent', border: 'none', color: COLORS.complete }}
+                style={{ background: 'transparent', border: 'none', color: COLORS.complete, whiteSpace: 'nowrap' }}
                 testId="cost-unit-toggle"
               >
-                <span title="Switch the cost unit: money, kWh, tokens">unit: {unitName(unit)}</span>
+                <span title="Switch the cost unit: money, kWh, tokens">{narrow ? unitName(unit) : `unit: ${unitName(unit)}`}</span>
               </ToggleButton>
-              <ToggleButton active={false} onClick={onOpenCostSettings} style={{ background: 'transparent', border: 'none' }} testId="cost-settings-open">
-                <span title="Cost settings: prices, currency, exchange rate">⚙ prices</span>
+              <ToggleButton active={false} onClick={onOpenCostSettings} style={{ background: 'transparent', border: 'none', whiteSpace: 'nowrap' }} testId="cost-settings-open">
+                <span title="Cost settings: prices, currency, exchange rate" aria-label="Cost settings">{narrow ? '⚙' : '⚙ prices'}</span>
               </ToggleButton>
               {projectOverride && (
                 <span data-testid="cost-project-badge" title={projectOverrideTitle} style={{ color: '#ffcc66', border: '1px solid #ffcc6666', borderRadius: 4, padding: '0 4px', fontSize: 9 }}>

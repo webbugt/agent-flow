@@ -233,6 +233,19 @@ export function validatePlan(raw: unknown): ShotPlan {
   }
 }
 
+/** Page script: click the cost unit toggle (money -> kWh -> tokens -> money) until the stored unit is `unit`. */
+function TOGGLE_TO(unit: 'money' | 'kwh' | 'tokens'): string {
+  return `(async () => {
+    for (let i = 0; i < 4; i++) {
+      const cur = localStorage.getItem('agentFlow.costUnit') || 'money'
+      if (cur === ${JSON.stringify(unit)}) return cur
+      document.querySelector('[data-testid="cost-unit-toggle"]').click()
+      await new Promise(r => setTimeout(r, 120))
+    }
+    return localStorage.getItem('agentFlow.costUnit')
+  })()`
+}
+
 /** Built-in plans. `h0` is the harness self-test of task H0; `overlay` is what `pnpm shot:smoke` runs. */
 export const BUILTIN_PLANS: Record<string, ShotPlan> = {
   // Costs P3 hot-reload pair. Run with `--config C-default --start-index 3`. The second shot opens the page with the
@@ -248,6 +261,40 @@ export const BUILTIN_PLANS: Record<string, ShotPlan> = {
   overlay: {
     shots: [
       { name: 'cost-overlay', viewports: ['desktop', 'phone'], steps: [{ key: '$' }, { wait: 300 }] },
+    ],
+  },
+  // Costs P4: overlay per session kind (API / subscription / Copilot), provider tooltips, settings drawer, unit toggle.
+  // The drawer shots drive the real inputs (native setter + input event, as React expects) and the real Save button,
+  // so "settings-saved-eur" proves the whole path: drawer -> POST /costs-config -> file -> watcher -> overlay.
+  p4: {
+    shots: [
+      { name: 'overlay-api', viewports: ['desktop', 'phone'], steps: [{ key: '$' }, { wait: 300 }] },
+      { name: 'overlay-subscription-listequiv', viewports: ['desktop', 'phone'], steps: [{ click: 'text:Sub Demo' }, { wait: 500 }, { key: '$' }, { wait: 300 }] },
+      { name: 'overlay-copilot', viewports: ['desktop', 'phone'], steps: [{ click: 'text:Copilot Demo' }, { wait: 500 }, { key: '$' }, { wait: 300 }] },
+      { name: 'tooltip-api', viewports: ['desktop'], steps: [{ key: '$' }, { hover: 'pill:first' }, { wait: 300 }] },
+      { name: 'tooltip-subscription', viewports: ['desktop'], steps: [{ click: 'text:Sub Demo' }, { wait: 500 }, { key: '$' }, { hover: 'pill:first' }, { wait: 300 }] },
+      { name: 'tooltip-copilot', viewports: ['desktop'], steps: [{ click: 'text:Copilot Demo' }, { wait: 500 }, { key: '$' }, { hover: 'pill:first' }, { wait: 300 }] },
+      { name: 'tooltip-tap', viewports: ['phone'], steps: [{ click: 'text:Sub Demo' }, { wait: 500 }, { key: '$' }, { tap: 'pill:first' }, { wait: 300 }] },
+      { name: 'settings-drawer', viewports: ['desktop', 'phone'], steps: [{ key: '$' }, { config: 'C-custom-price' }, { wait: 7000 }, { click: '[data-testid="cost-settings-open"]' }, { waitFor: '[data-testid="costs-settings-drawer"]' }, { wait: 300 }] },
+      {
+        name: 'settings-drawer-error', viewports: ['desktop', 'phone'], steps: [
+          { key: '$' }, { click: '[data-testid="cost-settings-open"]' }, { waitFor: '[data-testid="costs-settings-drawer"]' },
+          { eval: `(() => { const el = document.querySelector('[data-testid="field-currency"]'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, 'EUR'); el.dispatchEvent(new Event('input', { bubbles: true })) })()` },
+          { wait: 400 },
+        ],
+      },
+      {
+        name: 'settings-saved-eur', viewports: ['desktop', 'phone'], steps: [
+          { key: '$' }, { click: '[data-testid="cost-settings-open"]' }, { waitFor: '[data-testid="costs-settings-drawer"]' },
+          { eval: `(() => { const set = (sel, v) => { const el = document.querySelector(sel); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, v); el.dispatchEvent(new Event('input', { bubbles: true })) }; set('[data-testid="field-currency"]', 'EUR'); setTimeout(() => set('[data-testid="field-fx"]', '0.92'), 50) })()` },
+          { wait: 500 }, { click: '[data-testid="costs-save"]' }, { waitFor: '[data-testid="costs-saved"]' }, { wait: 2500 },
+          { click: '[data-testid="costs-settings-close"]' }, { wait: 500 },
+        ],
+      },
+      // The unit choice is kept in localStorage and every shot reuses one Chrome profile, so each unit shot first clicks the
+      // real toggle until it reads the wanted unit (the click path is the thing being shown), whatever the previous shot left.
+      { name: 'unit-tokens', viewports: ['desktop', 'phone'], steps: [{ key: '$' }, { eval: TOGGLE_TO('tokens') }, { wait: 400 }] },
+      { name: 'unit-kwh-local', viewports: ['desktop', 'phone'], steps: [{ click: 'text:Local Demo' }, { wait: 500 }, { config: 'C-local-energy' }, { wait: 2500 }, { key: '$' }, { eval: TOGGLE_TO('kwh') }, { wait: 400 }] },
     ],
   },
   h0: {

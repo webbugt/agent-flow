@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url'
 const src = readFileSync(fileURLToPath(new URL('../../components/agent-visualizer/top-bar.tsx', import.meta.url)), 'utf8')
 
 test('top bar wraps on narrow screens so the Fleet toggle stays reachable', () => {
-  const bar = src.match(/data-testid="top-bar"\s+className="([^"]+)"/)
+  const bar = src.match(/data-testid="top-bar"[^>]*?\bclassName="([^"]+)"/)
   assert.ok(bar, 'top bar root has a test id')
   assert.match(bar![1], /\bflex-wrap\b/)
   assert.doesNotMatch(bar![1], /\bflex-nowrap\b/)
@@ -30,5 +30,11 @@ test('Fleet toggle is a button with a stable test id', () => {
 
 test('floating message card sits below the wrapped bar on small screens', () => {
   const feed = readFileSync(fileURLToPath(new URL('../../components/agent-visualizer/message-feed-panel.tsx', import.meta.url)), 'utf8')
-  assert.equal((feed.match(/max-sm:top-24/g) ?? []).length, 2, 'collapsed and expanded card both move down')
+  // The card no longer guesses "two rows" (a fixed max-sm:top-24): it sits under whatever height the bar really has.
+  // The bar publishes its bottom edge; both the collapsed and the expanded card use it, never below the old 3rem.
+  assert.doesNotMatch(feed, /max-sm:top-24/, 'no fixed phone offset left')
+  assert.match(feed, /const BELOW_TOP_BAR = 'max\(3rem, calc\(var\(--af-top-bar-bottom, 0px\) \+ 8px\)\)'/)
+  assert.equal((feed.match(/top: BELOW_TOP_BAR/g) ?? []).length, 2, 'collapsed and expanded card both use it')
+  assert.match(src, /setProperty\('--af-top-bar-bottom'/, 'the top bar publishes its bottom edge')
+  assert.match(src, /new ResizeObserver\(publish\)/, 'and keeps it current when the bar wraps or unwraps')
 })

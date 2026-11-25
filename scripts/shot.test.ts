@@ -9,7 +9,7 @@ import {
 } from './shot-lib'
 import {
   CLAUDE_SESSIONS, CONFIG_FIXTURES, FIXTURE_IDS, HERMES_SESSIONS, LIMITS_FIXTURES, SCENARIOS,
-  appendHermesLines, claudeTranscriptLines, encodeProjectDir, hermesLiveLines, loadScenario, materializeFixtures, rewriteConfigFixture,
+  appendClaudeLiveLines, appendHermesLines, claudeTranscriptLines, encodeProjectDir, hermesLiveLines, loadScenario, materializeFixtures, rewriteConfigFixture,
 } from './shot-fixtures'
 
 // ─── Argument parsing ───────────────────────────────────────────────────────
@@ -115,6 +115,15 @@ test('fixture ids F-A..F-H, L-1..L-4 and C-* all exist', () => {
   assert.deepEqual(Object.keys(CONFIG_FIXTURES), ['C-default', 'C-eur', 'C-invalid', 'C-custom-price', 'C-local-energy'])
 })
 
+test('every config fixture except C-invalid passes the real validator (a fixture that silently fails shows the error banner, not its feature)', async () => {
+  const { validateConfig } = await import('../web/lib/costs/validate')
+  for (const [id, doc] of Object.entries(CONFIG_FIXTURES)) {
+    const r = validateConfig(doc)
+    if (id === 'C-invalid') assert.equal(r.ok, false, 'C-invalid must stay invalid')
+    else assert.deepEqual(r.errors, [], `${id} has validation errors`)
+  }
+})
+
 test('the costs scenario has an API, a subscription, a Copilot, a local-model and a Fable session', () => {
   const { claude, hermes } = loadScenario('costs')
   const models = claude.flatMap(f => f.calls.map(c => c.model))
@@ -174,6 +183,11 @@ test('materializeFixtures writes transcripts, profile folders and state.db into 
     const n = appendHermesLines(m, 'costs')
     assert.equal(n, 14)
     assert.match(fs.readFileSync(m.hermesLogFiles[1], 'utf8'), /provider=/)
+    // One live Claude turn for the API-billed session F-A, with usage, so its pill can be billed rather than estimated
+    assert.equal(appendClaudeLiveLines(m, 'costs'), 1)
+    const fa = fs.readFileSync(m.claudeFiles[0], 'utf8').trim().split('\n').pop() as string
+    assert.equal(JSON.parse(fa).message.usage.output_tokens, 800)
+    assert.equal(appendClaudeLiveLines(m, 'hermes'), 0, 'a scenario without Claude fixtures appends nothing')
     assert.throws(() => materializeFixtures({ home, workspace, scenario: 'costs', limits: 'L-9' }), /unknown limits fixture/)
     assert.throws(() => materializeFixtures({ home, workspace, scenario: 'costs', config: 'C-9' }), /unknown config fixture/)
     // C-default and L-4 mean "no file"

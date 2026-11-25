@@ -21,7 +21,7 @@ import {
   ArgError, BUILTIN_PLANS, VIEWPORTS, assertAllowedPort, expandPlan, parseShotArgs, validatePlan,
   type ShotOptions, type ShotPlan, type Step, type Viewport,
 } from './shot-lib'
-import { appendHermesLines, loadScenario, materializeFixtures, resolveScenario, rewriteConfigFixture, type Materialized } from './shot-fixtures'
+import { appendClaudeLiveLines, appendHermesLines, loadScenario, materializeFixtures, resolveScenario, rewriteConfigFixture, type Materialized } from './shot-fixtures'
 
 const REPO = path.resolve(__dirname, '..')
 const APP_JS = path.join(REPO, 'app', 'dist', 'app.js')
@@ -463,6 +463,8 @@ export async function run(argv: string[]): Promise<number> {
     await sleep(1800)
     const appended = appendHermesLines(m, opts.scenario)
     if (appended > 0) log(`appended ${appended} Hermes log lines`)
+    const live = appendClaudeLiveLines(m, opts.scenario)
+    if (live > 0) log(`appended ${live} Claude transcript line(s)`)
     await sleep(opts.scenario === 'claude' ? 500 : 3000)
 
     const chromeDir = path.join(tmp, 'chrome')

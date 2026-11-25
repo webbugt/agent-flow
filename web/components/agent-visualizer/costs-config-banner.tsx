@@ -34,7 +34,8 @@ export function CostsConfigBanner({ status }: { status: CostsStatus }) {
       data-testid="costs-config-banner"
       className="absolute left-1/2 -translate-x-1/2 font-mono text-[11px] rounded"
       style={{
-        top: `calc(${narrow ? '4.6rem' : '3.25rem'} + env(safe-area-inset-top, 0px))`, width: 'min(640px, calc(100vw - 24px))', zIndex: Z.info + 1,
+        // just under the top bar, whatever number of rows it wrapped to (the bar publishes --af-top-bar-bottom)
+        top: `calc(max(${narrow ? '4.6rem' : '3.25rem'}, var(--af-top-bar-bottom, 0px) + 8px) + env(safe-area-inset-top, 0px))`, width: 'min(640px, calc(100vw - 24px))', zIndex: Z.info + 1,
         background: 'rgba(40, 10, 18, 0.92)', border: `1px solid ${COLORS.error}99`, color: '#ffd0d6',
         boxShadow: `0 0 18px ${COLORS.error}33`, padding: '8px 10px', backdropFilter: 'blur(8px)',
       }}

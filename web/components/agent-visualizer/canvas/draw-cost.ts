@@ -125,7 +125,8 @@ export function drawCostLabels(
     const g = pillGeometry(label, measureWith(ctx))
     const innerX = pillX + (COST_DRAW.pillPadding / 2)
     ctx.font = PILL_FONT
-    ctx.fillStyle = label.flavor === 'unpriced' || label.flavor === 'hidden' ? color : COLORS.costText
+    // the figure wears the flavor colour too, so the colour means the same on the pill, the panel and the tooltip
+    ctx.fillStyle = label.flavor === 'billed' ? COLORS.costText : color
     ctx.textAlign = 'left'
     ctx.textBaseline = 'middle'
     ctx.fillText(label.text, innerX, pillY + pillH / 2)

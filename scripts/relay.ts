@@ -148,10 +148,13 @@ function elapsed(sessionId?: string): number {
 function emitContextUpdate(agentName: string, session: WatchedSession, sessionId?: string) {
   const bd = session.contextBreakdown
   const total = bd.systemPrompt + bd.userMessages + bd.toolResults + bd.reasoning + bd.subagentResults
+  // Billed usage the ledger collected for this agent: without it the standalone app can only show a context-size estimate
+  // (the VS Code watcher's own emitContextUpdate has always included it).
+  const spend = session.spendByAgent.get(agentName)
   broadcastEvent({
     time: elapsed(sessionId),
     type: 'context_update',
-    payload: { agent: agentName, tokens: total, breakdown: { ...bd } },
+    payload: { agent: agentName, tokens: total, breakdown: { ...bd }, ...(spend ? { spend: { ...spend } } : {}) },
     sessionId,
   })
 }

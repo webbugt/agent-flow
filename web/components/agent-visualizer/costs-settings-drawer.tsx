@@ -95,7 +95,7 @@ export function CostsSettingsDrawer({ status, seenProviders, onClose }: CostsSet
       className="font-mono text-[11px]"
       style={{
         position: 'fixed', top: 0, right: 0, bottom: 0, width: 'min(420px, 100vw)', zIndex: Z.detailCard + 10, overflowY: 'auto',
-        background: 'rgba(8, 12, 24, 0.97)', borderLeft: `1px solid ${COLORS.glassBorder}`, boxShadow: '-8px 0 32px rgba(0,0,0,0.5)',
+        background: '#080c18', borderLeft: `1px solid ${COLORS.glassBorder}`, boxShadow: '-8px 0 32px rgba(0,0,0,0.5)',
         color: COLORS.textPrimary, padding: '12px 14px 80px',
       }}
     >
@@ -121,14 +121,14 @@ export function CostsSettingsDrawer({ status, seenProviders, onClose }: CostsSet
               style={{ ...inputStyle, ...(issuesAt(check.errors, FIELD.currency).length ? badStyle : {}), textTransform: 'uppercase' }} />
           </label>
           <label>{isUsd ? 'FX (not needed for USD)' : `1 USD = ? ${code}`}
-            <input aria-label="Exchange rate" data-testid="field-fx" inputMode="decimal" value={draft.fx} disabled={isUsd} placeholder="0.92"
+            <input aria-label="Exchange rate" data-testid="field-fx" inputMode="decimal" value={draft.fx} disabled={isUsd} placeholder="e.g. 0.92"
               onChange={e => edit(d => ({ ...d, fx: e.target.value }))}
               style={{ ...inputStyle, ...(issuesAt(check.errors, FIELD.fx(code)).length ? badStyle : {}) }} />
           </label>
         </div>
         <Err issues={[...issuesAt(check.errors, FIELD.currency), ...issuesAt(check.errors, '/currency/fx')]} />
         <label style={{ display: 'block', marginTop: 6 }}>Rate as of (YYYY-MM-DD, optional)
-          <input aria-label="Rate date" value={draft.fxAsOf} placeholder="2026-11-25" onChange={e => edit(d => ({ ...d, fxAsOf: e.target.value }))} style={inputStyle} />
+          <input aria-label="Rate date" value={draft.fxAsOf} placeholder="e.g. 2026-11-25" onChange={e => edit(d => ({ ...d, fxAsOf: e.target.value }))} style={inputStyle} />
         </label>
         <Err issues={issuesAt(check.errors, FIELD.fxAsOf)} />
         <p style={{ margin: '4px 0 0', color: COLORS.textMuted, fontSize: 9 }}>Rates are entered by hand; nothing is fetched. They are shown next to every converted figure.</p>
@@ -214,7 +214,7 @@ export function CostsSettingsDrawer({ status, seenProviders, onClose }: CostsSet
         </Section>
       )}
 
-      <div style={{ position: 'sticky', bottom: -80, marginTop: 8, padding: '10px 0', background: 'rgba(8, 12, 24, 0.97)', borderTop: `1px solid ${COLORS.glassBorder}` }}>
+      <div style={{ position: 'sticky', bottom: -80, marginTop: 8, padding: '10px 0', background: '#080c18', borderTop: `1px solid ${COLORS.glassBorder}` }}>
         {saveError && <p role="alert" data-testid="costs-save-error" style={{ margin: '0 0 6px', color: '#ff8896', fontSize: 10 }}>Could not save: {saveError}</p>}
         {saved && <p data-testid="costs-saved" style={{ margin: '0 0 6px', color: COLORS.complete, fontSize: 10 }}>Saved. The overlay now uses these values.</p>}
         {!check.ok && <p style={{ margin: '0 0 6px', color: '#ff8896', fontSize: 10 }}>{check.errors.length} problem{check.errors.length === 1 ? '' : 's'} to fix before saving.</p>}
