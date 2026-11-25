@@ -723,6 +723,8 @@ export class HermesLogWatcher {
           latencySeconds: ev.latencySeconds,
           // `in=` is the whole prompt (cache read and write included); newInput is clamped at 0, so keep the larger.
           promptTokens: Math.max(ev.inputTokens, ev.cacheReadTokens + ev.cacheWriteTokens),
+          // When the call ended (the log line's own time, else now): the plan-limit estimate needs it
+          atMs: lineMs ?? t,
         },
       )
       // Energy (P5): busy time of calls that may be local models, hour-bucketed and overlap-split per device.

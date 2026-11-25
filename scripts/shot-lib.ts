@@ -358,6 +358,29 @@ export const BUILTIN_PLANS: Record<string, ShotPlan> = {
       { name: 'limits-topbar', viewports: ['desktop', 'phone'], steps: [{ key: '$' }, { wait: 3000 }] },
     ],
   },
+  // Costs P6b: the LIMITS panel (bottom-right on desktop, a sheet above the control bar on a phone). Each run is one state; the
+  // panel is account-wide, so it is the same whichever session tab is selected. Runs (distinct --start-index each):
+  //   --scenario claude --limits L-1 --config C-limits   observed 5h / weekly, no Fable calls: NO Fable row
+  //   --scenario costs  --limits L-2 --config C-limits   observed rows + Fable row (estimate icon, typed-budget basis)
+  //   --scenario costs  --limits L-4 --config C-limits   estimates only: `est` tags, a tiny Fable value in per-mille
+  //   --scenario costs  --limits L-5 --config C-limits   calibrated against the reading history: `cal` tag, weekly-meter Fable basis
+  // The p6b_fable_tip / p6b_row_tip plans are for runs that have the element to hover (the harness cannot hover a missing one).
+  p6b: {
+    shots: [
+      { name: 'limits-panel', viewports: ['desktop', 'phone'], steps: [{ key: '$' }, { wait: 3500 }] },
+    ],
+  },
+  p6b_fable_tip: {
+    shots: [
+      { name: 'limits-fable-hover', viewports: ['desktop'], steps: [{ key: '$' }, { wait: 3500 }, { hover: '[data-testid="limits-row-fable"]' }, { wait: 400 }] },
+      { name: 'limits-fable-tap', viewports: ['phone'], steps: [{ key: '$' }, { wait: 3500 }, { tap: '[data-testid="limits-row-fable"]' }, { wait: 400 }] },
+    ],
+  },
+  p6b_row_tip: {
+    shots: [
+      { name: 'limits-5h-hover', viewports: ['desktop'], steps: [{ key: '$' }, { wait: 3500 }, { hover: '[data-testid="limits-row-5h"]' }, { wait: 400 }] },
+    ],
+  },
   h0: {
     shots: [
       { name: 'baseline-overlay-off', viewports: ['desktop'] },

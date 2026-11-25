@@ -107,12 +107,12 @@ test('validatePlan accepts a good plan and rejects bad ones', () => {
 
 // ─── Fixtures (H0-A3, H0-A6, H0-A7) ─────────────────────────────────────────
 
-test('fixture ids F-A..F-H, L-1..L-4 and C-* all exist', () => {
-  for (const id of ['F-A', 'F-B', 'F-C', 'F-D', 'F-E', 'F-F', 'F-G', 'F-H', 'L-1', 'L-2', 'L-3', 'L-4', 'C-default', 'C-eur', 'C-invalid', 'C-custom-price', 'C-local-energy']) {
+test('fixture ids F-A..F-H, L-1..L-5 and C-* all exist', () => {
+  for (const id of ['F-A', 'F-B', 'F-C', 'F-D', 'F-E', 'F-F', 'F-G', 'F-H', 'L-1', 'L-2', 'L-3', 'L-4', 'L-5', 'C-default', 'C-limits', 'C-eur', 'C-invalid', 'C-custom-price', 'C-local-energy']) {
     assert.ok(FIXTURE_IDS.includes(id), `missing fixture ${id}`)
   }
-  assert.deepEqual(Object.keys(LIMITS_FIXTURES), ['L-1', 'L-2', 'L-3', 'L-4'])
-  assert.deepEqual(Object.keys(CONFIG_FIXTURES), ['C-default', 'C-eur', 'C-invalid', 'C-custom-price', 'C-hide-subscription', 'C-project-override', 'C-broken-json', 'C-one-bad-rule', 'C-hand-edit', 'C-local-energy', 'C-local-energy-tou'])
+  assert.deepEqual(Object.keys(LIMITS_FIXTURES), ['L-1', 'L-2', 'L-3', 'L-4', 'L-5'])
+  assert.deepEqual(Object.keys(CONFIG_FIXTURES), ['C-default', 'C-eur', 'C-invalid', 'C-custom-price', 'C-limits', 'C-hide-subscription', 'C-project-override', 'C-broken-json', 'C-one-bad-rule', 'C-hand-edit', 'C-local-energy', 'C-local-energy-tou'])
 })
 
 test('every config fixture except C-invalid passes the real validator (a fixture that silently fails shows the error banner, not its feature)', async () => {
@@ -199,6 +199,16 @@ test('materializeFixtures writes transcripts, profile folders and state.db into 
     const home2 = path.join(tmp, 'home2')
     materializeFixtures({ home: home2, workspace, scenario: 'claude', limits: 'L-4', config: 'C-default' })
     assert.equal(fs.existsSync(path.join(home2, '.agent-flow')), false)
+    // L-5 (P6b) = reading history only: no limits file, no wrapper, a history file whose second reading is 1 minute old
+    const home3 = path.join(tmp, 'home3')
+    materializeFixtures({ home: home3, workspace, scenario: 'claude', limits: 'L-5', config: 'C-limits' })
+    assert.equal(fs.existsSync(path.join(home3, '.agent-flow', 'limits', 'claude.json')), false)
+    assert.equal(fs.existsSync(path.join(home3, '.claude', 'settings.json')), false)
+    const hist = JSON.parse(fs.readFileSync(path.join(home3, '.agent-flow', 'limits', 'claude-history.json'), 'utf8')) as { v: number; readings: { at: number; fiveHour: { usedPct: number } }[] }
+    assert.equal(hist.v, 1)
+    assert.deepEqual(hist.readings.map(r => r.fiveHour.usedPct), [10, 37])
+    assert.ok(hist.readings[1].at > hist.readings[0].at)
+    assert.equal(JSON.parse(fs.readFileSync(path.join(home3, '.agent-flow', 'costs.json'), 'utf8')).limits.claude.plan, 'max5x')
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true })
   }

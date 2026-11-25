@@ -2,12 +2,13 @@
  * Subscription-limit primitives (PLAN v1 3.3, v2 6.5): 5-hour window tracking, calibration of a
  * budget from observed (percentage, usage) pairs, and the Fable composition ratio. Pure.
  *
- * Out of scope here (task P6b): the Fable estimator with bounds, the weekly schedule with time
- * zones, counted-provider filtering, the observer that reads ~/.agent-flow/limits/claude.json.
+ * The Fable estimator lives in fable-estimate.ts, the per-call usage in limits-calls.ts and the panel's view model in
+ * limits-model.ts; the observed readings come from observed-limits.ts. This file has the window arithmetic (observed
+ * reset, configured weekly reset with a time zone, trailing 7 days) and the calibration of a budget from observed pairs.
  *
  * Every estimate is a LOWER BOUND: the local ledger sees only this machine's sessions.
  */
-import type { ClaudeFamilyName } from './types'
+import type { ClaudeFamilyName, ResetSchedule, Weekday } from './types'
 
 export const FIVE_HOURS_MS = 5 * 60 * 60 * 1000
 export const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000
@@ -17,7 +18,8 @@ export interface LimitWindow {
   start: number
   /** Exclusive end (ms epoch): a call exactly at `end` belongs to the NEXT window. */
   end: number
-  source: 'observed' | 'inferred' | 'trailing'
+  /** observed = the meter's own `resets_at`; schedule = the configured weekly reset; inferred = first call of the window; trailing = last 7 days */
+  source: 'observed' | 'schedule' | 'inferred' | 'trailing'
 }
 
 export interface WindowOptions {
@@ -47,12 +49,71 @@ export function currentFiveHourWindow(callTimes: readonly number[], opts: Window
   return { start, end: start + FIVE_HOURS_MS, source: 'inferred' }
 }
 
-/** Weekly window: `[resets_at - 7d, resets_at)` when observed, else the trailing 7 days (labelled as such). */
-export function weeklyWindow(now: number, observedResetsAt?: number | null): LimitWindow {
+/**
+ * Weekly window: `[resets_at - 7d, resets_at)` when observed (a future `resets_at` within 7 days), else the configured
+ * weekly reset (`schedule`: the next occurrence after `now`), else the trailing 7 days (labelled as such).
+ */
+export function weeklyWindow(now: number, observedResetsAt?: number | null, schedule?: ResetSchedule | null): LimitWindow {
   if (observedResetsAt !== undefined && observedResetsAt !== null && Number.isFinite(observedResetsAt) && observedResetsAt > now) {
     return { start: observedResetsAt - SEVEN_DAYS_MS, end: observedResetsAt, source: 'observed' }
   }
+  if (schedule) {
+    const end = nextWeeklyReset(now, schedule)
+    if (end !== null) return { start: end - SEVEN_DAYS_MS, end, source: 'schedule' }
+  }
   return { start: now - SEVEN_DAYS_MS, end: now, source: 'trailing' }
+}
+
+// ── weekly reset from a configured {dow, HH:MM, tz} ─────────────────────────
+
+const DOW_OF_UTC_DAY: readonly Weekday[] = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat']
+
+/** Offset of `tz` from UTC at `utcMs`, in ms (positive east of Greenwich). */
+function zoneOffsetMs(utcMs: number, tz: string): number {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: tz, hourCycle: 'h23', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', second: 'numeric',
+  }).formatToParts(utcMs)
+  const get = (t: string): number => Number(parts.find(p => p.type === t)?.value)
+  const asUtc = Date.UTC(get('year'), get('month') - 1, get('day'), get('hour') % 24, get('minute'), get('second'))
+  return asUtc - Math.floor(utcMs / 1000) * 1000
+}
+
+/** The instant at which the wall clock of `tz` shows y-m-d hh:mm (a time skipped by DST resolves to the instant after the gap). */
+function wallToUtc(y: number, m: number, d: number, hh: number, mm: number, tz: string): number {
+  const naive = Date.UTC(y, m - 1, d, hh, mm)
+  let guess = naive - zoneOffsetMs(naive, tz)
+  guess = naive - zoneOffsetMs(guess, tz)
+  return guess
+}
+
+/**
+ * The first weekly reset strictly after `now` for a schedule like `{ dow: 'thu', time: '09:00', tz: 'Europe/Zagreb' }`.
+ * Null when the schedule cannot be evaluated (unknown zone, malformed time).
+ */
+export function nextWeeklyReset(now: number, schedule: ResetSchedule): number | null {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(schedule.time)
+  if (!m) return null
+  const hh = Number(m[1]); const mm = Number(m[2])
+  if (hh > 23 || mm > 59) return null
+  try {
+    const local = new Date(now + zoneOffsetMs(now, schedule.tz))   // its UTC fields are the zone's wall-clock fields
+    const y = local.getUTCFullYear(); const mo = local.getUTCMonth(); const d = local.getUTCDate()
+    for (let i = 0; i <= 8; i++) {
+      const day = new Date(Date.UTC(y, mo, d + i))
+      if (DOW_OF_UTC_DAY[day.getUTCDay()] !== schedule.dow) continue
+      const t = wallToUtc(day.getUTCFullYear(), day.getUTCMonth() + 1, day.getUTCDate(), hh, mm, schedule.tz)
+      if (t > now) return t
+    }
+  } catch { return null }
+  return null
+}
+
+/** Nearest-rank percentile (PLAN v2 6.3): the value at rank ceil(p * n) of the ascending list, p in (0, 1]. NaN for an empty list. */
+export function nearestRank(sortedAsc: readonly number[], p: number): number {
+  const n = sortedAsc.length
+  if (n === 0) return NaN
+  const rank = Math.min(n, Math.max(1, Math.ceil(p * n - 1e-9)))
+  return sortedAsc[rank - 1]
 }
 
 /** Sum of `units` of calls inside `w` (start inclusive, end exclusive). */
@@ -88,6 +149,11 @@ export const KEEP_PAIRS = 10
  * least 5 points. Pairs restart at each window id; readings that moved less are folded into the next.
  */
 export function calibrationPairs(observations: readonly Observation[]): number[] {
+  return calibrationPairsAt(observations).map(x => x.b)
+}
+
+/** `calibrationPairs` with the time of the reading that closed each pair (oldest first). */
+export function calibrationPairsAt(observations: readonly Observation[]): { at: number; b: number }[] {
   const byWindow = new Map<string, Observation[]>()
   for (const o of observations) {
     if (![o.at, o.pct, o.units].every(Number.isFinite)) continue
@@ -107,7 +173,7 @@ export function calibrationPairs(observations: readonly Observation[]): number[]
       }
     }
   }
-  return out.sort((a, b) => a.at - b.at).map(x => x.b)
+  return out.sort((a, b) => a.at - b.at)
 }
 
 export function median(xs: readonly number[]): number {

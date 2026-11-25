@@ -23,6 +23,7 @@ import type { LimitsUpdatePayload, ObservedLimitWindow, ObservedWindowKind } fro
 import { inspectStatusLine, paths, type InstallerEnv } from './statusline-installer'
 import { LIMITS_FILE_VERSION } from './statusline-shim'
 import { createLogger } from './logger'
+import { HISTORY_FILE, HISTORY_SENT, readHistory, readingOf, recordReading } from './limits-history'
 
 const log = createLogger('Limits')
 
@@ -114,7 +115,9 @@ export interface BuildOptions {
 /** The `limits-update` payload for the current state of the files. Pure apart from reading them. */
 export function buildLimitsUpdate(opts: BuildOptions): LimitsUpdatePayload {
   const insp = inspectStatusLine(opts.env)
-  const parsed = readLimitsFile(paths(opts.env.home).limits)
+  const p = paths(opts.env.home)
+  const parsed = readLimitsFile(p.limits)
+  const history = readHistory(path.join(p.limitsDir, HISTORY_FILE)).slice(-HISTORY_SENT)
   const base: LimitsUpdatePayload = {
     version: 1, seq: opts.seq, provider: 'claude', source: 'statusline', canConfigure: opts.canConfigure,
     install: {
@@ -125,6 +128,7 @@ export function buildLimitsUpdate(opts: BuildOptions): LimitsUpdatePayload {
       ...(insp.warnings.length > 0 ? { warnings: insp.warnings } : {}),
     },
     observed: null,
+    ...(history.length > 0 ? { history } : {}),
   }
   if (parsed === null) return base
   if (!parsed.ok) return { ...base, fileError: parsed.error }
@@ -184,10 +188,23 @@ export class LimitsObserver {
     return this.last ?? this.refresh()
   }
 
+  /** Append the file's newest reading to the history (the shim keeps only the last one). A failure only costs history. */
+  private recordLatest(): void {
+    try {
+      const env = this.opts.env()
+      const p = paths(env.home)
+      const parsed = readLimitsFile(p.limits)
+      if (!parsed || !parsed.ok) return
+      const r = readingOf(parsed)
+      if (r) recordReading(path.join(p.limitsDir, HISTORY_FILE), r, (this.opts.now ?? Date.now)())
+    } catch { /* keep going without history */ }
+  }
+
   /** Re-read now (after an install, or on a poll tick); publishes only a real change. */
   refresh(): LimitsUpdatePayload {
     let next: LimitsUpdatePayload
     try {
+      this.recordLatest()
       next = buildLimitsUpdate({ env: this.opts.env(), now: (this.opts.now ?? Date.now)(), seq: this.seq + 1, canConfigure: this.opts.canConfigure })
     } catch (err) {
       log.warn('Could not read the limits state:', err instanceof Error ? err.message : 'unknown error')

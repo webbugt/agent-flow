@@ -37,6 +37,7 @@ import { MOCK_DURATION } from "@/lib/mock-scenario"
 import { MessageFeedPanel } from "./message-feed-panel"
 import { TopBar } from "./top-bar"
 import { CostsConfigBanner } from "./costs-config-banner"
+import { LimitsPanelHost } from "./limits-panel"
 import { useCostsConfig } from "@/hooks/use-costs-config"
 import { useLimitsFeed } from "@/hooks/use-limits"
 import { useAudioEffects } from "@/hooks/use-audio-effects"
@@ -325,6 +326,11 @@ export function AgentVisualizer() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agents, costsStatus.resolution, costUnit])
   const costSources = useMemo(() => describeSources(costsStatus.sources), [costsStatus.sources])
+  // The plan limits are one meter for the whole account: the LIMITS panel reads the ledger of EVERY session, not only the open tab.
+  const limitSessionIds = useMemo(
+    () => (bridge.useMockData ? [] : fleetSessions(bridgeSessions, getDismissedSessions()).map(s => s.id)),
+    [bridge.useMockData, bridgeSessions, getDismissedSessions],
+  )
   const seenProviders = useMemo(() => {
     const out = new Set<string>()
     for (const a of agents.values()) if (a.spend?.provider) out.add(a.spend.provider)
@@ -633,6 +639,9 @@ export function AgentVisualizer() {
 
       {/* Costs config error banner (invalid ~/.agent-flow/costs.json etc.) */}
       <CostsConfigBanner status={costsStatus} />
+
+      {/* LIMITS panel: observed 5h / weekly, estimates with tags, and the Fable estimate when Fable was used this week */}
+      <LimitsPanelHost sessionIds={limitSessionIds} eventsOf={getSessionEvents} />
 
       {/* Cost settings drawer: prices per provider/model, currency and FX (writes the user costs.json) */}
       {showCostSettings && (

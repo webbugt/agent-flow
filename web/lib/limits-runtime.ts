@@ -3,7 +3,7 @@
  * extension or relay), checked field by field. A malformed message is ignored and the previous state stays; the
  * newest valid message wins (a restarted host starts `seq` over, like the costs config).
  */
-import type { LimitsUpdatePayload, ObservedLimitWindow, ObservedWindowKind } from './costs/observed-types'
+import type { LimitsUpdatePayload, ObservedLimitWindow, ObservedReading, ObservedWindowKind } from './costs/observed-types'
 
 let current: LimitsUpdatePayload | null = null
 const listeners = new Set<() => void>()
@@ -24,6 +24,24 @@ function parseWindow(v: unknown): ObservedLimitWindow | null {
   const resetsAt = v.resetsAt === null ? null : num(v.resetsAt) && v.resetsAt > 0 ? v.resetsAt : undefined
   if (usedPct === undefined || resetsAt === undefined) return null
   return { key: v.key, kind: v.kind as ObservedWindowKind, usedPct, resetsAt, state: v.state as ObservedLimitWindow['state'] }
+}
+
+function parseReadingWindow(v: unknown): { usedPct: number; resetsAt: number } | undefined {
+  return isObj(v) && num(v.usedPct) && v.usedPct >= 0 && v.usedPct <= 1000 && num(v.resetsAt) && v.resetsAt > 0 ? { usedPct: v.usedPct, resetsAt: v.resetsAt } : undefined
+}
+
+/** Readings that do not have the expected shape are dropped one by one (a bad one never hides the others). */
+function parseHistory(v: unknown): ObservedReading[] | undefined {
+  if (!Array.isArray(v)) return undefined
+  const out: ObservedReading[] = []
+  for (const r of v.slice(-200)) {
+    if (!isObj(r) || !num(r.at) || r.at <= 0) continue
+    const fiveHour = parseReadingWindow(r.fiveHour)
+    const sevenDay = parseReadingWindow(r.sevenDay)
+    if (!fiveHour && !sevenDay) continue
+    out.push({ at: r.at, ...(fiveHour ? { fiveHour } : {}), ...(sevenDay ? { sevenDay } : {}) })
+  }
+  return out.length > 0 ? out : undefined
 }
 
 /** The payload when it has the expected shape (strings cut to a sane length), else null. */
@@ -47,13 +65,14 @@ export function parseLimitsPayload(v: unknown): LimitsUpdatePayload | null {
     observed = { at: o.at, stale: o.stale, ...(modelId ? { modelId } : {}), windows: windows as ObservedLimitWindow[] }
   }
   const fileError = str(v.fileError, 200)
+  const history = parseHistory(v.history)
   return {
     version: 1, seq: v.seq, provider: 'claude', source: 'statusline', canConfigure: v.canConfigure,
     install: {
       state: i.state as LimitsUpdatePayload['install']['state'], canInstall: i.canInstall,
       ...(reason ? { reason } : {}), ...(code ? { code } : {}), ...(shadowedBy ? { shadowedBy } : {}), ...(warnings ? { warnings } : {}),
     },
-    observed, ...(fileError ? { fileError } : {}),
+    observed, ...(history ? { history } : {}), ...(fileError ? { fileError } : {}),
   }
 }
 

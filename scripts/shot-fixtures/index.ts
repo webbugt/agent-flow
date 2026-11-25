@@ -18,7 +18,7 @@
  *   F-F  Hermes, provider=ollama with latency= (one call straddling 22:00 local time)
  *   F-G  Hermes, unknown model acme-xyz-9
  *   F-H  Claude Code transcript with no usage reported (context-size estimate path)
- *   L-1..L-4  limits file variants (read by the app since P6a; see LIMITS_FIXTURES)
+ *   L-1..L-5  limits file variants (read by the app since P6a; L-5 = reading history only, P6b; see LIMITS_FIXTURES)
  *   C-default / C-eur / C-invalid / C-custom-price / C-local-energy / C-local-energy-tou  cost config variants (same note)
  *
  * Hermes watcher behaviour (H0-A7, verified in scripts/hermes-logs.ts `discover`):
@@ -221,12 +221,15 @@ export const HERMES_SESSIONS: HermesSessionFixture[] = [
  *   L-2  as L-1 (Fable used in the window; the Fable estimate arrives with P6b)
  *   L-3  stale reading (3 h old), wrapper installed: shows "as of HH:MM"
  *   L-4  no file, no wrapper: the opt-in prompt
+ *   L-5  no file and no wrapper, but a history of earlier readings (P6b): the meter has been seen before, so the
+ *        estimate is CALIBRATED (`cal`) against it. Two readings of the current 5-hour and weekly windows, 39 minutes apart.
  */
 export const LIMITS_FIXTURES: Record<string, unknown> = {
   'L-1': { five_hour: { used_percentage: 37 }, seven_day: { used_percentage: 4.2 }, fable_used: false },
   'L-2': { five_hour: { used_percentage: 37 }, seven_day: { used_percentage: 4.2 }, fable_used: true, fable_pairs: [[180, 190], [195, 200], [205, 210]], fable_u: 0.34 },
   'L-3': { five_hour: { used_percentage: 37 }, seven_day: { used_percentage: 4.2 }, fable_used: false, stale: true },
   'L-4': null,
+  'L-5': { historyOnly: true },
 }
 
 /** The shim's file for a limits fixture. `at` = when the reading was taken; resets are relative to `now`. */
@@ -239,9 +242,29 @@ export function limitsFileFor(fixture: unknown, now: number): Record<string, unk
     session_id: 'fixture-session',
     model: { id: 'claude-opus-5-5' },
     rate_limits: {
-      five_hour: { used_percentage: f.five_hour.used_percentage, resets_at: Math.floor((now + 95 * 60_000) / 1000) },
-      seven_day: { used_percentage: f.seven_day.used_percentage, resets_at: Math.floor((now + 3 * 86_400_000 + 4 * 3_600_000) / 1000) },
+      five_hour: { used_percentage: f.five_hour.used_percentage, resets_at: Math.floor(fiveHourReset(now) / 1000) },
+      seven_day: { used_percentage: f.seven_day.used_percentage, resets_at: Math.floor(sevenDayReset(now) / 1000) },
     },
+  }
+}
+
+/** Reset times of the fixture windows, relative to `now` (same as limitsFileFor). */
+const fiveHourReset = (now: number) => now + 95 * 60_000
+const sevenDayReset = (now: number) => now + 3 * 86_400_000 + 4 * 3_600_000
+
+/**
+ * The history file of L-5 (`claude-history.json`, numbers only): 10% -> 37% on the 5-hour meter and 1% -> 6.2% on the weekly
+ * one, the second reading one minute before `now`. The fixture sessions' calls are 2 minutes old, so every one of them
+ * falls between the two readings: the pair is (all local usage) per 27 points.
+ */
+export function limitsHistoryFor(now: number): { v: 1; readings: Record<string, unknown>[] } {
+  const w = (usedPct: number, resetsAt: number) => ({ usedPct, resetsAt })
+  return {
+    v: 1,
+    readings: [
+      { at: now - 40 * 60_000, fiveHour: w(10, fiveHourReset(now)), sevenDay: w(1, sevenDayReset(now)) },
+      { at: now - 60_000, fiveHour: w(37, fiveHourReset(now)), sevenDay: w(6.2, sevenDayReset(now)) },
+    ],
   }
 }
 
@@ -252,6 +275,9 @@ export const CONFIG_FIXTURES: Record<string, unknown> = {
   'C-invalid': { currency: { display: 3 }, pricing: { unknownModel: { policy: 'nonsense' } } },
   // A valid custom price: Sonnet at 6x the list in/out price (12/60 vs 2/10), so the change is visible at a glance (task P3)
   'C-custom-price': { schemaVersion: 1, pricing: { models: [{ match: { provider: 'anthropic', model: 'claude-sonnet-*' }, rate: { input: 12, output: 60, cacheRead: 1.2, cacheWrite5m: 15, cacheWrite1h: 24 } }] } },
+  // P6b: Claude Max 5x plan with typed budgets (list-equivalent USD per 100%). The anthropic provider (Claude Code transcripts) is
+  // declared a subscription, so those calls count toward the limits. Typed budgets give the `est` estimates and the Fable basis 3.
+  'C-limits': { schemaVersion: 1, pricing: { providers: { anthropic: { billing: 'subscription' } } }, limits: { claude: { plan: 'max5x', fiveHour: { budgetUsdEquiv: 8 }, weekly: { budgetUsdEquiv: 2000 } } } },
   // display.subscriptionValue = hide (Q10): subscription / credits money is not shown
   'C-hide-subscription': { schemaVersion: 1, display: { subscriptionValue: 'hide' } },
   // A PROJECT override (written to <workspace>/.agent-flow/costs.json, not ~/.agent-flow): Sonnet at 3x the list in/out price (6/30 vs 2/10).
@@ -502,7 +528,11 @@ export function materializeFixtures(opts: {
   }
 
   const af = path.join(opts.home, '.agent-flow')
-  if (opts.limits && LIMITS_FIXTURES[opts.limits] !== null) {
+  if (opts.limits === 'L-5') {
+    // History only: no limits file and no wrapper, but earlier readings are on disk (P6b calibration).
+    fs.mkdirSync(path.join(af, 'limits'), { recursive: true })
+    fs.writeFileSync(path.join(af, 'limits', 'claude-history.json'), JSON.stringify(limitsHistoryFor(now)) + '\n', { mode: 0o600 })
+  } else if (opts.limits && LIMITS_FIXTURES[opts.limits] !== null) {
     if (!(opts.limits in LIMITS_FIXTURES)) throw new Error(`unknown limits fixture ${opts.limits}`)
     fs.mkdirSync(path.join(af, 'limits'), { recursive: true })
     fs.writeFileSync(path.join(af, 'limits', 'claude.json'), JSON.stringify(limitsFileFor(LIMITS_FIXTURES[opts.limits], now), null, 2), { mode: 0o600 })

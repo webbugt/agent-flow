@@ -212,7 +212,7 @@ export class TranscriptParser {
 
     // Billed usage for spend tracking (each message id counted once)
     if (session && entry.type === 'assistant') {
-      recordAssistantUsage(session, agentName, msg, entry.uuid)
+      recordAssistantUsage(session, agentName, msg, entry.uuid, entry.timestamp)
     }
 
     // Extract model from assistant messages (updates tokensMax on the frontend).
@@ -667,7 +667,7 @@ export class TranscriptParser {
           }
           // Billed usage of messages written before the session was attached
           if (entry.type === 'assistant' && entry.message) {
-            recordAssistantUsage(session, ORCHESTRATOR_NAME, entry.message, entry.uuid)
+            recordAssistantUsage(session, ORCHESTRATOR_NAME, entry.message, entry.uuid, entry.timestamp)
           }
           // Extract model from first assistant message
           if (entry.type === 'assistant' && isRealModelId(entry.message?.model) && !session.model) {

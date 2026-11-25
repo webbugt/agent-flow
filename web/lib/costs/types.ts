@@ -163,6 +163,8 @@ export interface FableLimitConfig {
 export interface ClaudeLimitsConfig {
   /** null = not configured: no limit UI. */
   plan: ClaudePlan | null
+  /** User-visible plan name; null = the built-in label of `plan` (limits-plans.ts). */
+  planLabel: string | null
   planMultiplierOfPro: number | null
   fiveHour: BudgetSpec
   weekly: BudgetSpec & { resetsAt: ResetSchedule | null }

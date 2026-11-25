@@ -377,6 +377,7 @@ function parseResetSchedule(v: unknown, path: Path, I: Issues): ResetSchedule | 
 export function defaultLimits(): ClaudeLimitsConfig {
   return {
     plan: null,
+    planLabel: null,
     planMultiplierOfPro: null,
     fiveHour: { enabled: true, budgetUsdEquiv: null },
     weekly: { enabled: true, budgetUsdEquiv: null, resetsAt: null },
@@ -396,8 +397,12 @@ function parseClaudeLimits(v: unknown, path: Path, I: Issues): ClaudeLimitsConfi
   const out = defaultLimits()
   if (v === undefined) return out
   if (!isObj(v)) { I.err(path, 'must be an object'); return out }
-  warnUnknown(v, ['plan', 'planMultiplierOfPro', 'fiveHour', 'weekly', 'fable', 'weights', 'sources', 'countProviders'], path, I)
+  warnUnknown(v, ['plan', 'planLabel', 'planMultiplierOfPro', 'fiveHour', 'weekly', 'fable', 'weights', 'sources', 'countProviders'], path, I)
   if (v.plan !== undefined && v.plan !== null) { const p = oneOf<ClaudePlan>(v.plan, CLAUDE_PLANS, [...path, 'plan'], I); if (p) out.plan = p }
+  if (v.planLabel !== undefined && v.planLabel !== null) {
+    if (typeof v.planLabel === 'string' && v.planLabel.trim().length > 0 && v.planLabel.length <= 60) out.planLabel = v.planLabel.trim()
+    else I.err([...path, 'planLabel'], 'must be a non-empty text of at most 60 characters')
+  }
   if (v.planMultiplierOfPro !== undefined && v.planMultiplierOfPro !== null) {
     const n = num(v.planMultiplierOfPro, [...path, 'planMultiplierOfPro'], I, { min: 0, minExclusive: true, max: 1000 })
     if (n !== undefined) out.planMultiplierOfPro = n

@@ -31,6 +31,8 @@ export interface SpendTotals extends TokenCounts {
   provider?: string
   /** The same totals split by per-request prompt size; the buckets sum to the flat totals */
   byBucket?: Partial<Record<PromptBucket, TokenCounts>>
+  /** 10-minute buckets `<slot>|<provider>|<model>|<prompt bucket>` of the last 8 days (plan-limit estimate, P6b) */
+  byTime?: Record<string, TokenCounts>
   /** API calls counted into these totals */
   calls?: number
   /** Calls that reported a latency */

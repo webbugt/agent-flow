@@ -275,6 +275,7 @@
       "additionalProperties": false,
       "properties": {
         "plan": { "enum": ["pro", "max5x", "ultra", "custom", "api", null] },
+        "planLabel": { "type": ["string", "null"], "minLength": 1, "maxLength": 60 },
         "planMultiplierOfPro": { "type": ["number", "null"], "exclusiveMinimum": 0, "maximum": 1000 },
         "fiveHour": { "$ref": "#/$defs/budget" },
         "weekly": {

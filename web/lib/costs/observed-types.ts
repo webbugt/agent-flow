@@ -15,6 +15,13 @@ export interface ObservedLimitWindow {
   state: 'fresh' | 'stale' | 'expired'
 }
 
+/** One stored reading of the meter (numbers only; the estimate pairs it with the local usage at that time). Times are ms epoch. */
+export interface ObservedReading {
+  at: number
+  fiveHour?: { usedPct: number; resetsAt: number }
+  sevenDay?: { usedPct: number; resetsAt: number }
+}
+
 export interface LimitsUpdatePayload {
   version: 1
   seq: number
@@ -31,6 +38,8 @@ export interface LimitsUpdatePayload {
     warnings?: string[]
   }
   observed: null | { at: number; stale: boolean; modelId?: string; windows: ObservedLimitWindow[] }
+  /** Past readings (oldest first, at most 200). */
+  history?: ObservedReading[]
   fileError?: string
 }
 

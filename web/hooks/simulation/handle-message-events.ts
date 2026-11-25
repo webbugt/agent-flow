@@ -104,6 +104,24 @@ export function parseEnergy(raw: unknown): EnergyUsage | undefined {
   return n > 0 ? { v: 1, byHour } : undefined
 }
 
+const MAX_TIME_KEYS = 6000
+const TIME_KEY_RE = /^(\d{1,9})\|([^|]{1,80})\|([^|]{1,160})\|(le100000|le200000|le272000|gt272000)$/
+
+/** 10-minute usage buckets (P6b): keys must be `<slot>|<provider>|<model>|<bucket>`, counts finite and non-negative. */
+export function parseByTime(raw: unknown): NonNullable<SpendTotals['byTime']> | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined
+  const out: NonNullable<SpendTotals['byTime']> = Object.create(null)
+  let n = 0
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    if (!TIME_KEY_RE.test(k) || ++n > MAX_TIME_KEYS) continue
+    const c = parseCounts(v)
+    if (!c) continue
+    for (const f of Object.keys(c) as Array<keyof TokenCounts>) if (c[f] < 0) c[f] = 0
+    out[k] = c
+  }
+  return n > 0 ? { ...out } : undefined
+}
+
 /**
  * Validate the billed-usage totals sent with a context update: flat counts, model, and (P2) the
  * provider, the per-prompt-size buckets and the call/latency counters. Unknown bucket keys are dropped.
@@ -125,8 +143,10 @@ export function parseSpend(raw: unknown): SpendTotals | undefined {
   const timedCalls = optNum(r.timedCalls)
   const latencySeconds = optNum(r.latencySeconds)
   const energy = parseEnergy(r.energy)
+  const byTime = parseByTime(r.byTime)
   return {
     ...counts,
+    ...(byTime ? { byTime } : {}),
     ...(energy ? { energy } : {}),
     model: typeof r.model === 'string' ? r.model : undefined,
     ...(typeof r.provider === 'string' && r.provider ? { provider: r.provider } : {}),

@@ -63,6 +63,13 @@ export type ExtensionToWebviewMessage =
 
 export type ObservedWindowKind = 'five_hour' | 'seven_day' | 'other'
 
+/** One stored reading of the meter (numbers only; P6b calibration pairs it with the local usage at that time). Times are ms epoch. */
+export interface ObservedReading {
+  at: number
+  fiveHour?: { usedPct: number; resetsAt: number }
+  sevenDay?: { usedPct: number; resetsAt: number }
+}
+
 /** One window of the account's usage meter as Claude Code reported it (numbers only). */
 export interface ObservedLimitWindow {
   /** Key in Claude Code's `rate_limits` (`five_hour`, `seven_day`, ...). */
@@ -108,6 +115,8 @@ export interface LimitsUpdatePayload {
     modelId?: string
     windows: ObservedLimitWindow[]
   }
+  /** Past readings of the 5-hour and weekly meters (oldest first, at most 200): the pairs the estimate is calibrated on. */
+  history?: ObservedReading[]
   /** The limits file exists but cannot be used (not JSON, wrong version, too large). No content is quoted. */
   fileError?: string
 }
@@ -176,6 +185,8 @@ export interface TranscriptEntry {
   sessionId: string
   type: string
   uuid?: string
+  /** When the line was written (ISO 8601 text; Claude Code writes it on every line). */
+  timestamp?: string | number
   message: {
     role: string
     model?: string
@@ -364,6 +375,12 @@ export interface SpendTotals extends TokenCounts {
    * sum to the flat totals above. Absent when the ledger saw no per-request usage.
    */
   byBucket?: Partial<Record<PromptBucket, TokenCounts>>
+  /**
+   * The same usage in 10-minute buckets, keyed `<slot>|<provider>|<model>|<prompt bucket>` (slot = ms epoch / 600000),
+   * the last 8 days only. The plan-limit estimate (P6b) needs WHEN each call happened; the page prices it with the
+   * current config. Absent when the source reports no call times.
+   */
+  byTime?: Record<string, TokenCounts>
   /** API calls counted into these totals */
   calls?: number
   /** Calls that reported a latency (<= `calls`; Claude Code transcripts report none) */
