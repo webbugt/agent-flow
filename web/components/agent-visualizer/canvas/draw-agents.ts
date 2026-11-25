@@ -337,7 +337,7 @@ function drawStatsOverlay(ctx: CanvasRenderingContext2D, agent: Agent, r: number
  * Fleet map: a resource node (Kanban board = rounded square, Supermemory namespace = diamond),
  * in the same holographic style as the agent hexagons: glow sprite, dark interior, ring, label.
  */
-function drawResourceNode(ctx: CanvasRenderingContext2D, agent: Agent, isHovered: boolean, isSelected: boolean, time: number) {
+function drawResourceNode(ctx: CanvasRenderingContext2D, agent: Agent, isHovered: boolean, isSelected: boolean, time: number, drawLabels: boolean) {
   const color = agent.resourceKind === 'kanban' ? KANBAN_COLOR : SUPERMEMORY_COLOR
   const r = NODE.radiusSub
   const active = agent.state !== 'idle' && agent.state !== 'complete'
@@ -369,6 +369,7 @@ function drawResourceNode(ctx: CanvasRenderingContext2D, agent: Agent, isHovered
     ctx.stroke()
   }
 
+  if (!drawLabels) return
   drawAgentLabel(ctx, agent, r, isHovered)
   if (agent.task) {
     ctx.fillStyle = COLORS.textMuted
@@ -386,12 +387,14 @@ export function drawAgents(
   hoveredAgentId: string | null,
   showStats: boolean,
   time: number,
+  /** False on the fleet map: its labels are drawn afterwards by drawFleetLabels (sized for the screen). */
+  drawLabels = true,
 ) {
   for (const [id, agent] of agents) {
     if (agent.resourceKind) {
       ctx.save()
       ctx.globalAlpha = agent.opacity
-      drawResourceNode(ctx, agent, id === hoveredAgentId, id === selectedAgentId, time)
+      drawResourceNode(ctx, agent, id === hoveredAgentId, id === selectedAgentId, time, drawLabels)
       ctx.restore()
       continue
     }
@@ -427,7 +430,7 @@ export function drawAgents(
       drawWaitingRipples(ctx, agent, r, color, time)
     }
 
-    drawAgentLabel(ctx, agent, r, isHovered)
+    if (drawLabels) drawAgentLabel(ctx, agent, r, isHovered)
 
     // Context composition — ring for main agent, bar for sub-agents
     if (agent.state !== 'complete' || agent.opacity > 0.5) {

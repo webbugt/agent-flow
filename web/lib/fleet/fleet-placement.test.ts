@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import { strict as assert } from 'node:assert'
-import { placeBlob, placeResources, hashString, type BlobUnit, type PlacementCloud } from './fleet-placement'
+import { placeBlob, placeResources, hashString, clearOfCaption, CAPTION_HALF_WIDTH, CAPTION_HEIGHT, type BlobUnit, type PlacementCloud } from './fleet-placement'
 
 const units = (n: number, r = 80): BlobUnit[] => Array.from({ length: n }, (_, i) => ({ id: `s${i}`, radius: r }))
 
@@ -110,4 +110,27 @@ test('placeResources: deterministic, independent of the order of the input, no c
   const none = placeResources([], res)
   assert.equal(none.size, 3)
   for (const p of none.values()) assert.ok(Number.isFinite(p.x) && Number.isFinite(p.y))
+})
+
+test('placeResources: resources keep clear of the caption box under every halo', () => {
+  const resources = [
+    ...Array.from({ length: 8 }, (_, i) => ({ id: `kanban:r${i}`, links: [{ cloudId: 'cloud:a', weight: 1 + i }, { cloudId: 'cloud:b', weight: 2 }] })),
+    { id: 'supermemory:u1', links: [] }, { id: 'supermemory:u2', links: [] },
+  ]
+  const pos = placeResources(CLOUDS, resources)
+  for (const [id, p] of pos) {
+    for (const c of CLOUDS) {
+      const inX = p.x > c.x - CAPTION_HALF_WIDTH && p.x < c.x + CAPTION_HALF_WIDTH
+      const inY = p.y > c.y + c.r && p.y < c.y + c.r + CAPTION_HEIGHT
+      assert.ok(!(inX && inY), `${id} is inside the caption box of ${c.id}`)
+    }
+  }
+})
+
+test('clearOfCaption: a point inside the box leaves it, a clear point stays', () => {
+  const c: PlacementCloud = { id: 'c', x: 0, y: 0, r: 100 }
+  const inside = clearOfCaption({ x: 20, y: 120 }, c)
+  assert.ok(Math.abs(inside.x) > CAPTION_HALF_WIDTH || inside.y > 100 + CAPTION_HEIGHT || inside.y < 100, `${JSON.stringify(inside)}`)
+  const far = { x: 400, y: 400 }
+  assert.equal(clearOfCaption(far, c), far)
 })

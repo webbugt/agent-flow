@@ -1,11 +1,12 @@
 import type { Agent, Edge } from '@/lib/agent-types'
-import { BEAM, ANIM } from '@/lib/agent-types'
+import { BEAM, ANIM, NODE } from '@/lib/agent-types'
 import { COLORS } from '@/lib/colors'
 import { alphaHex } from '@/lib/utils'
 import { MIN_VISIBLE_OPACITY } from '@/lib/canvas-constants'
 import { edgeAlpha } from '@/lib/fleet/fleet-edge-life'
 import type { CloudGeometry, CloudView } from '@/lib/fleet/fleet-cloud-geometry'
 import { pulseProgress, type FleetPulse } from '@/lib/fleet/fleet-pulses'
+import { LABEL_WIDTH_PX, LabelPlacer, fitText, labelScreenPx, type Rect } from '@/lib/fleet/fleet-labels'
 import { bezierPoint, computeControlPoints, drawTaperedBezier } from './draw-edges'
 
 /** Fleet map only: agent clouds, links from a cloud to a resource, and the dots on those links. */
@@ -36,7 +37,7 @@ export function fleetLinkEnds(
   return { fromX: cloud.x + (dx / d) * reach, fromY: cloud.y + (dy / d) * reach, toX: target.x, toY: target.y }
 }
 
-/** Soft halo and the profile name around each cloud. Drawn under the links and nodes. */
+/** Soft halo around each cloud. Drawn under the links and nodes. */
 export function drawClouds(
   ctx: CanvasRenderingContext2D, clouds: readonly CloudView[], geometries: ReadonlyMap<string, CloudGeometry>, time: number,
 ) {
@@ -61,13 +62,7 @@ export function drawClouds(
     ctx.arc(g.x, g.y, g.r * 0.96, 0, Math.PI * 2)
     ctx.stroke()
     ctx.setLineDash([])
-    // The caption sits under the halo.
-    const k = overviewBoost(ctx)
-    ctx.font = `600 ${Math.round(13 * k)}px monospace`
-    ctx.textAlign = 'center'
-    ctx.textBaseline = 'top'
-    ctx.fillStyle = cloud.color + alphaHex(active ? 0.95 : 0.75)
-    ctx.fillText(cloud.label, g.x, g.y + g.r + 6 * k)
+    // The profile caption is drawn by drawFleetLabels: on top of the nodes, sized for the screen.
     ctx.restore()
   }
 }
@@ -138,4 +133,110 @@ export function drawPulses(
     ctx.fill()
     ctx.restore()
   }
+}
+
+/** Camera zoom (screen px per world unit) from the current canvas transform. */
+export function currentZoom(ctx: CanvasRenderingContext2D): number {
+  const dpr = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1
+  const zoom = ctx.getTransform().a / dpr
+  return zoom > 0 && Number.isFinite(zoom) ? zoom : 1
+}
+
+interface LabelJob {
+  text: string
+  x: number
+  /** Top of the text, world units. */
+  y: number
+  nominalPx: number
+  minPx?: number
+  maxPx?: number
+  /** Widest it may be on the screen; undefined = whole text. */
+  widthPx?: number
+  color: string
+  weight: '400' | '600'
+  /** Other spots to try, in order, when the first is taken: above the node, or beside it. */
+  alt?: { aboveBottom: number; sideX: number; centreY: number }
+}
+
+/** Draws one label if it fits; returns the world rect it took (also when `force`d), or null when skipped. */
+function drawLabelJob(ctx: CanvasRenderingContext2D, placer: LabelPlacer, job: LabelJob, zoom: number, force: boolean): Rect | null {
+  const px = labelScreenPx(job.nominalPx, zoom, job.minPx, job.maxPx)
+  const fontWorld = px / zoom
+  ctx.font = `${job.weight} ${fontWorld}px monospace`
+  const text = job.widthPx === undefined || force
+    ? job.text
+    : fitText(job.text, job.widthPx / zoom, s => ctx.measureText(s).width)
+  const w = ctx.measureText(text).width
+  const h = fontWorld * 1.25
+  const spots: Array<{ x: number; y: number }> = [{ x: job.x, y: job.y }]
+  if (job.alt && !force) {
+    spots.push({ x: job.x, y: job.alt.aboveBottom - h })
+    spots.push({ x: job.alt.sideX + w / 2, y: job.alt.centreY - h / 2 })
+    spots.push({ x: 2 * job.x - job.alt.sideX - w / 2, y: job.alt.centreY - h / 2 })
+  }
+  let rect: Rect | null = null
+  for (const spot of spots) {
+    const r: Rect = { x0: spot.x - w / 2, x1: spot.x + w / 2, y0: spot.y, y1: spot.y + h }
+    if (force) { placer.reserve(r); rect = r; break }
+    if (placer.tryPlace(r, 2 / zoom)) { rect = r; break }
+  }
+  if (!rect) return null
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'top'
+  ctx.fillStyle = job.color
+  ctx.fillText(text, (rect.x0 + rect.x1) / 2, rect.y0)
+  return rect
+}
+
+/**
+ * Fleet map labels: profile captions, resource names, session names and resource tasks, all sized for
+ * the screen (never below a legible minimum). Priority: captions, the selected / hovered node (full
+ * name), resources, then sessions. A label that would sit on another label or node is skipped, so
+ * a zoomed-out phone shows the captions and the names that fit instead of a smear of dashes.
+ */
+export function drawFleetLabels(
+  ctx: CanvasRenderingContext2D, clouds: readonly CloudView[], geometries: ReadonlyMap<string, CloudGeometry>,
+  agents: ReadonlyMap<string, Agent>, selectedId: string | null, hoveredId: string | null,
+) {
+  const zoom = currentZoom(ctx)
+  const gap = 8 / Math.min(zoom, 1)
+  const placer = new LabelPlacer()
+  ctx.save()
+  const radiusOf = (a: Agent) => (a.resourceKind ? NODE.radiusSub : a.isMain ? NODE.radiusMain : NODE.radiusSub) * a.scale
+  for (const a of agents.values()) {
+    if (a.opacity < MIN_VISIBLE_OPACITY) continue
+    const r = radiusOf(a)
+    placer.reserve({ x0: a.x - r, x1: a.x + r, y0: a.y - r, y1: a.y + r })
+  }
+
+  for (const cloud of clouds) {
+    const g = geometries.get(cloud.id)
+    if (!g) continue
+    drawLabelJob(ctx, placer, {
+      text: cloud.label, x: g.x, y: g.y + g.r + 6 / Math.min(zoom, 1), nominalPx: 13, minPx: 11, maxPx: 15, weight: '600',
+      color: cloud.color + alphaHex(cloud.status === 'active' ? 0.95 : 0.75),
+    }, zoom, true)
+  }
+
+  const labelled = [...agents.values()]
+    .filter(a => a.opacity >= MIN_VISIBLE_OPACITY && a.name)
+    .sort((a, b) => Number(!!b.resourceKind) - Number(!!a.resourceKind) || a.id.localeCompare(b.id))
+  const emphasised = (a: Agent) => a.id === selectedId || a.id === hoveredId
+  const draw = (a: Agent, force: boolean) => {
+    const rect = drawLabelJob(ctx, placer, {
+      text: a.name, x: a.x, y: a.y + radiusOf(a) + gap, nominalPx: 10, weight: '400',
+      alt: { aboveBottom: a.y - radiusOf(a) - gap, sideX: a.x + radiusOf(a) + 6 / Math.min(zoom, 1), centreY: a.y },
+      widthPx: a.resourceKind ? LABEL_WIDTH_PX.resource : LABEL_WIDTH_PX.session,
+      color: a.id === hoveredId ? COLORS.textPrimary : COLORS.textDim,
+    }, zoom, force)
+    if (rect && a.resourceKind && a.task) {
+      drawLabelJob(ctx, placer, {
+        text: a.task, x: (rect.x0 + rect.x1) / 2, y: rect.y1 + 3 / zoom, nominalPx: 9, maxPx: 12, weight: '400',
+        widthPx: LABEL_WIDTH_PX.task, color: COLORS.textMuted,
+      }, zoom, force)
+    }
+  }
+  for (const a of labelled) if (emphasised(a)) draw(a, true)
+  for (const a of labelled) if (!emphasised(a)) draw(a, false)
+  ctx.restore()
 }

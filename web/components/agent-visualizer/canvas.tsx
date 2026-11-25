@@ -6,6 +6,7 @@ import type { SimulationState } from '@/hooks/simulation/types'
 import { getStateColor } from '@/lib/colors'
 import { ANIM_SPEED, PERF_OVERLAY, PERF_OVERLAY_ENABLED } from '@/lib/canvas-constants'
 import { cloudGeometries } from '@/lib/fleet/fleet-cloud-geometry'
+import { LABEL_MIN_PX } from '@/lib/fleet/fleet-labels'
 import { BloomRenderer } from './bloom-renderer'
 import { createDepthParticles, updateDepthParticles, drawBackground } from './background-layer'
 import {
@@ -15,7 +16,7 @@ import {
   drawAgents,
   drawMessageBubblesWorld,
   drawEdges, getActiveEdgeIds,
-  drawClouds, drawFleetLinks, drawPulses,
+  drawClouds, drawFleetLabels, drawFleetLinks, drawPulses,
   drawParticles, buildEdgeMap,
   drawToolCalls,
   drawDiscoveries, drawDiscoveryConnections,
@@ -318,9 +319,10 @@ export function AgentCanvas({
       drawDiscoveryConnections(ctx, discoveries, agents)
       drawEdges(ctx, edges, agents, toolCalls, activeEdgeIds, timeRef.current)
       if (cloudGeoms) drawFleetLinks(ctx, edges, agents, cloudGeoms, wallNow)
-      drawToolCalls(ctx, toolCalls, timeRef.current, selectedToolCallId)
+      drawToolCalls(ctx, toolCalls, timeRef.current, selectedToolCallId, cloudGeoms ? LABEL_MIN_PX - 2 : 0)
       drawDiscoveries(ctx, discoveries, agents, selectedDiscoveryId)
-      drawAgents(ctx, agents, selectedAgentId, hoveredAgentId, showStats, timeRef.current)
+      drawAgents(ctx, agents, selectedAgentId, hoveredAgentId, showStats, timeRef.current, !cloudGeoms)
+      if (cloudGeoms && fleet.clouds) drawFleetLabels(ctx, fleet.clouds, cloudGeoms, agents, selectedAgentId, hoveredAgentId)
       drawMessageBubblesWorld(ctx, agents, simTimeRef.current)
       if (showCostOverlay) drawCostLabels(ctx, agents, toolCalls)
       drawParticles(ctx, particles, edgeMap, agents, toolCalls, timeRef.current)

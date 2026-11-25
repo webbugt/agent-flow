@@ -90,6 +90,37 @@ export interface PlacementCloud extends Point {
   r: number
 }
 
+/**
+ * Where a profile caption sits under its halo (world units, a generous allowance: the caption is sized
+ * for the screen, so how much world it covers depends on the zoom). Resources keep clear of this box.
+ */
+export const CAPTION_HALF_WIDTH = 200
+export const CAPTION_HEIGHT = 70
+/** Free space between a resource node and the caption box. */
+export const CAPTION_CLEARANCE = 110
+
+/** Moves `p` out of the caption box of cloud `c` (plus the clearance); unchanged when already clear. */
+export function clearOfCaption(p: Point, c: PlacementCloud, clearance: number = CAPTION_CLEARANCE): Point {
+  const x0 = c.x - CAPTION_HALF_WIDTH
+  const x1 = c.x + CAPTION_HALF_WIDTH
+  const y0 = c.y + c.r - 6
+  const y1 = c.y + c.r + CAPTION_HEIGHT
+  const cx = Math.min(Math.max(p.x, x0), x1)
+  const cy = Math.min(Math.max(p.y, y0), y1)
+  const d = Math.hypot(p.x - cx, p.y - cy)
+  if (d >= clearance) return p
+  if (d > 1e-6) return { x: cx + ((p.x - cx) / d) * clearance, y: cy + ((p.y - cy) / d) * clearance }
+  // Inside the box: leave by the nearest side.
+  const exits = [
+    { x: x0 - clearance, y: p.y, cost: p.x - x0 },
+    { x: x1 + clearance, y: p.y, cost: x1 - p.x },
+    { x: p.x, y: y1 + clearance, cost: y1 - p.y },
+    { x: p.x, y: y0 - clearance, cost: p.y - y0 },
+  ]
+  exits.sort((a, b) => a.cost - b.cost)
+  return { x: exits[0].x, y: exits[0].y }
+}
+
 export interface PlacementResource {
   id: string
   /** The clouds the resource is linked to, weight = event count. Unknown cloud ids are ignored. */
@@ -170,6 +201,7 @@ export function placeResources(
           const u = pushDir(id, c, p)
           p = { x: c.x + u.x * min, y: c.y + u.y * min }
         }
+        p = clearOfCaption(p, c)
       }
       pos.set(id, p)
     }
@@ -198,6 +230,7 @@ export function placeResources(
         const u = pushDir(id, c, p)
         p = { x: c.x + u.x * min, y: c.y + u.y * min }
       }
+      p = clearOfCaption(p, c)
     }
     pos.set(id, p)
   }

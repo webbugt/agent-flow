@@ -9,7 +9,16 @@ export function drawToolCalls(
   toolCalls: Map<string, ToolCallNode>,
   time: number,
   selectedToolCallId?: string | null,
+  /**
+   * Fleet map: do not draw card text that would be smaller than this on the screen (px); the card
+   * itself stays. 0 = always (single-session view).
+   */
+  minTextPx = 0,
 ) {
+  const dpr = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1
+  const zoom = ctx.getTransform().a / dpr
+  const textLegible = minTextPx <= 0 || !(zoom > 0) || TOOL_DRAW.fontSize * zoom >= minTextPx
+  const fill = (text: string, x: number, y: number) => { if (textLegible) ctx.fillText(text, x, y) }
   for (const [id, tool] of toolCalls) {
     const isRunning = tool.state === 'running'
     const isError = tool.state === 'error'
@@ -81,22 +90,22 @@ export function drawToolCalls(
 
     if (isRunning) {
       ctx.fillStyle = COLORS.tool
-      ctx.fillText(truncatedLabel, tool.x, tool.y)
+      fill(truncatedLabel, tool.x, tool.y)
     } else if (isError) {
       ctx.fillStyle = COLORS.error
-      ctx.fillText(truncateText(ctx, `${tool.toolName}: FAILED`, cardW - 8), tool.x, tool.y - TOOL_DRAW.twoLineOffset)
+      fill(truncateText(ctx, `${tool.toolName}: FAILED`, cardW - 8), tool.x, tool.y - TOOL_DRAW.twoLineOffset)
       ctx.font = `${TOOL_DRAW.errorFontSize}px monospace`
       ctx.fillStyle = COLORS.error + 'aa'
-      ctx.fillText(truncateText(ctx, tool.errorMessage || tool.result || '', cardW - 8), tool.x, tool.y + TOOL_DRAW.twoLineOffset + 2)
+      fill(truncateText(ctx, tool.errorMessage || tool.result || '', cardW - 8), tool.x, tool.y + TOOL_DRAW.twoLineOffset + 2)
     } else {
       // Completed card: show action + file path (most useful info at a glance)
       ctx.fillStyle = COLORS.return
-      ctx.fillText(truncatedLabel, tool.x, tool.y - TOOL_DRAW.twoLineOffset)
+      fill(truncatedLabel, tool.x, tool.y - TOOL_DRAW.twoLineOffset)
       if (tool.tokenCost) {
         // Token cost as dim text below
         ctx.fillStyle = COLORS.tool + '90'
         ctx.font = `${TOOL_DRAW.tokenFontSize}px monospace`
-        ctx.fillText(`${tool.tokenCost} tok`, tool.x, tool.y + TOOL_DRAW.twoLineOffset + 2)
+        fill(`${tool.tokenCost} tok`, tool.x, tool.y + TOOL_DRAW.twoLineOffset + 2)
       }
     }
 
