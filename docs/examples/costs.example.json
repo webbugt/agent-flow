@@ -1,0 +1,79 @@
+{
+  "schemaVersion": 1,
+  "currency": {
+    "display": "EUR",
+    "fx": { "EUR": 0.92 },
+    "fxAsOf": "2026-11-25"
+  },
+  "display": {
+    "unit": "auto",
+    "decimals": "auto",
+    "subscriptionValue": "show"
+  },
+  "pricing": {
+    "multiplier": 1,
+    "unknownModel": {
+      "policy": "global-rate",
+      "globalRate": { "input": 3, "output": 15 }
+    },
+    "providers": {
+      "anthropic": { "billing": "subscription" },
+      "copilot": { "billing": "credits", "implicitCacheWrite": true },
+      "ollama": { "billing": "local", "energyProfile": "workstation-gpu" }
+    },
+    "models": [
+      {
+        "match": { "model": "acme-xyz-*" },
+        "rate": { "input": 1.5, "output": 6, "cacheRead": 0.15 }
+      },
+      {
+        "match": { "model": "acme-long-*" },
+        "tiers": [
+          { "maxPromptTokens": 200000, "rate": { "input": 3, "output": 15 } },
+          { "rate": { "input": 6, "output": 22.5 } }
+        ]
+      },
+      {
+        "match": { "provider": "ollama", "model": "llama3*" },
+        "energyProfile": "workstation-gpu"
+      }
+    ]
+  },
+  "energy": {
+    "profiles": {
+      "workstation-gpu": {
+        "powerW": { "idle": 45, "load": 320 },
+        "throughput": { "genTokPerSec": 40, "prefillTokPerSec": 800 },
+        "pue": 1,
+        "attribution": "marginal"
+      }
+    },
+    "tariff": {
+      "currency": "EUR",
+      "flatPerKWh": 0.18,
+      "timeOfDay": [
+        {
+          "days": ["mon", "tue", "wed", "thu", "fri"],
+          "from": "22:00",
+          "to": "06:00",
+          "perKWh": 0.1
+        }
+      ],
+      "tz": "Europe/Zagreb"
+    }
+  },
+  "limits": {
+    "claude": {
+      "plan": "max5x",
+      "weekly": {
+        "resetsAt": { "dow": "thu", "time": "09:00", "tz": "Europe/Zagreb" }
+      },
+      "fable": {
+        "enabled": true,
+        "shareOfWeekly": { "lo": 0.5, "point": 0.5, "hi": 0.5 },
+        "relativeWeight": { "lo": 0.5, "hi": 2 },
+        "anchors": [{ "at": "2026-11-24T18:00:00Z", "observedPct": 1.5 }]
+      }
+    }
+  }
+}

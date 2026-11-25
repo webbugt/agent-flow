@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- **Configurable costs** (branch `feature/configurable-costs`; see the "Configurable costs" section of the README)
+  - Config: `~/.agent-flow/costs.json` is the source of truth, with a per-project override at `<workspace>/.agent-flow/costs.json` and scalar VS Code settings (`agentVisualizer.costs.enabled`, `configPath`, `displayCurrency`, `unit`, `unknownModelPolicy`) as the lowest layer. It reloads without a restart, keeps the last good config when a file is invalid, and shows the validation errors with JSON pointers. A project file cannot set `configPath` and is confined to its own `.agent-flow/` directory. New command **Open Costs Config**; `costs.schema.json` is wired in for editor autocomplete
+  - Prices: a built-in catalog for Anthropic and Copilot with a source URL and `asOf` date per row, per-model cache multipliers, prompt-size tiers, and dated price changes. User rules by provider and model glob, provider rates, a global fallback for unknown models, a price multiplier and a manual exchange rate (`currency.fx`; nothing is fetched). This replaces the fixed per-family blended rates, so displayed costs change; the stale Haiku 5.5 rate in the old table was corrected
+  - Every cost figure is now labelled **billed**, **list-equivalent** (subscription and credits providers, with a `list-equiv` badge, optionally hidden with `display.subscriptionValue`) or **estimated**. The summary panel totals each kind separately. Hovering a cost pill (tapping on a phone) shows the provider, kind, model, rate source, rate, tokens, formula and result. A settings drawer edits the config
+  - Copilot via Hermes is priced as list-equivalent AI credits. It is not a GitHub bill: the plan allowance is not subtracted, code review and completions are not included, and Copilot calls that do not go through Hermes are not seen. Hermes `provider=` and latency are now read from `agent.log`
+  - Local models: kWh and electricity cost from configured idle and load watts (marginal by default), optional throughput fallback, time-of-day tariffs. Estimated, not measured; verified against fixture data only
+  - Claude usage limits: a LIMITS panel with the 5-hour and weekly meters. Observed values need the new opt-in **Configure Claude statusLine** command, which chains your existing status line, saves only limit numbers, session and model ids and a timestamp, refuses to install when it cannot chain safely, writes through a symlinked `settings.json`, and is undone by **Remove Claude statusLine wrapper** (also run when the extension is uninstalled). Without it, limits are estimates from this machine's sessions and are marked as such. Plan limits are not officially published
+  - The Fable weekly limit is estimate-only: it shows only when Fable was used in the weekly window, with an estimate icon, per-mille display below 1%, and a hover with lower and upper bounds, confidence and calibration basis
+  - Not included: Codex costs and limits, any undocumented usage endpoint, measured power, Copilot allowance meters
+
 ## 0.9.6
 
 - Fix: parallel calls to the same tool now show up separately (#107, #110)
