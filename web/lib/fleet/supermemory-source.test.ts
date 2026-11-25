@@ -162,7 +162,7 @@ after(() => {
   rmSync(root, { recursive: true, force: true })
 })
 
-const snap = () => readSupermemoryFleet({ hermesRoot: root, now: NOW })
+const snap = (extra: { recentLimit?: number } = {}) => readSupermemoryFleet({ hermesRoot: root, now: NOW, ...extra })
 const node = (s: ReturnType<typeof snap>, tag: string) => {
   const n = s.nodes.find((x) => x.containerTag === tag)
   assert.ok(n, `node ${tag} missing`)
@@ -264,12 +264,38 @@ test('byProfile, daily buckets and lastEventAt', () => {
   assert.equal(node(s, 'matrix_org').daily.find((d) => d.day === '2026-11-23')?.store, 2)
 })
 
+test('per-event recent list: newest first, time + profile + action only, capped by recentLimit', () => {
+  const s = snap()
+  const fam = node(s, 'omh_family')
+  assert.equal(fam.recent.length, fam.total, 'every event of the window is listed (below the cap)')
+  const times = fam.recent.map((r) => r.at)
+  assert.deepEqual(times, [...times].sort((a, b) => b - a), 'newest first')
+  assert.equal(fam.recent[0].at, fam.lastEventAt)
+  for (const r of fam.recent) {
+    assert.deepEqual(Object.keys(r).sort(), ['action', 'at', 'profile'])
+    assert.ok(['store', 'search', 'forget'].includes(r.action))
+  }
+  const per = (p: string, a: string) => fam.recent.filter((r) => r.profile === p && r.action === a).length
+  assert.equal(per('taxis', 'store'), fam.byProfile.taxis.store)
+  assert.equal(per('taxis', 'forget'), fam.byProfile.taxis.forget)
+  assert.equal(fam.lastByProfile.taxis, Math.max(...fam.recent.filter((r) => r.profile === 'taxis').map((r) => r.at)))
+  // The recent list is a view of the same events: the cap trims the list, never the counts.
+  const capped = node(snap({ recentLimit: 2 }), 'omh_family')
+  assert.equal(capped.recent.length, 2)
+  assert.deepEqual(capped.recent, fam.recent.slice(0, 2))
+  assert.equal(capped.total, fam.total)
+  assert.equal(node(snap({ recentLimit: 0 }), 'omh_family').recent.length, 1, 'the limit is at least 1')
+  assert.deepEqual(snap(), snap(), 'same input, same snapshot')
+})
+
 test('namespaces with no events have zero counts and null lastEventAt', () => {
   const s = readSupermemoryFleet({ hermesRoot: join(root, 'nowhere'), now: NOW })
   assert.equal(s.nodes.length, 3)
   for (const n of s.nodes) {
     assert.deepEqual(n.counts, { store: 0, search: 0, forget: 0 })
     assert.equal(n.lastEventAt, null)
+    assert.deepEqual(n.recent, [])
+    assert.deepEqual(n.lastByProfile, {})
   }
   assert.deepEqual(s.sources, [])
 })

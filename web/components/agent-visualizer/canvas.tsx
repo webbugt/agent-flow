@@ -5,6 +5,7 @@ import { Agent, Particle, Edge, Discovery, DepthParticle, NODE } from '@/lib/age
 import type { SimulationState } from '@/hooks/simulation/types'
 import { getStateColor } from '@/lib/colors'
 import { ANIM_SPEED, PERF_OVERLAY, PERF_OVERLAY_ENABLED } from '@/lib/canvas-constants'
+import { cloudGeometries } from '@/lib/fleet/fleet-cloud-geometry'
 import { BloomRenderer } from './bloom-renderer'
 import { createDepthParticles, updateDepthParticles, drawBackground } from './background-layer'
 import {
@@ -14,6 +15,7 @@ import {
   drawAgents,
   drawMessageBubblesWorld,
   drawEdges, getActiveEdgeIds,
+  drawClouds, drawFleetLinks, drawPulses,
   drawParticles, buildEdgeMap,
   drawToolCalls,
   drawDiscoveries, drawDiscoveryConnections,
@@ -287,14 +289,21 @@ export function AgentCanvas({
         edgeLookupCacheRef.current = { particles, edges, activeEdgeIds, edgeMap }
       }
 
+      // Fleet map only: clouds (halo + profile caption) under everything, then the cloud-to-resource links.
+      const fleet = simulationRef.current
+      const cloudGeoms = fleet.clouds && fleet.clouds.length > 0 ? cloudGeometries(fleet.clouds, agents) : null
+      const wallNow = Date.now()
+      if (cloudGeoms && fleet.clouds) drawClouds(ctx, fleet.clouds, cloudGeoms, timeRef.current)
       drawDiscoveryConnections(ctx, discoveries, agents)
       drawEdges(ctx, edges, agents, toolCalls, activeEdgeIds, timeRef.current)
+      if (cloudGeoms) drawFleetLinks(ctx, edges, agents, cloudGeoms, wallNow)
       drawToolCalls(ctx, toolCalls, timeRef.current, selectedToolCallId)
       drawDiscoveries(ctx, discoveries, agents, selectedDiscoveryId)
       drawAgents(ctx, agents, selectedAgentId, hoveredAgentId, showStats, timeRef.current)
       drawMessageBubblesWorld(ctx, agents, simTimeRef.current)
       if (showCostOverlay) drawCostLabels(ctx, agents, toolCalls)
       drawParticles(ctx, particles, edgeMap, agents, toolCalls, timeRef.current)
+      if (cloudGeoms && fleet.pulses) drawPulses(ctx, fleet.pulses, edges, agents, cloudGeoms, wallNow)
       drawEffects(ctx, effectsRef.current)
 
       if (selectedAgentId) {

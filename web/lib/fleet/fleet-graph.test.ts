@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import { strict as assert } from 'node:assert'
-import { buildFleetGraph, countByKind, layoutFleetGraph, profileKey, MAX_SESSIONS_PER_PROFILE, MAX_RESOURCES_PER_KIND, type FleetGraph } from './fleet-graph'
+import { buildFleetGraph, countByKind, profileKey } from './fleet-graph'
 import { instancesFromSessionEvents, type SessionEventLike, type SessionLike } from './fleet-model'
 import type { PublicKanbanBoardNode } from './kanban-source'
 import type { SupermemoryNamespaceNode } from './supermemory-source'
@@ -31,6 +31,8 @@ const space = (tag: string, byProfile: Record<string, number>): SupermemoryNames
   counts: { store: 2, search: 5, forget: 0 }, total: 7,
   byProfile: Object.fromEntries(Object.entries(byProfile).map(([p, n]) => [p, { store: 0, search: n, forget: 0 }])),
   daily: [], lastEventAt: NOW - MIN,
+  lastByProfile: Object.fromEntries(Object.keys(byProfile).map((p, i) => [p, NOW - (i + 1) * MIN])),
+  recent: Object.keys(byProfile).flatMap((p, i) => Array.from({ length: byProfile[p] }, (_, k) => ({ at: NOW - (i + 1) * MIN - k * 1000, profile: p, action: 'search' as const }))),
 })
 
 const SESSIONS = [live('taxis', 'Taxis'), live('omh-coder', 'OMH Coder'), idleSession('sophia', 'Sophia')]
@@ -52,38 +54,55 @@ test('profileKey ignores case, dashes and spaces; default is Hermes', () => {
   assert.notEqual(profileKey('taxis'), profileKey('sophia'))
 })
 
-test('two active profiles: the map has both agent nodes, their sessions, a Kanban and a Supermemory node', () => {
-  const g = buildFleetGraph({ instances: instances(), kanban: KANBAN, supermemory: MEMORY, selection: all, now: NOW })
-  const profiles = g.nodes.filter(n => n.kind === 'profile')
-  assert.deepEqual(profiles.map(p => p.label).sort(), ['omh coder', 'sophia', 'taxis'])
-  assert.equal(profiles.find(p => p.label === 'taxis')!.status, 'active')
-  assert.equal(profiles.find(p => p.label === 'omh coder')!.status, 'active')
-  assert.equal(profiles.find(p => p.label === 'sophia')!.status, 'idle')
+const graph = (over: Partial<Parameters<typeof buildFleetGraph>[0]> = {}) =>
+  buildFleetGraph({ instances: instances(), kanban: KANBAN, supermemory: MEMORY, selection: all, now: NOW, ...over })
+
+test('agent clouds: one cloud per profile, one node per session, no hub and no session-to-session links', () => {
+  const g = graph()
+  assert.deepEqual(g.clouds.map(c => c.profile).sort(), ['omh coder', 'sophia', 'taxis'])
   const kinds = countByKind(g)
-  assert.equal(kinds.profile, 3)
+  assert.equal(kinds.cloud, 3)
   assert.equal(kinds.session, 4) // Taxis x2, OMH Coder x1, Sophia x1
   assert.equal(kinds.kanban, 2)
   assert.equal(kinds.supermemory, 2)
-  // Every session hangs off its own profile.
-  for (const s of g.nodes.filter(n => n.kind === 'session')) {
-    assert.ok(g.edges.some(e => e.kind === 'session' && e.to === s.id && e.from === s.profileId))
-  }
+  assert.ok(!g.nodes.some(n => (n.kind as string) === 'profile'), 'there is no profile hub node')
+  const taxis = g.clouds.find(c => c.profile === 'taxis')!
+  assert.equal(taxis.sessionIds.length, 2)
+  assert.equal(taxis.status, 'active')
+  assert.equal(g.clouds.find(c => c.profile === 'sophia')!.status, 'idle')
+  for (const id of taxis.sessionIds) assert.equal(g.nodes.find(n => n.id === id)!.cloudId, taxis.id)
+  // Every link goes from a cloud to a resource; none joins two sessions.
+  assert.ok(g.edges.every(e => g.clouds.some(c => c.id === e.from) && g.nodes.some(n => n.id === e.to && n.kind !== 'session')))
 })
 
-test('resources link to the profiles that use them', () => {
-  const g = buildFleetGraph({ instances: instances(), kanban: KANBAN, supermemory: MEMORY, selection: all, now: NOW })
+test('resources link to the clouds that use them; every edge stores lastUsedAt and a weight', () => {
+  const g = graph()
   const links = (kind: string) => g.edges.filter(e => e.kind === kind).map(e => `${e.from}>${e.to}`).sort()
-  assert.deepEqual(links('kanban'), [
-    'profile:omh coder>kanban:agent-flow', 'profile:sophia>kanban:media', 'profile:taxis>kanban:agent-flow',
-  ])
+  assert.deepEqual(links('kanban'), ['cloud:omh coder>kanban:agent-flow', 'cloud:sophia>kanban:media', 'cloud:taxis>kanban:agent-flow'])
   assert.deepEqual(links('memory'), [
-    'profile:omh coder>supermemory:omh_family', 'profile:sophia>supermemory:webbugt_video_memory', 'profile:taxis>supermemory:omh_family',
+    'cloud:omh coder>supermemory:omh_family', 'cloud:sophia>supermemory:webbugt_video_memory', 'cloud:taxis>supermemory:omh_family',
   ])
-  // Active profile + recent use = animated link; the idle profile's board link is not.
   const edge = (id: string) => g.edges.find(e => e.id === id)!
-  assert.equal(edge('profile:taxis>kanban:agent-flow').active, true)
-  assert.equal(edge('profile:sophia>kanban:media').active, false)
-  assert.equal(edge('profile:taxis>supermemory:omh_family').weight, 4)
+  assert.equal(edge('cloud:taxis>kanban:agent-flow').lastUsedAt, NOW - 2 * MIN)
+  assert.equal(edge('cloud:omh coder>kanban:agent-flow').lastUsedAt, NOW - 5 * MIN)
+  assert.equal(edge('cloud:sophia>kanban:media').lastUsedAt, T0, 'an old link keeps its old time (it is not "active", it is just old)')
+  assert.equal(edge('cloud:taxis>supermemory:omh_family').weight, 4, 'weight = event count')
+  assert.equal(edge('cloud:taxis>supermemory:omh_family').lastUsedAt, NOW - MIN)
+  assert.ok(g.edges.every(e => Number.isFinite(e.lastUsedAt) && e.events.length > 0))
+  // Links no longer depend on running status: the idle profile has links too.
+  assert.ok(g.edges.some(e => e.from === 'cloud:sophia'))
+})
+
+test('edge events carry kind and label, newest first, with unique keys (what a pulse is made of)', () => {
+  const g = graph()
+  const k = g.edges.find(e => e.id === 'cloud:taxis>kanban:agent-flow')!
+  assert.deepEqual(k.events.map(e => [e.kind, e.label]), [['kanban', 'claimed']])
+  const m = g.edges.find(e => e.id === 'cloud:taxis>supermemory:omh_family')!
+  assert.ok(m.events.every(e => e.kind === 'memory' && e.label === 'search'))
+  const ats = m.events.map(e => e.at)
+  assert.deepEqual(ats, [...ats].sort((a, b) => b - a))
+  const keys = g.edges.flatMap(e => e.events.map(ev => ev.key))
+  assert.equal(new Set(keys).size, keys.length)
 })
 
 test('resources nobody uses still show as nodes; links to unknown profiles are dropped', () => {
@@ -93,105 +112,47 @@ test('resources nobody uses still show as nodes; links to unknown profiles are d
   })
   assert.equal(countByKind(g).kanban, 1)
   assert.equal(countByKind(g).supermemory, 1)
-  assert.equal(g.edges.filter(e => e.kind !== 'session').length, 0)
+  assert.equal(g.edges.length, 0)
 })
 
 test('deselected items leave the map; a profile with every session deselected disappears', () => {
   const off = new Set(['hermes-sophia::Sophia · Report', 'kanban:media', 'supermemory:omh_family'])
-  const g = buildFleetGraph({
-    instances: instances(), kanban: KANBAN, supermemory: MEMORY, now: NOW,
-    selection: { isSelected: id => !off.has(id) },
-  })
-  assert.deepEqual(g.nodes.filter(n => n.kind === 'profile').map(n => n.label).sort(), ['omh coder', 'taxis'])
+  const g = graph({ selection: { isSelected: id => !off.has(id) } })
+  assert.deepEqual(g.clouds.map(c => c.profile).sort(), ['omh coder', 'taxis'])
   assert.deepEqual(g.nodes.filter(n => n.kind === 'kanban').map(n => n.id), ['kanban:agent-flow'])
   assert.deepEqual(g.nodes.filter(n => n.kind === 'supermemory').map(n => n.id), ['supermemory:webbugt_video_memory'])
-  assert.ok(g.edges.every(e => g.nodes.some(n => n.id === e.from) && g.nodes.some(n => n.id === e.to)), 'no dangling edge')
+  assert.ok(g.edges.every(e => g.clouds.some(c => c.id === e.from) && g.nodes.some(n => n.id === e.to)), 'no dangling edge')
 })
 
-test('a busy profile draws at most MAX_SESSIONS_PER_PROFILE sessions, running first, and counts the rest', () => {
+test('uncapped sessions: a profile with many sessions shows every one, running first', () => {
   const sessions = [live('taxis', 'Taxis')]
   const events: SessionEventLike[] = []
-  for (let i = 0; i < 12; i++) {
+  const N = 40
+  for (let i = 0; i < N; i++) {
     events.push(spawn(`Taxis · Job ${i}`, T0 + i * MIN))
-    if (i !== 11) events.push({ time: 30, type: 'agent_complete', payload: { name: `Taxis · Job ${i}` } })
+    if (i !== N - 1) events.push({ time: 30, type: 'agent_complete', payload: { name: `Taxis · Job ${i}` } })
   }
-  const g = buildFleetGraph({
-    instances: instancesFromSessionEvents(sessions, () => events), selection: all, now: NOW,
-  })
+  const g = buildFleetGraph({ instances: instancesFromSessionEvents(sessions, () => events), selection: all, now: NOW })
   const drawn = g.nodes.filter(n => n.kind === 'session')
-  assert.equal(drawn.length, MAX_SESSIONS_PER_PROFILE)
-  assert.equal(g.nodes.find(n => n.kind === 'profile')!.hiddenSessions, 4)
-  assert.ok(drawn.some(n => n.label === 'Job 11'), 'the running session is always drawn')
+  assert.equal(drawn.length, N, 'no per-profile session cap')
+  assert.equal(g.clouds[0].sessionIds.length, N)
+  assert.equal(drawn[0].label, `Job ${N - 1}`, 'the running session comes first')
+  assert.equal(new Set(drawn.map(n => n.id)).size, N)
 })
 
-// ─── Layout ─────────────────────────────────────────────────────────────────
-
-function assertLaidOut(g: FleetGraph, width: number, height: number, insets: { insetTop: number; insetBottom: number; insetRight?: number }) {
-  const layout = layoutFleetGraph(g, { width, height, ...insets })
-  assert.equal(layout.nodes.length, g.nodes.length, 'every node is placed')
-  const right = width - (insets.insetRight ?? 0)
-  for (const n of layout.nodes) {
-    assert.ok(n.x - n.radius >= 0 && n.x + n.radius <= right, `${n.id} inside horizontally (${n.x.toFixed(0)}±${n.radius.toFixed(0)} of ${right})`)
-    assert.ok(n.y - n.radius >= insets.insetTop && n.y + n.radius <= height - insets.insetBottom, `${n.id} inside vertically (${n.y.toFixed(0)}±${n.radius.toFixed(0)})`)
-  }
-  for (let i = 0; i < layout.nodes.length; i++) {
-    for (let j = i + 1; j < layout.nodes.length; j++) {
-      const a = layout.nodes[i]
-      const b = layout.nodes[j]
-      assert.ok(Math.hypot(a.x - b.x, a.y - b.y) >= a.radius + b.radius - 0.5, `${a.id} and ${b.id} do not overlap`)
-    }
-  }
-  return layout
-}
-
-test('layout: desktop and phone widths place every node inside the free area, none overlapping', () => {
-  const g = buildFleetGraph({ instances: instances(), kanban: KANBAN, supermemory: MEMORY, selection: all, now: NOW })
-  const desktop = assertLaidOut(g, 1280, 800, { insetTop: 48, insetBottom: 320 })
-  const phone = assertLaidOut(g, 390, 844, { insetTop: 96, insetBottom: 340 })
-  // Wide: boards left of the profiles, namespaces right of them. Narrow: boards above, namespaces below.
-  const at = (l: typeof desktop, kind: string) => l.nodes.filter(n => n.kind === kind)
-  const mean = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / xs.length
-  assert.ok(mean(at(desktop, 'kanban').map(n => n.x)) < mean(at(desktop, 'profile').map(n => n.x)))
-  assert.ok(mean(at(desktop, 'supermemory').map(n => n.x)) > mean(at(desktop, 'profile').map(n => n.x)))
-  assert.ok(mean(at(phone, 'kanban').map(n => n.y)) < mean(at(phone, 'profile').map(n => n.y)))
-  assert.ok(mean(at(phone, 'supermemory').map(n => n.y)) > mean(at(phone, 'profile').map(n => n.y)))
-})
-
-test('layout: eleven profiles with sessions still fit and stay apart; empty graph gives no nodes', () => {
-  const sessions: SessionLike[] = []
-  const events: Record<string, SessionEventLike[]> = {}
-  for (let p = 0; p < 11; p++) {
-    sessions.push(live(`p${p}`, `P${p}`))
-    events[`hermes-p${p}`] = [1, 2, 3, 4].map(k => spawn(`P${p} · S${k}`, T0 + k * MIN))
-  }
-  const g = buildFleetGraph({
-    instances: instancesFromSessionEvents(sessions, id => events[id] ?? []),
-    kanban: KANBAN, supermemory: MEMORY, selection: all, now: NOW,
-  })
-  assertLaidOut(g, 1440, 900, { insetTop: 48, insetBottom: 360 })
-  assert.deepEqual(layoutFleetGraph({ nodes: [], edges: [] }, { width: 800, height: 600 }).nodes, [])
-})
-
-test('archived and never-used boards stay off the map; resources are capped, linked ones first', () => {
-  const empty = (slug: string) => board(slug, [])
-  empty('x').totalTasks = 0
+test('uncapped resources: many boards and namespaces are all kept; archived and never-used boards stay off', () => {
   const archived = { ...board('old', [['taxis', NOW]]), archived: true } as PublicKanbanBoardNode
-  const unused = Array.from({ length: 12 }, (_, i) => ({ ...board(`b${i}`, []), totalTasks: 5 }) as PublicKanbanBoardNode)
-  const emptyBoard = { ...board('blank', []), totalTasks: 0 } as PublicKanbanBoardNode
-  const g = buildFleetGraph({
-    instances: instances(), selection: all, now: NOW,
-    kanban: [archived, emptyBoard, ...unused, board('agent-flow', [['taxis', NOW]])],
-  })
+  const blank = { ...board('blank', []), totalTasks: 0 } as PublicKanbanBoardNode
+  const boards = Array.from({ length: 30 }, (_, i) => ({ ...board(`b${i}`, i % 2 ? [['taxis', NOW - i * MIN]] : []), totalTasks: 5 }) as PublicKanbanBoardNode)
+  const spaces = Array.from({ length: 25 }, (_, i) => space(`ns${i}`, i % 2 ? { taxis: 1 } : {}))
+  const g = buildFleetGraph({ instances: instances(), selection: all, now: NOW, kanban: [archived, blank, ...boards], supermemory: spaces })
   const ids = g.nodes.filter(n => n.kind === 'kanban').map(n => n.id)
-  assert.equal(ids.length, MAX_RESOURCES_PER_KIND)
-  assert.ok(ids.includes('kanban:agent-flow'), 'the linked board survives the cap')
+  assert.equal(ids.length, 30, 'no resource cap')
   assert.ok(!ids.includes('kanban:old') && !ids.includes('kanban:blank'))
-  assert.ok(g.edges.every(e => g.nodes.some(n => n.id === e.to)), 'no edge to a dropped node')
+  assert.equal(g.nodes.filter(n => n.kind === 'supermemory').length, 25)
+  assert.ok(g.edges.every(e => g.nodes.some(n => n.id === e.to)), 'no edge to a missing node')
 })
 
-test('layout: phone width with a full set of resources keeps all in two rows, inside the area', () => {
-  const unused = Array.from({ length: 8 }, (_, i) => ({ ...board(`b${i}`, [['taxis', NOW]]), totalTasks: 5 }) as PublicKanbanBoardNode)
-  const spaces = Array.from({ length: 5 }, (_, i) => space(`ns${i}`, { taxis: 1 }))
-  const g = buildFleetGraph({ instances: instances(), kanban: unused, supermemory: spaces, selection: all, now: NOW })
-  assertLaidOut(g, 390, 844, { insetTop: 96, insetBottom: 340 })
+test('graph is deterministic: same input, same graph', () => {
+  assert.deepEqual(graph(), graph())
 })

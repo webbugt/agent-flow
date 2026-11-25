@@ -185,6 +185,10 @@ export interface Edge {
   active?: boolean
   /** resource edges: beam colour (the resource's own colour) */
   color?: string
+  /** resource edges (fleet map): the link starts at this cloud's halo instead of at an agent (`from` is the cloud id). */
+  fromCloud?: boolean
+  /** resource edges (fleet map): epoch ms of the last use. The link is drawn for a linger window after it, then fades out. */
+  lastUsedAt?: number
 }
 
 export interface Particle {

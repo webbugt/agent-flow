@@ -20,6 +20,7 @@ import { FileAttentionPanel } from "./file-attention-panel"
 import { TimelinePanel } from "./timeline-panel"
 import { FleetTimelinePanel } from "./fleet-timeline-panel"
 import { FleetMap } from "./fleet-map"
+import { loadTimelineVisible, saveTimelineVisible, mapInsetBottom } from "@/lib/fleet/fleet-timeline-pref"
 import { useFleetSelection } from "@/hooks/use-fleet-selection"
 import { useFleetSources } from "@/hooks/use-fleet-sources"
 import { createFleetFixtureSessions } from "@/lib/fleet/fleet-fixture-events"
@@ -88,6 +89,12 @@ export function AgentVisualizer() {
   const [showCostOverlay, setShowCostOverlay] = useState(false)
   const [showTimeline, setShowTimeline] = useState(false)
   const [showFleet, setShowFleet] = useState(false)
+  // Fleet timeline panel: shown by default; the choice is kept in localStorage (read after mount, so SSR matches).
+  const [fleetTimelineVisible, setFleetTimelineVisible] = useState(true)
+  useEffect(() => { setFleetTimelineVisible(loadTimelineVisible(window.localStorage)) }, [])
+  const toggleFleetTimeline = useCallback(() => {
+    setFleetTimelineVisible(prev => { saveTimelineVisible(window.localStorage, !prev); return !prev })
+  }, [])
   const [showFileAttention, setShowFileAttention] = useState(false)
   const [showTranscript, setShowTranscript] = useState(false)
   // Session detail: the whole conversation + tool calls of ONE Hermes session (agent node)
@@ -592,13 +599,15 @@ export function AgentVisualizer() {
         onOpenSession={bridge.useMockData ? undefined : handleFleetOpenSession}
         replay={fleetReplayRef.current}
         insetTop={48}
-        insetBottom={380}
+        insetBottom={mapInsetBottom(fleetTimelineVisible)}
+        timelineVisible={fleetTimelineVisible}
+        onToggleTimeline={toggleFleetTimeline}
         insetRight={detailInset(showSessionDetail, viewportWidth, CARD.sessionDetail.width)}
       />
 
       {/* Fleet timeline panel (grouped agents + Kanban/Supermemory lanes) */}
       <FleetTimelinePanel
-        visible={showFleet}
+        visible={showFleet && fleetTimelineVisible}
         instances={fleetInstances}
         kanban={bridge.useMockData ? undefined : fleetSources.kanban}
         supermemory={bridge.useMockData ? undefined : fleetSources.supermemory}

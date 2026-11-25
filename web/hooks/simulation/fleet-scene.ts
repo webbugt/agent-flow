@@ -4,13 +4,19 @@
  * Every Hermes profile (bridge session) is replayed through the normal simulation handlers
  * (processEvent), so its agent nodes get the same hexagon/glow/label, and the tool calls,
  * messages and sub-agents of each node orbit it as the same satellites, placed by the same
- * slot finder. The replays of all sessions are laid out as clusters on one canvas, with the
- * Kanban boards and Supermemory namespaces around them, linked to the profiles that use them.
+ * slot finder.
+ *
+ * Layout (all deterministic, see lib/fleet/fleet-placement.ts):
+ *   - There is no central profile node. Each session (agent node) is its own node. The sessions
+ *     of one profile form a cloud: a stable, seeded blob around the profile centroid, drawn
+ *     with a soft halo and the profile name as caption. Sessions of one profile are not linked.
+ *   - Clouds sit on a grid. Each Kanban board and Supermemory namespace goes near the weighted
+ *     centroid of the clouds it links to (weight = event count); unlinked ones go to a rim.
  *
  * Pure data code (no React, no DOM), so it is unit-testable:
  *   - {@link FleetReplay} keeps one settled simulation state per session and only processes
  *     the events that arrived since the last call (the buffers are append-only).
- *   - {@link buildFleetScene} filters by the fleet selection, lays the clusters out and returns
+ *   - {@link buildFleetScene} filters by the fleet selection, lays the clouds out and returns
  *     a SimulationState the canvas draws.
  *
  * Content privacy: the relay anonymizes per profile BEFORE events reach the browser (see
@@ -29,25 +35,24 @@ import {
 import { TOOL_CARD_H, TOOL_CARD_W, MODEL_FAMILY_CONTEXT, DEFAULT_CONTEXT_SIZE, FALLBACK_CONTEXT_SIZE } from '@/lib/canvas-constants'
 import { KANBAN_COLOR, SUPERMEMORY_COLOR } from '@/lib/fleet/fleet-colors'
 import {
-  identityFromLabel, nodeInstanceId, splitInstanceId,
+  groupColor, identityFromLabel, nodeInstanceId,
   type FleetInstance, type FleetSelectionView, type SessionLike,
 } from '@/lib/fleet/fleet-model'
-import type { FleetGraph } from '@/lib/fleet/fleet-graph'
-import { profileKey } from '@/lib/fleet/fleet-graph'
-import type { PublicKanbanBoardNode } from '@/lib/fleet/kanban-source'
-import { createEmptyState, edgeId, type SimulationState } from './types'
+import { cloudIdOf, type FleetGraph } from '@/lib/fleet/fleet-graph'
+import { HALO_PAD, type CloudView } from '@/lib/fleet/fleet-cloud-geometry'
+import { placeBlob, placeResources, type BlobUnit } from '@/lib/fleet/fleet-placement'
+import type { FleetPulse } from '@/lib/fleet/fleet-pulses'
+import { createEmptyState, type SimulationState } from './types'
 import { processEvent, type ProcessEventContext } from './process-event'
 import { findToolSlot } from './tool-slot'
 import { pruneRestingTools } from './animate'
 import { snapVisualState } from './snap-visual-state'
 
-/** Kanban events shown as satellites of a profile's main node (the newest). */
-export const KANBAN_SATELLITES_PER_PROFILE = 3
-/** Gap between clusters / between a cluster grid and the resource columns, world units. */
-const CLUSTER_GAP_X = 60
-const CLUSTER_GAP_Y = 50
-const RESOURCE_GAP = 150
-const RESOURCE_PITCH = 110
+/** Gap between clouds on the grid, world units (on top of the halo). */
+const CLOUD_GAP_X = 70
+const CLOUD_GAP_Y = 60
+/** Room under a halo for the profile caption. */
+const CAPTION_ROOM = 26
 
 function contextWindowSize(modelId?: string): number {
   if (!modelId) return FALLBACK_CONTEXT_SIZE
@@ -127,26 +132,36 @@ export interface FleetSceneInput {
   sessions: readonly SessionLike[]
   /** Settled state of a session, usually `replay.advance(id, getSessionEvents(id))`. */
   stateOf: (sessionId: string) => SimulationState
-  /** Fleet instances (one per agent node), for the selection. */
+  /** Fleet instances (one per agent node), for the selection and the order of sessions in a cloud. */
   instances: readonly FleetInstance[]
   selection: FleetSelectionView
-  /** Resources and their links to profiles, from buildFleetGraph. */
+  /** Resources and their links to clouds, from buildFleetGraph. */
   graph: FleetGraph
-  kanban?: readonly PublicKanbanBoardNode[]
-  /** Wide: resources in columns left and right. Narrow (phone): rows above and below. */
-  narrow?: boolean
-  /** Clusters per row (default: by the square-ish root). */
+  /** Clouds per row (default: by the square-ish root). */
   columns?: number
   /** Nodes the user dragged: their satellites move with them. Applied over the layout. */
   moved?: ReadonlyMap<string, { x: number; y: number }>
+  /** Dots to draw along the links (from a FleetPulseTracker). */
+  pulses?: readonly FleetPulse[]
 }
 
 export interface FleetScene {
   state: SimulationState
   /** agent id (namespaced) to its session id; resources are not in the map. */
   sessionOfAgent: ReadonlyMap<string, string>
-  /** Cluster centres by session id, world coordinates. */
-  clusters: ReadonlyMap<string, { x: number; y: number; identity: string }>
+  /** Cloud centres by cloud id, world coordinates (the profile centroid), with the profile name. */
+  clusters: ReadonlyMap<string, { x: number; y: number; r: number; identity: string }>
+}
+
+/** A session node with its satellites: the unit a blob is made of. */
+interface Unit {
+  sid: string
+  agent: Agent
+  toolCalls: ToolCallNode[]
+  /** Start of the node, epoch ms, for a stable order inside the cloud. */
+  start: number
+  /** Distance from the node to the farthest corner of its satellites and bubbles. */
+  radius: number
 }
 
 interface Cluster {
@@ -155,17 +170,9 @@ interface Cluster {
   agents: Agent[]
   toolCalls: ToolCallNode[]
   edges: Edge[]
-  /** Bounding box in the session's own coordinates. */
-  box: { x1: number; y1: number; x2: number; y2: number }
-  mainId: string | null
 }
 
 const AGENT_PAD = 70
-
-function extend(box: Cluster['box'], x1: number, y1: number, x2: number, y2: number): void {
-  box.x1 = Math.min(box.x1, x1); box.y1 = Math.min(box.y1, y1)
-  box.x2 = Math.max(box.x2, x2); box.y2 = Math.max(box.y2, y2)
-}
 
 function visibleIn(
   s: SessionLike, own: readonly FleetInstance[], selection: FleetSelectionView, agent: Agent,
@@ -183,55 +190,31 @@ function visibleIn(
 function buildCluster(
   s: SessionLike, state: SimulationState, own: readonly FleetInstance[], selection: FleetSelectionView,
 ): Cluster | null {
-  // The main node reads as its profile (its own name), not as the first user message the single view renames it to.
-  const agents = [...state.agents.values()].filter(a => visibleIn(s, own, selection, a))
+  const visible = [...state.agents.values()].filter(a => visibleIn(s, own, selection, a))
+  // No hub: the profile's main node is not drawn when the profile has session nodes of its own.
+  // A profile that has only its main node so far still shows as one node (named after the profile).
+  const sessionsOnly = visible.filter(a => !a.isMain)
+  const agents = (sessionsOnly.length > 0 ? sessionsOnly : visible)
     .map(a => (a.isMain && a.name !== a.id ? { ...a, name: a.id } : a))
   if (agents.length === 0) return null
   const ids = new Set(agents.map(a => a.id))
   const toolCalls = [...state.toolCalls.values()].filter(tc => ids.has(tc.agentId))
   const toolIds = new Set(toolCalls.map(tc => tc.id))
+  // Edges between a node and its own satellites only; the links to the (removed) main node go with it.
   const edges = state.edges.filter(e => ids.has(e.from) && (ids.has(e.to) || toolIds.has(e.to)))
-  const box = { x1: Infinity, y1: Infinity, x2: -Infinity, y2: -Infinity }
-  for (const a of agents) {
-    extend(box, a.x - AGENT_PAD, a.y - AGENT_PAD, a.x + AGENT_PAD, a.y + AGENT_PAD)
-    if (a.messageBubbles.length > 0) extend(box, a.x, a.y - 30, a.x + 300, a.y - 20 + a.messageBubbles.length * 60 + 20)
-  }
-  for (const tc of toolCalls) extend(box, tc.x - TOOL_CARD_W / 2, tc.y - TOOL_CARD_H / 2, tc.x + TOOL_CARD_W / 2, tc.y + TOOL_CARD_H / 2)
-  const main = agents.find(a => a.isMain) ?? agents.find(a => !a.parentId || !ids.has(a.parentId)) ?? agents[0]
-  return { session: s, identity: identityFromLabel(s.label), agents, toolCalls, edges, box, mainId: main.id }
+  return { session: s, identity: identityFromLabel(s.label), agents, toolCalls, edges }
 }
 
-/** Kanban events of a profile's boards as satellites of its main node (newest first, capped). */
-function addKanbanSatellites(
-  cluster: Cluster, kanban: readonly PublicKanbanBoardNode[], shownBoards: ReadonlySet<string>,
-): void {
-  if (!cluster.mainId) return
-  const main = cluster.agents.find(a => a.id === cluster.mainId)
-  if (!main) return
-  const key = profileKey(cluster.identity)
-  const events: Array<{ board: PublicKanbanBoardNode; e: PublicKanbanBoardNode['recentEvents'][number] }> = []
-  for (const board of kanban) {
-    if (!shownBoards.has(board.id)) continue
-    for (const e of board.recentEvents) if (e.assignee && profileKey(e.assignee) === key) events.push({ board, e })
+function unitRadius(agent: Agent, toolCalls: readonly ToolCallNode[]): number {
+  let r = AGENT_PAD
+  if (agent.messageBubbles.length > 0) {
+    // A bubble stack hangs off the node to the right and above (up to 300 wide, 60 per bubble).
+    r = Math.max(r, Math.hypot(300, 30 + agent.messageBubbles.length * 60))
   }
-  events.sort((a, b) => b.e.at - a.e.at)
-  const agents = new Map(cluster.agents.map(a => [a.id, a]))
-  const cards = new Map(cluster.toolCalls.map(tc => [tc.id, tc]))
-  for (const { board, e } of events.slice(0, KANBAN_SATELLITES_PER_PROFILE).reverse()) {
-    const id = `kanban:${board.slug}:${e.id}`
-    const pos = findToolSlot(main, agents, cards, 0)
-    const card: ToolCallNode = {
-      id, agentId: main.id, toolName: `kanban · ${e.kind}`, state: 'complete',
-      args: e.taskTitle ?? e.taskId,
-      inputData: { board: board.name || board.slug, task: e.taskId, event: e.kind },
-      x: pos.x, y: pos.y, offX: pos.x - main.x, offY: pos.y - main.y,
-      startTime: 0, completeTime: 0, opacity: 0.7,
-    }
-    cards.set(id, card)
-    cluster.toolCalls.push(card)
-    cluster.edges.push({ id: edgeId(main.id, id), from: main.id, to: id, type: 'tool', opacity: 1 })
-    extend(cluster.box, pos.x - TOOL_CARD_W / 2, pos.y - TOOL_CARD_H / 2, pos.x + TOOL_CARD_W / 2, pos.y + TOOL_CARD_H / 2)
+  for (const tc of toolCalls) {
+    r = Math.max(r, Math.hypot(tc.x - agent.x, tc.y - agent.y) + Math.hypot(TOOL_CARD_W, TOOL_CARD_H) / 2)
   }
+  return r
 }
 
 function resourceAgent(node: FleetGraph['nodes'][number], x: number, y: number): Agent {
@@ -246,29 +229,45 @@ function resourceAgent(node: FleetGraph['nodes'][number], x: number, y: number):
 
 export function buildFleetScene(input: FleetSceneInput): FleetScene {
   const { sessions, selection, graph } = input
-  const shownBoards = new Set(graph.nodes.filter(n => n.kind === 'kanban').map(n => n.id))
+  const startOf = new Map(input.instances.map(i => [i.id, i.startTime]))
 
-  // 1. One cluster per session that has something visible. Order: profile name, then session id.
-  const clusters: Cluster[] = []
+  // 1. One cluster per session that has something visible; their nodes become units of the profile's cloud.
+  const byIdentity = new Map<string, { clusters: Cluster[]; units: Unit[] }>()
   for (const s of sessions) {
     const own = input.instances.filter(i => i.id === s.id || i.id.startsWith(`${s.id}::`))
     const c = buildCluster(s, input.stateOf(s.id), own, selection)
-    if (c) clusters.push(c)
+    if (!c) continue
+    let group = byIdentity.get(c.identity)
+    if (!group) byIdentity.set(c.identity, (group = { clusters: [], units: [] }))
+    group.clusters.push(c)
+    for (const agent of c.agents) {
+      const toolCalls = c.toolCalls.filter(tc => tc.agentId === agent.id)
+      group.units.push({
+        sid: s.id, agent, toolCalls, start: startOf.get(nodeInstanceId(s.id, agent.id)) ?? 0,
+        radius: unitRadius(agent, toolCalls),
+      })
+    }
   }
-  clusters.sort((a, b) => a.identity.localeCompare(b.identity) || a.session.id.localeCompare(b.session.id))
-  for (const c of clusters) if (input.kanban) addKanbanSatellites(c, input.kanban, shownBoards)
+  // Clouds in profile-name order; units in start order, so a new session joins the rim of its blob.
+  const identities = [...byIdentity.keys()].sort((a, b) => a.localeCompare(b))
+  const cloudInfo = identities.map(identity => {
+    const group = byIdentity.get(identity)!
+    group.units.sort((a, b) => a.start - b.start || nodeInstanceId(a.sid, a.agent.id).localeCompare(nodeInstanceId(b.sid, b.agent.id)))
+    const blobUnits: BlobUnit[] = group.units.map(u => ({ id: nodeInstanceId(u.sid, u.agent.id), radius: u.radius }))
+    const blob = placeBlob(blobUnits, identity)
+    return { identity, group, blob, halo: blob.radius + HALO_PAD }
+  })
 
-  // 2. Grid of clusters, cells sized to the biggest cluster.
-  const n = clusters.length
+  // 2. Grid of clouds, cells sized to their own halo (plus the caption), so one big profile does not
+  // blow up the space of the small ones. cxs/cys are cell centres, the first at 0.
+  const n = cloudInfo.length
   const cols = Math.max(1, Math.min(n || 1, input.columns ?? Math.ceil(Math.sqrt(n))))
   const rows = Math.max(1, Math.ceil(n / cols))
-  // Column widths and row heights follow their own clusters, so one big profile does not
-  // blow up the space of the small ones. cxs/cys are cell centres, the first at 0.
   const colW = Array.from({ length: cols }, () => 0)
   const rowH = Array.from({ length: rows }, () => 0)
-  clusters.forEach((c, i) => {
-    colW[i % cols] = Math.max(colW[i % cols], c.box.x2 - c.box.x1)
-    rowH[Math.floor(i / cols)] = Math.max(rowH[Math.floor(i / cols)], c.box.y2 - c.box.y1)
+  cloudInfo.forEach((c, i) => {
+    colW[i % cols] = Math.max(colW[i % cols], 2 * c.halo)
+    rowH[Math.floor(i / cols)] = Math.max(rowH[Math.floor(i / cols)], 2 * c.halo + CAPTION_ROOM)
   })
   const centres = (sizes: number[], gap: number) => {
     const out: number[] = []
@@ -276,40 +275,78 @@ export function buildFleetScene(input: FleetSceneInput): FleetScene {
     sizes.forEach((s, k) => { out.push(k === 0 ? 0 : edge + gap + s / 2); edge = out[k] + s / 2 })
     return out
   }
-  const cxs = centres(colW, CLUSTER_GAP_X)
-  const cys = centres(rowH, CLUSTER_GAP_Y)
+  const cxs = centres(colW, CLOUD_GAP_X)
+  const cys = centres(rowH, CLOUD_GAP_Y)
 
   const agents = new Map<string, Agent>()
   const toolCalls = new Map<string, ToolCallNode>()
   const edges: Edge[] = []
   const sessionOfAgent = new Map<string, string>()
-  const centers = new Map<string, { x: number; y: number; identity: string }>()
-  const mainOfSession = new Map<string, string>()
+  const centers = new Map<string, { x: number; y: number; r: number; identity: string }>()
+  const cloudViews: CloudView[] = []
+  const graphCloud = new Map(graph.clouds.map(c => [c.id, c]))
   const ns = (sid: string, id: string) => sceneId(sid, id)
 
-  clusters.forEach((c, i) => {
+  cloudInfo.forEach(({ identity, group, blob, halo }, i) => {
+    // The cloud's centroid: the cell centre, moved up by half the room kept under the halo for the caption.
     const cx = cxs[i % cols]
-    const cy = cys[Math.floor(i / cols)]
-    // Move the cluster's box centre onto the cell centre.
-    const dx = cx - (c.box.x1 + c.box.x2) / 2
-    const dy = cy - (c.box.y1 + c.box.y2) / 2
-    const sid = c.session.id
-    centers.set(sid, { x: cx, y: cy, identity: c.identity })
-    for (const a of c.agents) {
-      const id = ns(sid, a.id)
+    const cy = cys[Math.floor(i / cols)] - CAPTION_ROOM / 2
+    const cloudId = cloudIdOf(identity)
+    centers.set(cloudId, { x: cx, y: cy, r: halo, identity })
+    const members: CloudView['members'] = []
+    for (const u of group.units) {
+      const id = ns(u.sid, u.agent.id)
+      const at = blob.positions.get(id)!
+      const x = cx + at.x
+      const y = cy + at.y
+      const dx = x - u.agent.x
+      const dy = y - u.agent.y
+      const cluster = group.clusters.find(c => c.session.id === u.sid)!
       agents.set(id, {
-        ...a, id, parentId: a.parentId && c.agents.some(p => p.id === a.parentId) ? ns(sid, a.parentId) : null,
-        x: a.x + dx, y: a.y + dy, sessionId: sid, pinned: true,
+        ...u.agent, id,
+        parentId: u.agent.parentId && cluster.agents.some(p => p.id === u.agent.parentId) ? ns(u.sid, u.agent.parentId) : null,
+        x, y, sessionId: u.sid, pinned: true,
       })
-      sessionOfAgent.set(id, sid)
+      sessionOfAgent.set(id, u.sid)
+      for (const tc of u.toolCalls) {
+        const tid = ns(u.sid, tc.id)
+        toolCalls.set(tid, { ...tc, id: tid, agentId: id, x: tc.x + dx, y: tc.y + dy })
+      }
+      members.push({ id, pad: u.radius })
     }
-    for (const tc of c.toolCalls) {
-      const id = ns(sid, tc.id)
-      toolCalls.set(id, { ...tc, id, agentId: ns(sid, tc.agentId), x: tc.x + dx, y: tc.y + dy })
+    // Edges inside a session node (to its satellites, or sub-agent spawns) keep their shape; none join two sessions.
+    for (const c of group.clusters) {
+      for (const e of c.edges) edges.push({ ...e, id: ns(c.session.id, e.id), from: ns(c.session.id, e.from), to: ns(c.session.id, e.to) })
     }
-    for (const e of c.edges) edges.push({ ...e, id: ns(sid, e.id), from: ns(sid, e.from), to: ns(sid, e.to) })
-    if (c.mainId) mainOfSession.set(sid, ns(sid, c.mainId))
+    const gc = graphCloud.get(cloudId)
+    cloudViews.push({ id: cloudId, label: identity, color: gc?.color ?? groupColor(identity), status: gc?.status ?? 'idle', members })
   })
+
+  // 3. Resources near the weighted centroid of the clouds they link to; unlinked ones on the rim.
+  // Placed from the layout, before drags, so a dragged node does not move the map around it.
+  const resources = graph.nodes.filter(nd => nd.kind === 'kanban' || nd.kind === 'supermemory')
+  const linksOf = new Map<string, Array<{ cloudId: string; weight: number }>>()
+  for (const e of graph.edges) {
+    if (!centers.has(e.from)) continue
+    const list = linksOf.get(e.to) ?? []
+    list.push({ cloudId: e.from, weight: e.weight })
+    linksOf.set(e.to, list)
+  }
+  const spots = placeResources(
+    [...centers].map(([id, c]) => ({ id, x: c.x, y: c.y, r: c.r })),
+    resources.map(r => ({ id: r.id, links: linksOf.get(r.id) ?? [] })),
+  )
+  for (const node of resources) {
+    const p = spots.get(node.id)!
+    agents.set(node.id, resourceAgent(node, p.x, p.y))
+  }
+  for (const e of graph.edges) {
+    if (!centers.has(e.from) || !agents.has(e.to)) continue
+    edges.push({
+      id: e.id, from: e.from, to: e.to, type: 'resource', opacity: 1, fromCloud: true, lastUsedAt: e.lastUsedAt,
+      color: e.kind === 'kanban' ? KANBAN_COLOR : SUPERMEMORY_COLOR,
+    })
+  }
 
   // Dragged nodes keep their place; their satellites keep orbiting them (offset kept at placement).
   for (const [id, pos] of input.moved ?? []) {
@@ -321,47 +358,21 @@ export function buildFleetScene(input: FleetSceneInput): FleetScene {
     for (const [tid, tc] of toolCalls) if (tc.agentId === id) toolCalls.set(tid, { ...tc, x: tc.x + ddx, y: tc.y + ddy })
   }
 
-  // 3. Resources around the grid, linked to the profiles that use them.
-  const gridW = cxs[cols - 1]
-  const gridH = cys[rows - 1]
-  const left = -colW[0] / 2 - RESOURCE_GAP / 2
-  const right = gridW + colW[cols - 1] / 2 + RESOURCE_GAP / 2
-  const top = -rowH[0] / 2 - RESOURCE_GAP / 2
-  const bottom = gridH + rowH[rows - 1] / 2 + RESOURCE_GAP / 2
-  const place = (nodes: FleetGraph['nodes'], side: 'left' | 'right') => {
-    nodes.forEach((node, i) => {
-      const k = i - (nodes.length - 1) / 2
-      const x = input.narrow ? gridW / 2 + k * RESOURCE_PITCH : side === 'left' ? left : right
-      const y = input.narrow ? (side === 'left' ? top : bottom) : gridH / 2 + k * RESOURCE_PITCH
-      agents.set(node.id, resourceAgent(node, x, y))
-    })
-  }
-  place(graph.nodes.filter(nd => nd.kind === 'kanban'), 'left')
-  place(graph.nodes.filter(nd => nd.kind === 'supermemory'), 'right')
-
-  for (const e of graph.edges) {
-    if (e.kind === 'session') continue
-    const resource = agents.get(e.to)
-    const profile = graph.nodes.find(nd => nd.id === e.from)
-    if (!resource || !profile?.openId) continue
-    const main = mainOfSession.get(splitInstanceId(profile.openId).sessionId)
-    if (!main) continue
-    edges.push({ id: `res:${main}>${e.to}`, from: main, to: e.to, type: 'resource', opacity: 1, active: e.active, color: e.kind === 'kanban' ? KANBAN_COLOR : SUPERMEMORY_COLOR })
-  }
-
   let currentTime = 0
   for (const s of sessions) currentTime = Math.max(currentTime, input.stateOf(s.id).currentTime)
   const state = createEmptyState({
     agents, toolCalls, edges, keepFinished: true, isPlaying: false, currentTime, maxTimeReached: currentTime,
+    clouds: cloudViews, pulses: input.pulses ? [...input.pulses] : [],
   })
   return { state, sessionOfAgent, clusters: centers }
 }
 
 /**
- * What a click on a node of the scene opens: the session detail of that agent. Resources open nothing.
- * `instanceId` is the node that is selected on the map. `openId` is what the detail panel opens:
- * the node itself, or, for a profile's main node (it has no conversation of its own), the plain
- * session id, so the panel shows that profile's most recently active session node.
+ * What a click on a node of the scene opens: the session detail of that agent. Resources open nothing
+ * here (the map shows their inspector). `instanceId` is the node that is selected on the map.
+ * `openId` is what the detail panel opens: the node itself, or, for a profile whose only node is
+ * its main node (it has no conversation of its own), the plain session id, so the panel shows
+ * that profile's most recently active session node.
  */
 export function openTargetOf(scene: FleetScene, nodeId: string | null): { sessionId: string; instanceId: string; openId: string } | null {
   if (!nodeId) return null

@@ -6,10 +6,12 @@ import { Z, type SimulationEvent } from "@/lib/agent-types"
 import type { FleetInstance, FleetSelectionView, SessionLike } from "@/lib/fleet/fleet-model"
 import type { PublicKanbanBoardNode } from "@/lib/fleet/kanban-source"
 import type { SupermemoryNamespaceNode } from "@/lib/fleet/supermemory-source"
-import { buildFleetGraph } from "@/lib/fleet/fleet-graph"
+import { buildFleetGraph, EMPTY_GRAPH } from "@/lib/fleet/fleet-graph"
+import { inspectResource } from "@/lib/fleet/fleet-inspect"
 import { useFleetScene } from "@/hooks/use-fleet-scene"
 import { openTargetOf, type FleetReplay } from "@/hooks/simulation/fleet-scene"
 import { AgentCanvas } from "./canvas"
+import { FleetInspector } from "./fleet-inspector"
 
 interface FleetMapProps {
   visible: boolean
@@ -31,6 +33,9 @@ interface FleetMapProps {
   insetTop: number
   insetBottom: number
   insetRight: number
+  /** Whether the fleet timeline panel is shown. When it is hidden the map takes the full height. */
+  timelineVisible?: boolean
+  onToggleTimeline?: () => void
 }
 
 const NARROW_WIDTH = 720
@@ -45,6 +50,7 @@ const noop = () => {}
  */
 export function FleetMap({
   visible, sessions, eventsOf, tick, instances, kanban, supermemory, selection, onOpenSession, replay, insetTop, insetBottom, insetRight,
+  timelineVisible = true, onToggleTimeline,
 }: FleetMapProps) {
   const [wrap, setWrap] = useState<HTMLDivElement | null>(null)
   const [size, setSize] = useState({ width: 0, height: 0 })
@@ -52,6 +58,7 @@ export function FleetMap({
   const [now, setNow] = useState(() => Date.now())
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [hoveredId, setHoveredId] = useState<string | null>(null)
+  const [inspectId, setInspectId] = useState<string | null>(null)
 
   useEffect(() => {
     if (!visible) return
@@ -82,14 +89,15 @@ export function FleetMap({
   const narrow = size.width > 0 && size.width < NARROW_WIDTH
   const top = narrow ? 138 : insetTop
   // Below the map: the timeline panel's measured height (never more than 55% of the screen), else the given inset.
-  const measuredBottom = panelTop !== null ? Math.max(size.height - panelTop + 8, 0) : insetBottom
-  const bottom = Math.min(measuredBottom, Math.round(size.height * 0.55))
+  // Timeline hidden: nothing is reserved below the map (insetBottom is 0 then).
+  const measuredBottom = !timelineVisible ? insetBottom : panelTop !== null ? Math.max(size.height - panelTop + 8, 0) : insetBottom
+  const bottom = timelineVisible ? Math.min(measuredBottom, Math.round(size.height * 0.55)) : measuredBottom
   const freeW = Math.max(size.width - insetRight, 1)
   const freeH = Math.max(size.height - top - bottom, 1)
 
   // Resources and their links to the agents (which boards/namespaces are shown, who uses them).
   const graph = useMemo(
-    () => visible ? buildFleetGraph({ instances, kanban, supermemory, selection, now }) : { nodes: [], edges: [] },
+    () => visible ? buildFleetGraph({ instances, kanban, supermemory, selection, now }) : EMPTY_GRAPH,
     [visible, instances, kanban, supermemory, selection, now],
   )
   // Clusters per row follow the free area's shape, so a phone gets a tall column, a desktop a wide grid.
@@ -99,7 +107,7 @@ export function FleetMap({
   )
 
   const { scene, frameRef, moveNode } = useFleetScene({
-    visible, sessions, eventsOf, instances, selection, graph, kanban, narrow, columns, tick, replay,
+    visible, sessions, eventsOf, instances, selection, graph, columns, tick, replay,
   })
 
   // Re-fit the camera when the set of nodes or the free area changes (the user's own pan/zoom is kept otherwise).
@@ -110,7 +118,8 @@ export function FleetMap({
   // A node that left the map (deselected) cannot stay selected.
   useEffect(() => {
     if (selectedId && !scene.state.agents.has(selectedId)) setSelectedId(null)
-  }, [scene, selectedId])
+    if (inspectId && !scene.state.agents.has(inspectId)) setInspectId(null)
+  }, [scene, selectedId, inspectId])
 
   if (!visible) return null
 
@@ -122,9 +131,18 @@ export function FleetMap({
     else if (a.resourceKind === 'supermemory') memoryCount++
     else agentCount++
   }
+  const inspection = inspectId ? inspectResource(inspectId, kanban, supermemory) : null
   const profileNames = [...scene.clusters.values()].map(c => c.identity)
 
   const open = (nodeId: string | null) => {
+    // Kanban and memory nodes open the read-only inspector of their latest interactions.
+    const picked = nodeId ? scene.state.agents.get(nodeId) : undefined
+    if (picked?.resourceKind) {
+      setSelectedId(picked.id)
+      setInspectId(picked.id)
+      return
+    }
+    setInspectId(null)
     const target = openTargetOf(scene, nodeId)
     if (!target) return
     setSelectedId(target.instanceId)
@@ -139,6 +157,9 @@ export function FleetMap({
       data-satellites={scene.state.toolCalls.size}
       data-kanban={kanbanCount}
       data-supermemory={memoryCount}
+      data-timeline-visible={timelineVisible}
+      data-clouds={scene.state.clouds?.length ?? 0}
+      data-edges={scene.state.edges.filter(e => e.fromCloud).length}
       data-profile-names={profileNames.join('|')}
       className="absolute inset-0"
       style={{ zIndex: Z.info - 5, background: COLORS.void }}
@@ -152,13 +173,32 @@ export function FleetMap({
           showStats={false}
           showHexGrid
           zoomToFitTrigger={fitTrigger}
-          onAgentClick={id => { if (id) open(id); else setSelectedId(null) }}
+          onAgentClick={id => { if (id) open(id); else { setSelectedId(null); setInspectId(null) } }}
           onAgentHover={setHoveredId}
           onAgentDrag={moveNode}
           onContextMenu={noop}
           onToolCallClick={id => { if (id) open(id) }}
         />
       </div>
+      {inspection && (
+        <FleetInspector inspection={inspection} now={now} top={top} right={insetRight} narrow={narrow}
+          onClose={() => { setInspectId(null); setSelectedId(null) }} />
+      )}
+      {onToggleTimeline && (
+        <button
+          type="button"
+          data-testid="fleet-timeline-toggle"
+          aria-pressed={timelineVisible}
+          onClick={onToggleTimeline}
+          className="absolute font-mono text-xs px-2 py-1 rounded"
+          style={{
+            right: insetRight + 12, bottom: bottom + 8, zIndex: 6,
+            background: 'rgba(8,12,24,0.88)', border: `1px solid ${COLORS.holoBase}66`, color: COLORS.textPrimary,
+          }}
+        >
+          {timelineVisible ? 'Hide timeline' : 'Show timeline'}
+        </button>
+      )}
       {scene.state.agents.size === 0 && (
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none font-mono text-xs" style={{ color: COLORS.textMuted }}>
           No Hermes profiles with sessions yet
