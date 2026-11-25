@@ -89,7 +89,7 @@ export function FleetMap({
   const narrow = size.width > 0 && size.width < NARROW_WIDTH
   const top = narrow ? 138 : insetTop
   // Below the map: the timeline panel's measured height (never more than 55% of the screen), else the given inset.
-  // Timeline hidden: nothing is reserved below the map (insetBottom is 0 then).
+  // Timeline hidden: only what the playback bar covers is reserved (insetBottom is that then).
   const measuredBottom = !timelineVisible ? insetBottom : panelTop !== null ? Math.max(size.height - panelTop + 8, 0) : insetBottom
   const bottom = timelineVisible ? Math.min(measuredBottom, Math.round(size.height * 0.55)) : measuredBottom
   const freeW = Math.max(size.width - insetRight, 1)

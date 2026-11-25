@@ -14,6 +14,9 @@ interface FleetInspectorProps {
   narrow: boolean
 }
 
+/** Space under the top bar that the session summary card (top left) takes, px: the panel starts below it. */
+const SESSION_CARD_CLEARANCE = 52
+
 /** Read-only list of the latest interactions of a Kanban board or Supermemory namespace. */
 export function FleetInspector({ inspection, now, onClose, right, top, narrow }: FleetInspectorProps) {
   const color = inspection.kind === 'kanban' ? KANBAN_COLOR : SUPERMEMORY_COLOR
@@ -24,7 +27,7 @@ export function FleetInspector({ inspection, now, onClose, right, top, narrow }:
       data-count={inspection.items.length}
       className="absolute font-mono text-xs overflow-hidden flex flex-col"
       style={{
-        top: top + 8,
+        top: top + SESSION_CARD_CLEARANCE,
         ...(narrow ? { left: 8, right: right + 8 } : { left: 12, width: 340 }),
         maxHeight: narrow ? 220 : 360,
         zIndex: 5,

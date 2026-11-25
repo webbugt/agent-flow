@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import { strict as assert } from 'node:assert'
 import {
-  FLEET_TIMELINE_INSET, FLEET_TIMELINE_KEY, loadTimelineVisible, mapInsetBottom, parseTimelineVisible, saveTimelineVisible,
+  FLEET_TIMELINE_INSET, FLEET_TIMELINE_KEY, PLAYBACK_BAR_INSET, loadTimelineVisible, mapInsetBottom, parseTimelineVisible, saveTimelineVisible,
 } from './fleet-timeline-pref'
 
 function memStorage(initial: Record<string, string> = {}) {
@@ -32,8 +32,9 @@ test('broken storage does not throw: load falls back to visible, save reports fa
   assert.equal(saveTimelineVisible(null, false), false)
 })
 
-test('hidden timeline: the map reserves no space at the bottom', () => {
+test('hidden timeline: the map gives back the panel space and keeps only the playback bar clear', () => {
   assert.equal(mapInsetBottom(true), FLEET_TIMELINE_INSET)
   assert.equal(mapInsetBottom(true), 380, 'the value the layout used before')
-  assert.equal(mapInsetBottom(false), 0)
+  assert.equal(mapInsetBottom(false), PLAYBACK_BAR_INSET)
+  assert.ok(mapInsetBottom(false) < mapInsetBottom(true) / 4, 'the map is much taller when hidden')
 })

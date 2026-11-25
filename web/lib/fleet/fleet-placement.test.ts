@@ -80,16 +80,21 @@ test('placeResources: resources stay out of every halo and apart from each other
   }
 })
 
-test('placeResources: unlinked resources go to a rim outside all clouds', () => {
+test('placeResources: unlinked resources go to a rim outside all clouds, wide maps spread sideways', () => {
   const pos = placeResources(CLOUDS, [
     { id: 'supermemory:u1', links: [] }, { id: 'supermemory:u2', links: [{ cloudId: 'cloud:gone', weight: 5 }] }, { id: 'supermemory:u3', links: [] },
   ])
-  const mid = { x: (0 + 800 + 400) / 3, y: (0 + 0 + 700) / 3 }
-  const extent = Math.max(...CLOUDS.map(c => Math.hypot(c.x - mid.x, c.y - mid.y) + c.r))
+  assert.equal(pos.size, 3)
   for (const p of pos.values()) {
-    assert.ok(Math.hypot(p.x - mid.x, p.y - mid.y) >= extent, 'on the rim, outside the clouds')
-    for (const c of CLOUDS) assert.ok(Math.hypot(p.x - c.x, p.y - c.y) >= c.r)
+    for (const c of CLOUDS) assert.ok(Math.hypot(p.x - c.x, p.y - c.y) >= c.r, 'outside every halo')
+    const inside = p.x > -150 && p.x < 950 && p.y > -150 && p.y < 850
+    assert.ok(!inside, 'outside the bounding box of the clouds')
   }
+  // A wide row of clouds: the two unlinked resources end up left and right, not above and below.
+  const row: PlacementCloud[] = [{ id: 'cloud:a', x: 0, y: 0, r: 100 }, { id: 'cloud:b', x: 600, y: 0, r: 100 }, { id: 'cloud:c', x: 1200, y: 0, r: 100 }]
+  const two = placeResources(row, [{ id: 'k:1', links: [] }, { id: 'k:2', links: [] }])
+  assert.ok(Math.abs(two.get('k:1')!.y) < 150 && Math.abs(two.get('k:2')!.y) < 150)
+  assert.ok(two.get('k:1')!.x > 1200 && two.get('k:2')!.x < 0)
 })
 
 test('placeResources: deterministic, independent of the order of the input, no clouds is fine', () => {

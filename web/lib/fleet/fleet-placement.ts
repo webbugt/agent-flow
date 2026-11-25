@@ -7,7 +7,7 @@
  *     added, apart from the final re-centring on the centroid.
  *   - {@link placeResources}: each Kanban board and Supermemory namespace goes near the weighted
  *     centroid of the clouds it links to (weight = event count), outside every cloud's halo.
- *     Resources without a link go on a rim around all clouds.
+ *     Resources without a link go on an elliptical rim around all clouds.
  */
 
 export interface Point { x: number; y: number }
@@ -116,12 +116,16 @@ export function placeResources(
   const byId = new Map(cloudList.map(c => [c.id, c]))
   const list = [...resources].sort((a, b) => a.id.localeCompare(b.id))
 
-  // Centre and extent of the clouds as a whole.
-  const n = cloudList.length
-  const mid: Point = n === 0
-    ? { x: 0, y: 0 }
-    : { x: cloudList.reduce((s, c) => s + c.x, 0) / n, y: cloudList.reduce((s, c) => s + c.y, 0) / n }
-  const extent = cloudList.reduce((m, c) => Math.max(m, Math.hypot(c.x - mid.x, c.y - mid.y) + c.r), 0)
+  // Bounding box of all halos: the rim is an ellipse around it, so a wide map gets a wide rim.
+  const box = cloudList.length === 0
+    ? { x0: 0, y0: 0, x1: 0, y1: 0 }
+    : {
+      x0: Math.min(...cloudList.map(c => c.x - c.r)), x1: Math.max(...cloudList.map(c => c.x + c.r)),
+      y0: Math.min(...cloudList.map(c => c.y - c.r)), y1: Math.max(...cloudList.map(c => c.y + c.r)),
+    }
+  const mid: Point = { x: (box.x0 + box.x1) / 2, y: (box.y0 + box.y1) / 2 }
+  const halfW = (box.x1 - box.x0) / 2
+  const halfH = (box.y1 - box.y0) / 2
 
   const pos = new Map<string, Point>()
   const unlinked: PlacementResource[] = []
@@ -138,11 +142,12 @@ export function placeResources(
     if (wsum === 0) { unlinked.push(res); continue }
     pos.set(res.id, { x: x / wsum, y: y / wsum })
   }
-  // Rim: evenly spaced on a ring around everything, starting at the top.
+  // Rim: evenly spaced on an ellipse around all clouds. A wide map starts at the sides, a tall one at the
+  // top and bottom, so the rim adds the least to the side that is already short of room.
+  const start = halfW >= halfH ? 0 : -Math.PI / 2
   unlinked.forEach((res, k) => {
-    const a = -Math.PI / 2 + (2 * Math.PI * k) / unlinked.length
-    const ring = extent + rimGap
-    pos.set(res.id, { x: mid.x + ring * Math.cos(a), y: mid.y + ring * Math.sin(a) })
+    const a = start + (2 * Math.PI * k) / unlinked.length
+    pos.set(res.id, { x: mid.x + (halfW + rimGap) * Math.cos(a), y: mid.y + (halfH + rimGap) * Math.sin(a) })
   })
 
   // Relax: out of every halo, apart from each other. A fixed number of passes in id order.

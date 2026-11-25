@@ -1,10 +1,14 @@
 import { useRef, useEffect, useCallback, type MutableRefObject } from 'react'
 import { Agent, ToolCallNode, Discovery, ANIM, NODE } from '@/lib/agent-types'
 import { SHOT_MODE } from '@/lib/shot-mode'
+import { cloudGeometries, type CloudView } from '@/lib/fleet/fleet-cloud-geometry'
 import { BUBBLE_HOLD, BUBBLE_FADE_OUT, BUBBLE_MAX_W, TOOL_CARD_W, TOOL_CARD_H, DISC_BOUNDS_HALF_W, DISC_BOUNDS_HALF_H } from '@/lib/canvas-constants'
 
 /** Extra padding added to agent node radii for auto-fit bounding box */
 const AUTOFIT_AGENT_PADDING = 22
+
+/** Room under a cloud halo for its caption, world units (fleet map). */
+const AUTOFIT_CLOUD_CAPTION = 48
 
 export interface Transform {
   x: number
@@ -18,6 +22,8 @@ interface CameraOptions {
     agents: Map<string, Agent>
     toolCalls: Map<string, ToolCallNode>
     discoveries: Discovery[]
+    /** Fleet map only: agent clouds; the fit keeps every halo and its caption in view. */
+    clouds?: CloudView[]
     dimensions: { width: number; height: number }
     selectedAgentId: string | null
     pauseAutoFit?: boolean
@@ -78,7 +84,7 @@ export function useCanvasCamera({
   }, [])
 
   const computeFitTransform = useCallback((): Transform | null => {
-    const { agents, toolCalls, discoveries, dimensions, selectedAgentId } = drawPropsRef.current
+    const { agents, toolCalls, discoveries, clouds, dimensions, selectedAgentId } = drawPropsRef.current
     if (agents.size === 0) return null
 
     // Return cached result if inputs haven't changed (reference equality —
@@ -138,6 +144,14 @@ export function useCanvasCamera({
         maxX = Math.max(maxX, disc.x + DISC_BOUNDS_HALF_W)
         minY = Math.min(minY, disc.y - DISC_BOUNDS_HALF_H)
         maxY = Math.max(maxY, disc.y + DISC_BOUNDS_HALF_H)
+      }
+    }
+    if (!focusScope && clouds && clouds.length > 0) {
+      for (const g of cloudGeometries(clouds, agents).values()) {
+        minX = Math.min(minX, g.x - g.r)
+        maxX = Math.max(maxX, g.x + g.r)
+        minY = Math.min(minY, g.y - g.r)
+        maxY = Math.max(maxY, g.y + g.r + AUTOFIT_CLOUD_CAPTION)
       }
     }
     if (minX === Infinity) {

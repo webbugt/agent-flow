@@ -20,6 +20,7 @@ import { FileAttentionPanel } from "./file-attention-panel"
 import { TimelinePanel } from "./timeline-panel"
 import { FleetTimelinePanel } from "./fleet-timeline-panel"
 import { FleetMap } from "./fleet-map"
+import { createDemoResources, addDemoEvent, type DemoEventKind } from "@/lib/fleet/fleet-demo-resources"
 import { loadTimelineVisible, saveTimelineVisible, mapInsetBottom } from "@/lib/fleet/fleet-timeline-pref"
 import { useFleetSelection } from "@/hooks/use-fleet-selection"
 import { useFleetSources } from "@/hooks/use-fleet-sources"
@@ -112,6 +113,20 @@ export function AgentVisualizer() {
   const fleetSelection = useFleetSelection()
   const fleetSources = useFleetSources(showFleet && !bridge.useMockData)
   const fleetFixture = useMemo(() => createFleetFixture(Date.now()), [])
+  // Demo: invented boards and namespaces, plus a new event now and then, so the map shows placement, link linger and pulses.
+  const [demoSources, setDemoSources] = useState(() => createDemoResources(Date.now()))
+  const demoSeqRef = useRef(0)
+  useEffect(() => {
+    if (!bridge.useMockData || !showFleet) return
+    const emit = (kind: DemoEventKind) => setDemoSources(prev => addDemoEvent(prev, kind, Date.now(), demoSeqRef.current++))
+    // Handle for the demo only (screenshots, manual checks): `__fleetDemo.emit('kanban' | 'memory')`.
+    const w = window as unknown as { __fleetDemo?: { emit: (kind: DemoEventKind) => void } }
+    w.__fleetDemo = { emit }
+    const timer = setInterval(() => emit(demoSeqRef.current % 2 ? 'kanban' : 'memory'), 20_000)
+    return () => { clearInterval(timer); delete w.__fleetDemo }
+  }, [bridge.useMockData, showFleet])
+  const fleetKanban = bridge.useMockData ? demoSources.kanban : fleetSources.kanban
+  const fleetMemory = bridge.useMockData ? demoSources.supermemory : fleetSources.supermemory
   // The fleet reads EVERY session of every profile (also closed tabs) and each agent node
   // inside them, never just the open tab. Their events are buffered in refs, so a slow tick
   // refreshes the instances while the panel is open.
@@ -593,8 +608,8 @@ export function AgentVisualizer() {
         eventsOf={mapEventsOf}
         tick={fleetTick}
         instances={fleetInstances}
-        kanban={bridge.useMockData ? undefined : fleetSources.kanban}
-        supermemory={bridge.useMockData ? undefined : fleetSources.supermemory}
+        kanban={fleetKanban}
+        supermemory={fleetMemory}
         selection={fleetSelection.view}
         onOpenSession={bridge.useMockData ? undefined : handleFleetOpenSession}
         replay={fleetReplayRef.current}
@@ -609,8 +624,8 @@ export function AgentVisualizer() {
       <FleetTimelinePanel
         visible={showFleet && fleetTimelineVisible}
         instances={fleetInstances}
-        kanban={bridge.useMockData ? undefined : fleetSources.kanban}
-        supermemory={bridge.useMockData ? undefined : fleetSources.supermemory}
+        kanban={fleetKanban}
+        supermemory={fleetMemory}
         selection={fleetSelection}
         onOpenSession={bridge.useMockData ? undefined : handleFleetOpenSession}
         canOpenSession={canOpenFleetSession}

@@ -35,7 +35,13 @@ export function saveTimelineVisible(storage: StorageLike | null | undefined, vis
   }
 }
 
-/** The space the map keeps free at the bottom: the timeline panel's, or none when it is hidden. */
+/** Height of the playback bar that floats over the bottom of the screen, px. It stays when the timeline is hidden. */
+export const PLAYBACK_BAR_INSET = 72
+
+/**
+ * The space the map keeps free at the bottom: the timeline panel's, or, when it is hidden, only what the
+ * playback bar covers (the map takes the rest: the full height of the screen above the bar).
+ */
 export function mapInsetBottom(timelineVisible: boolean): number {
-  return timelineVisible ? FLEET_TIMELINE_INSET : 0
+  return timelineVisible ? FLEET_TIMELINE_INSET : PLAYBACK_BAR_INSET
 }

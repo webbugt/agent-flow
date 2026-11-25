@@ -173,6 +173,8 @@ interface Cluster {
 }
 
 const AGENT_PAD = 70
+/** Reach of a node's message bubbles for the blob packing, world units. */
+const BUBBLE_REACH = 130
 
 function visibleIn(
   s: SessionLike, own: readonly FleetInstance[], selection: FleetSelectionView, agent: Agent,
@@ -207,10 +209,9 @@ function buildCluster(
 
 function unitRadius(agent: Agent, toolCalls: readonly ToolCallNode[]): number {
   let r = AGENT_PAD
-  if (agent.messageBubbles.length > 0) {
-    // A bubble stack hangs off the node to the right and above (up to 300 wide, 60 per bubble).
-    r = Math.max(r, Math.hypot(300, 30 + agent.messageBubbles.length * 60))
-  }
+  // Message bubbles hang off the node to the right, but only show when the camera is zoomed in: they
+  // get a fixed share of the blob (not a share per bubble), or one chatty session would blow up its cloud.
+  if (agent.messageBubbles.length > 0) r = Math.max(r, BUBBLE_REACH)
   for (const tc of toolCalls) {
     r = Math.max(r, Math.hypot(tc.x - agent.x, tc.y - agent.y) + Math.hypot(TOOL_CARD_W, TOOL_CARD_H) / 2)
   }

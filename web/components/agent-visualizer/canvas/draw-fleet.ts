@@ -10,6 +10,16 @@ import { bezierPoint, computeControlPoints, drawTaperedBezier } from './draw-edg
 
 /** Fleet map only: agent clouds, links from a cloud to a resource, and the dots on those links. */
 
+/**
+ * How much to enlarge strokes, captions and dots so they stay readable when the camera has zoomed
+ * out to fit a big fleet: 1 at normal zoom, up to 4 when far out. Uses the current canvas transform.
+ */
+export function overviewBoost(ctx: CanvasRenderingContext2D): number {
+  const dpr = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1
+  const zoom = ctx.getTransform().a / dpr
+  return zoom > 0 && Number.isFinite(zoom) ? Math.min(Math.max(1 / zoom, 1), 4) : 1
+}
+
 /** The two ends of a cloud-to-resource link: where it leaves the cloud's halo and the resource node. */
 export function fleetLinkEnds(
   edge: Edge, agents: ReadonlyMap<string, Agent>, clouds: ReadonlyMap<string, CloudGeometry>,
@@ -52,11 +62,12 @@ export function drawClouds(
     ctx.stroke()
     ctx.setLineDash([])
     // The caption sits under the halo.
-    ctx.font = '600 13px monospace'
+    const k = overviewBoost(ctx)
+    ctx.font = `600 ${Math.round(13 * k)}px monospace`
     ctx.textAlign = 'center'
     ctx.textBaseline = 'top'
     ctx.fillStyle = cloud.color + alphaHex(active ? 0.95 : 0.75)
-    ctx.fillText(cloud.label, g.x, g.y + g.r + 6)
+    ctx.fillText(cloud.label, g.x, g.y + g.r + 6 * k)
     ctx.restore()
   }
 }
@@ -79,8 +90,9 @@ export function drawFleetLinks(
     const cp = computeControlPoints(ends.fromX, ends.fromY, ends.toX, ends.toY)
     if (!cp) continue
     ctx.save()
+    const k = overviewBoost(ctx)
     drawTaperedBezier(ctx, ends.fromX, ends.fromY, cp.cp1x, cp.cp1y, cp.cp2x, cp.cp2y, ends.toX, ends.toY,
-      BEAM.tool.startW, BEAM.tool.endW, edge.color ?? COLORS.holoBase, BEAM.activeAlpha * life)
+      BEAM.parentChild.startW * k, BEAM.parentChild.endW * k, edge.color ?? COLORS.holoBase, BEAM.activeAlpha * life)
     ctx.restore()
   }
 }
@@ -106,22 +118,23 @@ export function drawPulses(
       y: bezierPoint(u, ends.fromY, cp.cp1y, cp.cp2y, ends.toY),
     })
     ctx.save()
+    const k = overviewBoost(ctx)
     // Short comet trail, then the dot with its glow.
     for (let i = 5; i >= 1; i--) {
       const p = at(Math.max(0, t - i * 0.025))
       ctx.fillStyle = pulse.color + alphaHex(0.5 * (1 - i / 6))
       ctx.beginPath()
-      ctx.arc(p.x, p.y, 4.5 * (1 - i / 7), 0, Math.PI * 2)
+      ctx.arc(p.x, p.y, 4.5 * k * (1 - i / 7), 0, Math.PI * 2)
       ctx.fill()
     }
     const p = at(t)
     ctx.fillStyle = pulse.color + alphaHex(0.3)
     ctx.beginPath()
-    ctx.arc(p.x, p.y, 11, 0, Math.PI * 2)
+    ctx.arc(p.x, p.y, 11 * k, 0, Math.PI * 2)
     ctx.fill()
     ctx.fillStyle = pulse.color
     ctx.beginPath()
-    ctx.arc(p.x, p.y, 5, 0, Math.PI * 2)
+    ctx.arc(p.x, p.y, 5 * k, 0, Math.PI * 2)
     ctx.fill()
     ctx.restore()
   }
