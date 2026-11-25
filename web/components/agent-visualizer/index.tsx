@@ -118,7 +118,12 @@ export function AgentVisualizer() {
   const demoSeqRef = useRef(0)
   useEffect(() => {
     if (!bridge.useMockData || !showFleet) return
-    const emit = (kind: DemoEventKind) => setDemoSources(prev => addDemoEvent(prev, kind, Date.now(), demoSeqRef.current++))
+    // The sequence number is taken outside the state updater: React may run an updater twice (Strict Mode).
+    const emit = (kind: DemoEventKind) => {
+      const seq = demoSeqRef.current++
+      const at = Date.now()
+      setDemoSources(prev => addDemoEvent(prev, kind, at, seq))
+    }
     // Handle for the demo only (screenshots, manual checks): `__fleetDemo.emit('kanban' | 'memory')`.
     const w = window as unknown as { __fleetDemo?: { emit: (kind: DemoEventKind) => void } }
     w.__fleetDemo = { emit }

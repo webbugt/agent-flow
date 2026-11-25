@@ -50,9 +50,9 @@ export function FleetInspector({ inspection, now, onClose, right, top, narrow }:
         {inspection.items.length === 0 && <div className="py-2" style={{ color: COLORS.textMuted }}>No interactions recorded yet.</div>}
         {inspection.items.map((item, i) => (
           <div key={`${item.at}-${i}`} data-testid="fleet-inspector-row" className="flex gap-2 py-1" style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-            <span style={{ color: COLORS.textMuted, minWidth: 64 }}>{ageLabel(item.at, now)}</span>
-            <span style={{ minWidth: 70 }}>{item.profile ?? '—'}</span>
-            <span style={{ color }}>{item.action}</span>
+            <span className="shrink-0" style={{ color: COLORS.textMuted, width: 74 }}>{ageLabel(item.at, now)}</span>
+            <span className="shrink-0 truncate" style={{ width: 72 }}>{item.profile ?? '—'}</span>
+            <span className="shrink-0" style={{ color, width: 64 }}>{item.action}</span>
             {item.detail && <span className="truncate" style={{ color: COLORS.textMuted }}>{item.detail}</span>}
           </div>
         ))}
