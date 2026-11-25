@@ -8,11 +8,13 @@
 
 export type { AgentEvent, SessionInfo, ConnectionStatus } from './bridge-types'
 import type { AgentEvent, SessionInfo, ConnectionStatus } from './bridge-types'
+import type { CostsConfigPayload } from './costs/layers'
 
 type InitCallback = () => void
 type EventCallback = (event: AgentEvent) => void
 type StatusCallback = (status: ConnectionStatus, source: string) => void
 type ConfigCallback = (config: Partial<{ mode: string; autoPlay: boolean; showMockData: boolean; disable1MContext: boolean }>) => void
+type CostsCallback = (costs: CostsConfigPayload) => void
 type SessionCallback = (type: 'list' | 'started' | 'ended' | 'updated' | 'reset', data: SessionInfo[] | SessionInfo | string | { sessionId: string; label: string }) => void
 
 class VSCodeBridge {
@@ -25,6 +27,9 @@ class VSCodeBridge {
   private statusListeners: StatusCallback[] = []
   private configListeners: ConfigCallback[] = []
   private sessionListeners: SessionCallback[] = []
+  private costsListeners: CostsCallback[] = []
+  /** Latest `costs-config` message; a late subscriber gets it at once. */
+  private lastCosts: CostsConfigPayload | null = null
 
   constructor() {
     if (typeof window !== 'undefined') {
@@ -74,6 +79,15 @@ class VSCodeBridge {
           cb(data.config)
         }
         break
+
+      case 'costs-config': {
+        const c = data.costs
+        // Shape check only; the content is validated by resolveCostsLayers.
+        if (!c || c.version !== 1 || !Array.isArray(c.layers) || typeof c.seq !== 'number') break
+        this.lastCosts = c as CostsConfigPayload
+        for (const cb of [...this.costsListeners]) cb(this.lastCosts)
+        break
+      }
 
       case 'reset':
         for (const cb of this.sessionListeners) {
@@ -146,10 +160,22 @@ class VSCodeBridge {
     return this.subscribe(this.sessionListeners, callback)
   }
 
+  /** Subscribe to costs-config messages. Fires at once with the latest one when there is one. */
+  onCostsConfig(callback: CostsCallback): () => void {
+    const off = this.subscribe(this.costsListeners, callback)
+    if (this.lastCosts) callback(this.lastCosts)
+    return off
+  }
+
   // ─── Send commands to extension ──────────────────────────────────────────
 
   openFile(filePath: string, line?: number): void {
     this.postToExtension({ type: 'open-file', filePath, line })
+  }
+
+  /** Ask the host to open the costs file in an editor (no-op outside VS Code). */
+  openCostsConfig(): void {
+    this.postToExtension({ type: 'open-costs-config' })
   }
 
   private postToExtension(message: Record<string, unknown>): void {
@@ -178,6 +204,8 @@ class VSCodeBridge {
     this.statusListeners = []
     this.configListeners = []
     this.sessionListeners = []
+    this.costsListeners = []
+    this.lastCosts = null
   }
 }
 

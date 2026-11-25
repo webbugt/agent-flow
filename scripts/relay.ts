@@ -31,6 +31,7 @@ import {
   HOOK_SERVER_NOT_STARTED, WORKSPACE_HASH_LENGTH,
 } from '../extension/src/constants'
 import { setLogLevel } from '../extension/src/logger'
+import { CostsConfigLoader, costsConfigMessage } from '../extension/src/costs-config'
 import type { TelemetryClient } from './telemetry'
 import { buildHistoryBatch } from './history-batch'
 
@@ -502,6 +503,13 @@ export async function createRelay(options: RelayOptions): Promise<Relay> {
     codexWatcher.start()
   }
 
+  // ─── Costs config ─────────────────────────────────────────────────────────
+  // ~/.agent-flow/costs.json (+ <workspace>/.agent-flow/costs.json), hot reloaded and pushed to every SSE client
+  // as a `costs-config` message. The page validates and merges it (web/lib/costs/layers.ts).
+  const costsLoader = new CostsConfigLoader({ workspaceDirs: () => [workspace] })
+  costsLoader.onChange(costs => broadcast(JSON.stringify(costsConfigMessage(costs))))
+  costsLoader.start()
+
   const telemetry = options.telemetry
   const sessionStart = Date.now()
   let relayDisposed = false
@@ -548,6 +556,9 @@ export async function createRelay(options: RelayOptions): Promise<Relay> {
         sseClients.delete(res)
         log(`[sse] Client disconnected (${sseClients.size} total)`)
       })
+
+      // Costs config first (also on a resumed stream: it is small and the page may have restarted)
+      sendSSE(res, costsConfigMessage(costsLoader.snapshot()))
 
       // Send current session list (Claude + Codex)
       const sessionList: SessionInfo[] = []
@@ -618,6 +629,7 @@ export async function createRelay(options: RelayOptions): Promise<Relay> {
       }
       codexWatcher?.dispose()
       hermesLogs?.dispose()
+      costsLoader.dispose()
     },
   }
 }

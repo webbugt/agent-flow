@@ -54,6 +54,38 @@ export type ExtensionToWebviewMessage =
   | { type: 'session-started'; session: SessionInfo }
   | { type: 'session-ended'; sessionId: string }
   | { type: 'session-updated'; sessionId: string; label: string }
+  | { type: 'costs-config'; costs: CostsConfigPayload }
+
+// ─── Costs config (the host reads files, the webview validates; see web/lib/costs/layers.ts) ───
+
+/** Lowest precedence first: VS Code scalar settings, the user's costs.json, the project's .agent-flow/costs.json. */
+export type CostsLayerId = 'settings' | 'user' | 'project'
+
+/** One config source as the host read it. Mirror of `CostsLayer` in web/lib/costs/layers.ts. */
+export interface CostsConfigLayer {
+  id: CostsLayerId
+  /** Display path (home shown as `~`); null for the VS Code settings layer. */
+  path: string | null
+  status: 'ok' | 'missing' | 'error'
+  /** Parsed JSON object. Present when status is `ok`, or `error` with `stale` (the host's last good copy). */
+  raw?: Record<string, unknown>
+  /** `raw` is the previous good content because the file now fails to read or parse. */
+  stale?: boolean
+  /** Host-side problem: unreadable, too large, not JSON, not an object, resolves outside its directory. */
+  error?: string
+  /** Host-side notes, e.g. an ignored key. */
+  warnings?: string[]
+}
+
+/** The `costs-config` message body. Mirror of `CostsConfigPayload` in web/lib/costs/layers.ts. */
+export interface CostsConfigPayload {
+  version: 1
+  /** Increases on every change the host publishes. */
+  seq: number
+  /** VS Code setting `agentVisualizer.costs.enabled`; false = built-in pricing, files ignored. */
+  enabled: boolean
+  layers: CostsConfigLayer[]
+}
 
 export interface VisualizerConfig {
   mode: 'live' | 'replay'
@@ -69,6 +101,7 @@ export type WebviewToExtensionMessage =
   | { type: 'request-connect' }
   | { type: 'request-disconnect' }
   | { type: 'open-file'; filePath: string; line?: number }
+  | { type: 'open-costs-config' }
   | { type: 'log'; level: 'info' | 'warn' | 'error'; message: string }
 
 // ─── Transcript Types (from Claude Code JSONL files) ─────────────────────────

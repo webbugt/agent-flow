@@ -4,6 +4,7 @@ import { memo } from "react"
 import { Z } from "@/lib/agent-types"
 import { COLORS } from "@/lib/colors"
 import { formatTokens } from "@/lib/utils"
+import { formatDisplayMoney } from "@/lib/costs/active"
 import { SessionTabs } from "./session-tabs"
 import type { SessionInfo, ConnectionStatus } from "@/lib/bridge-types"
 
@@ -142,7 +143,7 @@ export const TopBar = memo(function TopBar({
         <span>
           {formatTokens(totalTokens)} tokens
           <span style={{ color: COLORS.complete + '65', marginLeft: 4 }}>
-            ~${totalCostUsd.toFixed(2)}
+            ~{formatDisplayMoney(totalCostUsd, false, 2).replace(/^~/, '')}
           </span>
         </span>
 

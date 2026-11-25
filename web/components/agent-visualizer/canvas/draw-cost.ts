@@ -4,6 +4,8 @@ import { COST_DRAW, COST_PANEL, MIN_VISIBLE_OPACITY } from '@/lib/canvas-constan
 import { formatTokens } from '@/lib/utils'
 import { spendUsd } from '@/lib/pricing'
 import { blendedRateForModel } from '@/lib/costs/catalog'
+import { getActiveCosts, formatDisplayMoney, usdToDisplay } from '@/lib/costs/active'
+import { priceAgent } from '@/lib/costs/agent-cost'
 import { truncateText } from './draw-misc'
 
 /** Blended $/M-token rate for a model ID, from the price catalog: the exact model,
@@ -21,6 +23,21 @@ export function agentCost(tokensUsed: number, model?: string): number {
 export function agentSpendUsd(agent: Agent): { usd: number; estimate: boolean } {
   if (agent.spend) return { usd: spendUsd(agent.spend, agent.model), estimate: false }
   return { usd: agentCost(agent.tokensUsed, agent.model), estimate: true }
+}
+
+/**
+ * What the overlay shows for one agent, in the DISPLAY currency. With a loaded costs config (P3) the figure
+ * comes from the configured prices (costs/price.ts); without one it is the built-in USD path, unchanged.
+ * Format it with formatDisplayMoney.
+ */
+export function agentSpend(agent: Agent): { amount: number; estimate: boolean } {
+  const cfg = getActiveCosts()
+  if (cfg) {
+    const c = priceAgent(cfg, agent)
+    return { amount: c.amount, estimate: c.estimate }
+  }
+  const { usd, estimate } = agentSpendUsd(agent)
+  return { amount: usd, estimate }
 }
 
 /** Tool name -> color for mini cost bar */
@@ -44,11 +61,16 @@ function groupToolsByAgent(toolCalls: Map<string, ToolCallNode>): Map<string, To
   return grouped
 }
 
+/** Cost panel amounts: three decimals as before (`$0.123`); with a config, the config's currency and decimals rule. */
+function formatPanelMoney(amount: number): string {
+  return getActiveCosts() ? formatDisplayMoney(amount) : `$${amount.toFixed(3)}`
+}
+
 /** The text of an agent's cost pill (without drawing it). */
 export function costPillLabel(agent: Agent): string | null {
-  const { usd: cost, estimate } = agentSpendUsd(agent)
+  const { amount: cost, estimate } = agentSpend(agent)
   if (cost < COST_DRAW.minDisplayCost) return null
-  return `${estimate ? '~' : ''}$${cost < 0.01 ? cost.toFixed(4) : cost.toFixed(3)}`
+  return formatDisplayMoney(cost, estimate)
 }
 
 /**
@@ -79,14 +101,14 @@ export function drawCostLabels(
 
   for (const [, agent] of agents) {
     if (agent.opacity < MIN_VISIBLE_OPACITY) continue
-    const { usd: cost, estimate } = agentSpendUsd(agent)
+    const { amount: cost, estimate } = agentSpend(agent)
     if (cost < COST_DRAW.minDisplayCost) continue
 
     const r = agent.isMain ? NODE.radiusMain : NODE.radiusSub
     const pillY = agent.y - r - COST_DRAW.pillYOffset
 
     // Floating cost pill
-    const label = `${estimate ? '~' : ''}$${cost < 0.01 ? cost.toFixed(4) : cost.toFixed(3)}`
+    const label = formatDisplayMoney(cost, estimate)
     ctx.font = 'bold 9px monospace'
     const labelW = ctx.measureText(label).width
     const pillW = labelW + COST_DRAW.pillPadding
@@ -167,7 +189,7 @@ export function drawCostSummaryPanel(
 
   // Per-agent breakdown sorted by cost desc
   const agentBreakdown = agentList
-    .map(a => ({ name: a.name, tokens: a.tokensUsed, cost: agentSpendUsd(a).usd }))
+    .map(a => ({ name: a.name, tokens: a.tokensUsed, cost: agentSpend(a).amount }))
     .sort((a, b) => b.cost - a.cost)
   const totalCost = agentBreakdown.reduce((s, a) => s + a.cost, 0)
 
@@ -177,7 +199,7 @@ export function drawCostSummaryPanel(
     if (tc.tokenCost) {
       const entry = toolBreakdown.get(tc.toolName) || { tokens: 0, cost: 0 }
       entry.tokens += tc.tokenCost
-      entry.cost += agentCost(tc.tokenCost, agents.get(tc.agentId)?.model)
+      entry.cost += usdToDisplay(agentCost(tc.tokenCost, agents.get(tc.agentId)?.model))
       toolBreakdown.set(tc.toolName, entry)
     }
   }
@@ -216,11 +238,12 @@ export function drawCostSummaryPanel(
   ctx.textAlign = 'left'
   ctx.textBaseline = 'top'
   ctx.fillStyle = COLORS.costText
-  ctx.fillText(`$${totalCost.toFixed(3)}`, panelX + COST_PANEL.contentPadding, y)
+  const totalLabel = formatPanelMoney(totalCost)
+  ctx.fillText(totalLabel, panelX + COST_PANEL.contentPadding, y)
 
   ctx.font = '9px monospace'
   ctx.fillStyle = COLORS.textMuted
-  ctx.fillText(`${formatTokens(totalTokens)} tokens`, panelX + COST_PANEL.contentPadding + ctx.measureText(`$${totalCost.toFixed(3)}`).width + 14, y + 2)
+  ctx.fillText(`${formatTokens(totalTokens)} tokens`, panelX + COST_PANEL.contentPadding + ctx.measureText(totalLabel).width + 14, y + 2)
 
   y += headerH
 
@@ -253,7 +276,7 @@ export function drawCostSummaryPanel(
     // Cost
     ctx.textAlign = 'right'
     ctx.fillStyle = COLORS.costText
-    ctx.fillText(`$${a.cost.toFixed(3)}`, panelX + COST_PANEL.contentPadding + barW - COST_PANEL.barInset, y + 3)
+    ctx.fillText(formatPanelMoney(a.cost), panelX + COST_PANEL.contentPadding + barW - COST_PANEL.barInset, y + 3)
 
     y += lineH
   }
@@ -295,7 +318,7 @@ export function drawCostSummaryPanel(
       // Cost
       ctx.textAlign = 'right'
       ctx.fillStyle = COLORS.costTextDim
-      ctx.fillText(`$${t.cost.toFixed(3)}`, panelX + COST_PANEL.contentPadding + barW - COST_PANEL.barInset, y + 3)
+      ctx.fillText(formatPanelMoney(t.cost), panelX + COST_PANEL.contentPadding + barW - COST_PANEL.barInset, y + 3)
 
       y += lineH
     }

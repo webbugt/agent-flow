@@ -40,6 +40,11 @@
         "command": "agentVisualizer.configureHooks",
         "title": "Configure Claude Code Hooks",
         "category": "Agent Flow"
+      },
+      {
+        "command": "agentVisualizer.openCostsConfig",
+        "title": "Open Costs Config (~/.agent-flow/costs.json)",
+        "category": "Agent Flow"
       }
     ],
     "keybindings": [
@@ -77,6 +82,48 @@
           "type": "boolean",
           "default": false,
           "description": "Automatically open the visualizer when an agent session starts"
+        },
+        "agentVisualizer.costs.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Use the costs config (~/.agent-flow/costs.json and the project's .agent-flow/costs.json). When off, the built-in prices are used and the files are ignored."
+        },
+        "agentVisualizer.costs.configPath": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "markdownDescription": "Absolute path (or starting with `~/`) of the costs config file, instead of `~/.agent-flow/costs.json`. The environment variable `AGENT_FLOW_COSTS` does the same when this is empty. Machine-scoped: a workspace cannot redirect it."
+        },
+        "agentVisualizer.costs.displayCurrency": {
+          "type": "string",
+          "default": "",
+          "pattern": "^([A-Z]{3})?$",
+          "markdownDescription": "ISO 4217 code to show costs in, e.g. `EUR`. Needs an exchange rate in the costs file (`currency.fx`), because rates are never fetched. Empty = take it from the costs file, else `USD`. Overridden by the costs file."
+        },
+        "agentVisualizer.costs.unit": {
+          "type": "string",
+          "enum": ["", "auto", "money", "kwh", "tokens"],
+          "enumDescriptions": [
+            "Take it from the costs file",
+            "Money for billed or priced usage, kWh for local models, tokens when nothing is priced",
+            "Always money",
+            "Always energy (kWh)",
+            "Always tokens"
+          ],
+          "default": "",
+          "description": "What the cost overlay shows. Overridden by the costs file."
+        },
+        "agentVisualizer.costs.unknownModelPolicy": {
+          "type": "string",
+          "enum": ["", "provider-default", "unpriced", "zero"],
+          "enumDescriptions": [
+            "Take it from the costs file",
+            "Price an unknown model with its provider's default rate",
+            "Show it as unpriced",
+            "Count it as zero"
+          ],
+          "default": "",
+          "markdownDescription": "How a model with no price is handled. A global flat rate needs `pricing.unknownModel.globalRate` in the costs file. Overridden by the costs file."
         }
       }
     }

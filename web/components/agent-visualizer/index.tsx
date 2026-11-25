@@ -6,7 +6,7 @@ import { useVSCodeBridge } from "@/hooks/use-vscode-bridge"
 import { useSelectionState } from "@/hooks/use-selection-state"
 import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts"
 import { AgentCanvas } from "./canvas"
-import { agentSpendUsd } from "./canvas/draw-cost"
+import { agentSpend } from "./canvas/draw-cost"
 import { ControlBar } from "./control-bar"
 import { AgentDetailCard } from "./agent-detail-card"
 import { GlassContextMenu } from "./glass-context-menu"
@@ -32,6 +32,8 @@ import { registerShotHook, markShotReady } from "@/lib/shot-mode"
 import { MOCK_DURATION } from "@/lib/mock-scenario"
 import { MessageFeedPanel } from "./message-feed-panel"
 import { TopBar } from "./top-bar"
+import { CostsConfigBanner } from "./costs-config-banner"
+import { useCostsConfig } from "@/hooks/use-costs-config"
 import { useAudioEffects } from "@/hooks/use-audio-effects"
 import { useViewportWidth } from "@/hooks/use-viewport-width"
 import { detailInset } from "@/lib/session-detail"
@@ -307,11 +309,14 @@ export function AgentVisualizer() {
     return sum
   }, [agents])
 
+  const costsStatus = useCostsConfig()
+  // Display-currency total; the dependency makes it follow a config change.
   const totalCostUsd = useMemo(() => {
     let sum = 0
-    for (const a of agents.values()) sum += agentSpendUsd(a).usd
+    for (const a of agents.values()) sum += agentSpend(a).amount
     return sum
-  }, [agents])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agents, costsStatus.resolution])
 
   const selectedAgent = selection.selectedAgentId ? agents.get(selection.selectedAgentId) : null
   const selectedConversation = selection.selectedAgentId ? (conversations.get(selection.selectedAgentId) || []) : []
@@ -609,6 +614,9 @@ export function AgentVisualizer() {
         onToggleFleet={() => { setShowFleet(prev => !prev); setShowTimeline(false) }}
         onToggleMute={handleToggleMute}
       />
+
+      {/* Costs config error banner (invalid ~/.agent-flow/costs.json etc.) */}
+      <CostsConfigBanner status={costsStatus} />
     </div>
     </OpenFileProvider>
   )

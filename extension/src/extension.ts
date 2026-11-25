@@ -6,9 +6,58 @@ import { startClaudeRuntime } from './claude-runtime'
 import { startCodexRuntime } from './codex-runtime'
 import { promptHookSetupIfNeeded, configureClaudeHooks, isDisable1MContext } from './hooks-config'
 import { createLogger } from './logger'
+import { CostsConfigLoader, type CostsScalars } from './costs-config'
 import type { AgentRuntime, AgentRuntimeMode } from './session-runtime'
 
 const log = createLogger('Extension')
+
+// ─── Costs config (PLAN v2 P3) ─────────────────────────────────────────────
+
+let costsLoader: CostsConfigLoader | undefined
+
+/** The VS Code scalar settings the user actually set (defaults are not a layer). */
+function readCostsScalars(): CostsScalars {
+  const cfg = vscode.workspace.getConfiguration('agentVisualizer.costs')
+  const userSet = <T>(key: string): T | undefined => {
+    const i = cfg.inspect<T>(key)
+    return i?.workspaceFolderValue ?? i?.workspaceValue ?? i?.globalValue
+  }
+  return {
+    enabled: cfg.get<boolean>('enabled', true),
+    displayCurrency: userSet<string>('displayCurrency'),
+    unit: userSet<string>('unit'),
+    unknownModelPolicy: userSet<string>('unknownModelPolicy'),
+    configPath: cfg.get<string>('configPath', ''),
+  }
+}
+
+function startCostsConfig(context: vscode.ExtensionContext): CostsConfigLoader {
+  const loader = new CostsConfigLoader({
+    workspaceDirs: () => (vscode.workspace.workspaceFolders ?? []).map(f => f.uri.fsPath),
+    scalars: readCostsScalars,
+  })
+  loader.onChange(costs => VisualizerPanel.getCurrent()?.postMessage({ type: 'costs-config', costs }))
+  loader.start()
+  context.subscriptions.push(
+    { dispose: () => loader.dispose() },
+    vscode.workspace.onDidChangeConfiguration(e => { if (e.affectsConfiguration('agentVisualizer.costs')) loader.reload() }),
+    vscode.workspace.onDidChangeWorkspaceFolders(() => loader.reload()),
+    vscode.commands.registerCommand('agentVisualizer.openCostsConfig', () => openCostsConfig(loader)),
+  )
+  return loader
+}
+
+/** Open ~/.agent-flow/costs.json (creating a minimal one when it does not exist) in an editor. */
+async function openCostsConfig(loader: CostsConfigLoader): Promise<void> {
+  try {
+    const file = loader.ensureUserFile()
+    const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(file))
+    await vscode.window.showTextDocument(doc, { viewColumn: vscode.ViewColumn.One, preserveFocus: false })
+  } catch (err) {
+    log.error('Failed to open the costs config:', err instanceof Error ? err.message : err)
+    vscode.window.showErrorMessage(`Agent Flow: cannot open the costs config. ${err instanceof Error ? err.message : ''}`)
+  }
+}
 
 type ConfiguredRuntimeMode = AgentRuntimeMode | 'auto'
 
@@ -46,6 +95,8 @@ async function startRuntimes(
 
 export async function activate(context: vscode.ExtensionContext) {
   log.info('Extension activated')
+
+  costsLoader = startCostsConfig(context)
 
   const mode = readConfiguredMode()
   log.info(`Runtime mode: ${mode}`)
@@ -178,6 +229,8 @@ function wirePanel(panel: VisualizerPanel): void {
         panel.markReady()
         // Clear stale webview state from any previous panel instance
         panel.postMessage({ type: 'reset', reason: 'panel-reopened' })
+        // Costs config first, so the first session render already prices with it
+        if (costsLoader) panel.postMessage({ type: 'costs-config', costs: costsLoader.snapshot() })
         // Send environment-derived config (e.g. CLAUDE_CODE_DISABLE_1M_CONTEXT)
         if (isDisable1MContext()) {
           panel.postMessage({ type: 'config', config: { disable1MContext: true } })
@@ -205,6 +258,10 @@ function wirePanel(panel: VisualizerPanel): void {
 
       case 'open-file':
         handleOpenFile(message.filePath, message.line)
+        break
+
+      case 'open-costs-config':
+        if (costsLoader) void openCostsConfig(costsLoader)
         break
 
       case 'log': {
@@ -273,6 +330,8 @@ async function handleOpenFile(filePath: string, line?: number): Promise<void> {
 
 export function deactivate(): void {
   disconnectEventSource()
+  costsLoader?.dispose()
+  costsLoader = undefined
   for (const r of runtimes) r.dispose()
   runtimes = []
 }
