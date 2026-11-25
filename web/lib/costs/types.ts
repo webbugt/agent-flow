@@ -54,3 +54,146 @@ export interface CatalogRow {
   unverified?: readonly UnverifiedField[]
   note?: string
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Config, resolution and pricing types (P1). Pure data; no I/O.
+// Source of truth for the schema: PLAN v1 section 2, amended by v2 section 5.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** How a provider charges. `credits` = Copilot AI credits; `local` = money only from electricity. */
+export type BillingMode = 'api' | 'subscription' | 'credits' | 'local' | 'free' | 'unknown'
+export const BILLING_MODES: readonly BillingMode[] = ['api', 'subscription', 'credits', 'local', 'free', 'unknown']
+
+/** The word shown next to a figure (PLAN v2 section 2). A figure is never summed across kinds without a split. */
+export type BillingKind = 'billed' | 'list-equivalent' | 'estimated' | 'unpriced'
+
+/**
+ * Where the rate came from. `none` = no money rate (unpriced policy, or a local model).
+ * `fallback` = the model is unknown to every level, so the rate is a policy guess (forces kind `estimated`).
+ */
+export type RateSource = 'user-rule' | 'user-provider' | 'catalog' | 'provider-default' | 'fallback' | 'none'
+
+export type UnknownModelPolicy = 'provider-default' | 'global-rate' | 'unpriced' | 'zero'
+export const UNKNOWN_MODEL_POLICIES: readonly UnknownModelPolicy[] = ['provider-default', 'global-rate', 'unpriced', 'zero']
+export type DisplayUnit = 'auto' | 'money' | 'kwh' | 'tokens'
+export type SubscriptionValue = 'show' | 'hide'
+
+/** Per-request token counts. `inputTokens` is the UNCACHED input (Hermes `in` minus cache read and write). */
+export interface UsageTokens {
+  inputTokens: number
+  outputTokens: number
+  cacheReadTokens: number
+  cacheWrite5mTokens: number
+  cacheWrite1hTokens: number
+}
+
+/** A rate as typed by the user (USD or the rule's currency per 1M tokens). Omitted cache fields are derived from `input`. */
+export interface UserRate {
+  input: number
+  output: number
+  cacheRead?: number
+  cacheWrite5m?: number
+  cacheWrite1h?: number
+}
+
+/** `maxPromptTokens` is an inclusive bound that must be a TIER_BOUNDARIES member; null = open-ended (the last tier). */
+export interface UserTier { maxPromptTokens: number | null; rate: UserRate }
+
+export interface RateSpec {
+  rate?: UserRate
+  tiers?: UserTier[]
+  /** ISO 4217 code of the rate. Default USD. Needs `currency.fx` when not USD. */
+  currency?: string
+}
+
+/** Glob only (`*`, `?`), case-insensitive, `.` == `-`. No regex. */
+export interface ModelMatch { provider?: string; model?: string }
+
+/** Optional multipliers on a rule (v1 section 2 "Modifiers"). Not auto-detected. Each in (0, 10]. */
+export interface Modifiers { fast?: number; dataResidency?: number; batch?: number }
+
+export interface ModelRule extends RateSpec {
+  match: ModelMatch
+  billing?: BillingMode
+  energyProfile?: string
+  modifiers?: Modifiers
+}
+
+export interface ProviderConfig extends RateSpec {
+  billing?: BillingMode
+  /** Catalog sheet that prices this provider's models. */
+  priceLike?: CatalogSection
+  plan?: string
+  energyProfile?: string
+  /** Copilot + Claude models: uncached input >= 1,024 tokens with no reported cache write is billed as a cache write. */
+  implicitCacheWrite?: boolean
+}
+
+export type Weekday = 'mon' | 'tue' | 'wed' | 'thu' | 'fri' | 'sat' | 'sun'
+export const WEEKDAYS: readonly Weekday[] = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun']
+
+export interface EnergyProfile {
+  powerW: { idle: number; load: number }
+  /** Used only when per-call latency is unknown. */
+  throughput: { genTokPerSec: number; prefillTokPerSec: number } | null
+  pue: number
+  attribution: 'marginal' | 'total'
+  /** Reserved for measured power (phase 2). Always null here. */
+  measured: null
+}
+
+export interface TariffWindow { days: Weekday[]; from: string; to: string; perKWh: number }
+export interface Tariff { currency: string; flatPerKWh: number; timeOfDay: TariffWindow[]; tz: string | null }
+
+export type ClaudePlan = 'pro' | 'max5x' | 'ultra' | 'custom' | 'api'
+export const CLAUDE_PLANS: readonly ClaudePlan[] = ['pro', 'max5x', 'ultra', 'custom', 'api']
+
+export interface Band { lo: number; point: number; hi: number }
+export interface ResetSchedule { dow: Weekday; time: string; tz: string }
+export interface BudgetSpec { enabled: boolean; budgetUsdEquiv: number | null }
+export interface FableLimitConfig {
+  enabled: boolean
+  budgetUsdEquiv: number | null
+  /** Fable's share of the weekly limit. Documented point 0.5; the band is a prior, tests pin arithmetic not defaults. */
+  shareOfWeekly: Band
+  relativeWeight: { lo: number; hi: number }
+  /** Manual calibration: the Fable % the user read on claude.ai at a time. */
+  anchors: { at: string; observedPct: number }[]
+}
+export interface ClaudeLimitsConfig {
+  /** null = not configured: no limit UI. */
+  plan: ClaudePlan | null
+  planMultiplierOfPro: number | null
+  fiveHour: BudgetSpec
+  weekly: BudgetSpec & { resetsAt: ResetSchedule | null }
+  fable: FableLimitConfig
+  weights: Record<ClaudeFamilyName, number>
+  sources: ('statusline' | 'estimate')[]
+  countProviders: string[]
+}
+
+/** A validated config with every default filled in. Dictionary members are null-prototype objects. */
+export interface ResolvedConfig {
+  schemaVersion: 1
+  currency: { display: string; fx: Record<string, number>; fxAsOf: string | null }
+  display: { unit: DisplayUnit; decimals: 'auto' | number; subscriptionValue: SubscriptionValue }
+  pricing: {
+    multiplier: number
+    unknownModel: { policy: UnknownModelPolicy; globalRate: { input: number; output: number } | null }
+    providers: Record<string, ProviderConfig>
+    models: ModelRule[]
+  }
+  energy: { profiles: Record<string, EnergyProfile>; tariff: Tariff | null }
+  limits: { claude: ClaudeLimitsConfig }
+}
+
+/** `path` is an RFC 6901 JSON pointer into the config (`''` = the document). */
+export interface ValidationIssue { path: string; message: string }
+
+export interface ValidationResult {
+  ok: boolean
+  /** null when there are errors: the host keeps the last-good config (or the built-in defaults). */
+  config: ResolvedConfig | null
+  errors: ValidationIssue[]
+  warnings: ValidationIssue[]
+}

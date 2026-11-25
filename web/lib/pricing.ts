@@ -16,6 +16,10 @@
  * Model resolution: exact catalog id (`.` == `-`; date stamps and `[1m]` ignored), else the
  * newest model of the same Claude family, else the Sonnet 5.5 rate (the fallback).
  *
+ * This file is the backwards-compatible shim over the pure costs/ modules (P1): the signatures of
+ * priceForModel / spendUsd are unchanged and results are identical. Configurable pricing, billing
+ * kinds and tooltips live in costs/resolve.ts, costs/price.ts and costs/tooltip.ts.
+ *
  * Known limits (both are fixed by later plan tasks, not here):
  *  - Haiku 5.5 and the Copilot GPT/Grok models price by the prompt size of ONE request.
  *    SpendTotals are cumulative per agent, so without `promptTokens` the lowest tier is used
@@ -42,6 +46,7 @@
  */
 import type { SpendTotals } from './agent-types'
 import { lookupModel, resolveRate, type ResolveOptions } from './costs/catalog'
+import { costOfTokens } from './costs/price'
 import type { CatalogSection, Rate } from './costs/types'
 
 interface Price { input: number; output: number }
@@ -63,15 +68,5 @@ export function priceForModel(model?: string, opts: PriceOptions = {}): Price {
 
 /** Billed cost in USD for one agent's cumulative usage. */
 export function spendUsd(spend: SpendTotals, model?: string, opts: PriceOptions = {}): number {
-  const r = rateForModel(spend.model ?? model, opts)
-  const perToken = (ratePerMTok: number, tokens: number) => (tokens / 1_000_000) * ratePerMTok
-  const write5m = r.cacheWrite5m ?? r.input
-  const write1h = r.cacheWrite1h ?? write5m
-  return (
-    perToken(r.input, spend.inputTokens) +
-    perToken(r.output, spend.outputTokens) +
-    perToken(r.cacheRead, spend.cacheReadTokens) +
-    perToken(write5m, spend.cacheWrite5mTokens) +
-    perToken(write1h, spend.cacheWrite1hTokens)
-  )
+  return costOfTokens(rateForModel(spend.model ?? model, opts), spend)
 }
