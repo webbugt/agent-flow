@@ -8,6 +8,7 @@ import { effectiveCosts } from "@/lib/costs/active"
 import { costToggleLabel, unitName } from "@/lib/costs/overlay"
 import { cycleOverlayUnit, getOverlayUnit, overlayUnitVersion, subscribeOverlayUnit } from "@/lib/cost-overlay-store"
 import { useActiveCostsVersion } from "@/hooks/use-costs-config"
+import { LimitsChip } from "./claude-limits"
 import { useViewportWidth } from "@/hooks/use-viewport-width"
 import { SessionTabs } from "./session-tabs"
 import type { SessionInfo, ConnectionStatus } from "@/lib/bridge-types"
@@ -204,6 +205,7 @@ export const TopBar = memo(function TopBar({
               <ToggleButton active={false} onClick={onOpenCostSettings} style={{ background: 'transparent', border: 'none', whiteSpace: 'nowrap' }} testId="cost-settings-open">
                 <span title="Cost settings: prices, currency, exchange rate" aria-label="Cost settings">{narrow ? '⚙' : '⚙ prices'}</span>
               </ToggleButton>
+              <LimitsChip onOpen={onOpenCostSettings} />
               {projectOverride && (
                 <span data-testid="cost-project-badge" title={projectOverrideTitle} style={{ color: '#ffcc66', border: '1px solid #ffcc6666', borderRadius: 4, padding: '0 4px', fontSize: 9 }}>
                   project

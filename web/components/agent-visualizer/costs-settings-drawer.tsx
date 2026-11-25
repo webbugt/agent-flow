@@ -16,6 +16,7 @@ import { BILLING_MODES } from '@/lib/costs/types'
 import type { DisplayUnit } from '@/lib/costs/types'
 import type { CostsStatus } from '@/lib/costs-runtime'
 import { vscodeBridge } from '@/lib/vscode-bridge'
+import { ClaudeLimitsSection } from './claude-limits'
 
 type Obj = Record<string, unknown>
 
@@ -114,6 +115,7 @@ export function CostsSettingsDrawer({ status, seenProviders, onClose }: CostsSet
         Writes <code>{userSource?.path ?? '~/.agent-flow/costs.json'}</code>
         {userSource?.status === 'missing' ? ' (created on save)' : ''}.
       </p>
+      <ClaudeLimitsSection />
       {seed === null ? (
         <div data-testid="costs-edit-blocked" role="alert" style={{ ...noteStyle, border: '1px solid #ff6677', color: '#ff8896', background: 'rgba(255,102,119,0.08)' }}>
           <strong>The settings cannot be edited yet.</strong>

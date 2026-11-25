@@ -7,6 +7,9 @@ import { startCodexRuntime } from './codex-runtime'
 import { promptHookSetupIfNeeded, configureClaudeHooks, isDisable1MContext } from './hooks-config'
 import { createLogger } from './logger'
 import { CostsConfigLoader, CostsConflictError, type CostsScalars } from './costs-config'
+import { LimitsObserver } from './limits-observer'
+import { defaultInstallerEnv, installStatusLine, uninstallStatusLine, type ActionResult, type InstallerEnv } from './statusline-installer'
+import { resolveNodePath } from './discovery'
 import type { AgentRuntime, AgentRuntimeMode } from './session-runtime'
 
 const log = createLogger('Extension')
@@ -59,6 +62,52 @@ async function openCostsConfig(loader: CostsConfigLoader): Promise<void> {
   }
 }
 
+// ─── Observed Claude limits (PLAN v2 P6a) ──────────────────────────────────
+
+let limitsObserver: LimitsObserver | undefined
+
+function installerEnv(): InstallerEnv {
+  return defaultInstallerEnv({
+    nodePath: resolveNodePath(),
+    workspaceDirs: (vscode.workspace.workspaceFolders ?? []).map(f => f.uri.fsPath),
+  })
+}
+
+/**
+ * Install / remove the chained statusLine wrapper. Both ask first: it edits ~/.claude/settings.json, which is the
+ * person's file, so nothing happens on a click alone. A refusal is a normal answer, not an error.
+ */
+async function runStatusLineAction(action: 'install' | 'uninstall'): Promise<ActionResult | { ok: false; refused: true; code: 'cancelled'; message: string }> {
+  const install = action === 'install'
+  const detail = install
+    ? 'Agent Flow will wrap the statusLine in ~/.claude/settings.json. Your own status line keeps running unchanged. Only the 5-hour and weekly usage percentages, the session id, the model id and a timestamp are saved to ~/.agent-flow/limits/claude.json. No prompts or transcripts are stored. A backup is written to settings.json.agent-flow.bak. "Remove Claude statusLine wrapper" restores your original.'
+    : 'Your original statusLine is put back in ~/.claude/settings.json and the saved limits file is deleted.'
+  const choice = await vscode.window.showWarningMessage(
+    install ? 'Observe Claude usage limits through a chained statusLine wrapper?' : 'Remove the Agent Flow statusLine wrapper?',
+    { modal: true, detail },
+    install ? 'Install wrapper' : 'Remove wrapper',
+  )
+  if (!choice) return { ok: false, refused: true, code: 'cancelled', message: 'Cancelled. Nothing was changed.' }
+  const result = install ? installStatusLine(installerEnv()) : uninstallStatusLine(installerEnv())
+  limitsObserver?.refresh()
+  if (result.ok) void vscode.window.showInformationMessage(`Agent Flow: ${result.message}`)
+  else void vscode.window.showWarningMessage(`Agent Flow: ${result.message}`)
+  return result
+}
+
+function startLimitsObserver(context: vscode.ExtensionContext): LimitsObserver {
+  const observer = new LimitsObserver({ env: installerEnv, canConfigure: true })
+  observer.onChange(limits => VisualizerPanel.getCurrent()?.postMessage({ type: 'limits-update', limits }))
+  observer.start()
+  context.subscriptions.push(
+    { dispose: () => observer.dispose() },
+    vscode.workspace.onDidChangeWorkspaceFolders(() => observer.refresh()),
+    vscode.commands.registerCommand('agentVisualizer.configureClaudeStatusLine', () => runStatusLineAction('install')),
+    vscode.commands.registerCommand('agentVisualizer.removeClaudeStatusLine', () => runStatusLineAction('uninstall')),
+  )
+  return observer
+}
+
 type ConfiguredRuntimeMode = AgentRuntimeMode | 'auto'
 
 let eventSource: JsonlEventSource | undefined
@@ -97,6 +146,7 @@ export async function activate(context: vscode.ExtensionContext) {
   log.info('Extension activated')
 
   costsLoader = startCostsConfig(context)
+  limitsObserver = startLimitsObserver(context)
 
   const mode = readConfiguredMode()
   log.info(`Runtime mode: ${mode}`)
@@ -231,6 +281,7 @@ function wirePanel(panel: VisualizerPanel): void {
         panel.postMessage({ type: 'reset', reason: 'panel-reopened' })
         // Costs config first, so the first session render already prices with it
         if (costsLoader) panel.postMessage({ type: 'costs-config', costs: costsLoader.snapshot() })
+        if (limitsObserver) panel.postMessage({ type: 'limits-update', limits: limitsObserver.refresh() })
         // Send environment-derived config (e.g. CLAUDE_CODE_DISABLE_1M_CONTEXT)
         if (isDisable1MContext()) {
           panel.postMessage({ type: 'config', config: { disable1MContext: true } })
@@ -263,6 +314,16 @@ function wirePanel(panel: VisualizerPanel): void {
       case 'open-costs-config':
         if (costsLoader) void openCostsConfig(costsLoader)
         break
+
+      case 'statusline-action': {
+        const requestId = typeof message.requestId === 'string' ? message.requestId.slice(0, 64) : ''
+        if (message.action !== 'install' && message.action !== 'uninstall') break
+        const action = message.action
+        void runStatusLineAction(action).then(r => {
+          panel.postMessage({ type: 'statusline-action-result', requestId, action, ok: r.ok, message: r.message })
+        })
+        break
+      }
 
       case 'write-costs-config': {
         const requestId = typeof message.requestId === 'string' ? message.requestId.slice(0, 64) : ''
@@ -349,6 +410,8 @@ export function deactivate(): void {
   disconnectEventSource()
   costsLoader?.dispose()
   costsLoader = undefined
+  limitsObserver?.dispose()
+  limitsObserver = undefined
   for (const r of runtimes) r.dispose()
   runtimes = []
 }

@@ -440,6 +440,7 @@ export async function run(argv: string[]): Promise<number> {
     TMPDIR: tmp,
     AGENT_FLOW_HERMES_ROOT: m.hermesRoot,
     AGENT_FLOW_RUNTIME: 'claude',
+    AGENT_FLOW_SHOT_LIMITS_CONFIGURABLE: '1',
     DO_NOT_TRACK: '1',
     AGENT_FLOW_TELEMETRY: '0',
     NO_COLOR: '1',

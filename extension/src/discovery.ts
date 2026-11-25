@@ -32,7 +32,7 @@ export const HOOK_COMMAND_MARKER = 'agent-flow/hook.js'
  *  We shell out to `command -v node` (POSIX) or `where node` (Windows) using
  *  the VS Code environment's PATH which typically has node available. */
 let cachedNodePath: string | null = null
-function resolveNodePath(): string {
+export function resolveNodePath(): string {
   if (cachedNodePath) return cachedNodePath
   try {
     const cmd = process.platform === 'win32' ? 'where node' : 'command -v node'

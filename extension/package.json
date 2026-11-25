@@ -45,6 +45,16 @@
         "command": "agentVisualizer.openCostsConfig",
         "title": "Open Costs Config (~/.agent-flow/costs.json)",
         "category": "Agent Flow"
+      },
+      {
+        "command": "agentVisualizer.configureClaudeStatusLine",
+        "title": "Configure Claude statusLine (observe usage limits)",
+        "category": "Agent Flow"
+      },
+      {
+        "command": "agentVisualizer.removeClaudeStatusLine",
+        "title": "Remove Claude statusLine wrapper",
+        "category": "Agent Flow"
       }
     ],
     "jsonValidation": [

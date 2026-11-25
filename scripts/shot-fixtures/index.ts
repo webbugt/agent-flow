@@ -18,7 +18,7 @@
  *   F-F  Hermes, provider=ollama with latency= (one call straddling 22:00 local time)
  *   F-G  Hermes, unknown model acme-xyz-9
  *   F-H  Claude Code transcript with no usage reported (context-size estimate path)
- *   L-1..L-4  limits file variants (not read by the app until the limits tasks land)
+ *   L-1..L-4  limits file variants (read by the app since P6a; see LIMITS_FIXTURES)
  *   C-default / C-eur / C-invalid / C-custom-price / C-local-energy / C-local-energy-tou  cost config variants (same note)
  *
  * Hermes watcher behaviour (H0-A7, verified in scripts/hermes-logs.ts `discover`):
@@ -33,6 +33,7 @@
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
+import { installStatusLine } from '../../extension/src/statusline-installer'
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -211,12 +212,37 @@ export const HERMES_SESSIONS: HermesSessionFixture[] = [
   },
 ]
 
-/** Limits file variants (plan section 10). Inert until the limits tasks read them. */
+/**
+ * Limits file variants (plan section 10). Read by the app since P6a: `materializeFixtures` turns each entry into the
+ * file the statusLine shim writes (`{v, at, session_id, model, rate_limits}`), with times relative to "now" so the
+ * reading is fresh (L-1, L-2) or old (L-3). The `fable_*` fields belong to P6b (estimated Fable limit) and are not
+ * written: the shim never sees them.
+ *   L-1  fresh reading, wrapper installed
+ *   L-2  as L-1 (Fable used in the window; the Fable estimate arrives with P6b)
+ *   L-3  stale reading (3 h old), wrapper installed: shows "as of HH:MM"
+ *   L-4  no file, no wrapper: the opt-in prompt
+ */
 export const LIMITS_FIXTURES: Record<string, unknown> = {
   'L-1': { five_hour: { used_percentage: 37 }, seven_day: { used_percentage: 4.2 }, fable_used: false },
   'L-2': { five_hour: { used_percentage: 37 }, seven_day: { used_percentage: 4.2 }, fable_used: true, fable_pairs: [[180, 190], [195, 200], [205, 210]], fable_u: 0.34 },
   'L-3': { five_hour: { used_percentage: 37 }, seven_day: { used_percentage: 4.2 }, fable_used: false, stale: true },
   'L-4': null,
+}
+
+/** The shim's file for a limits fixture. `at` = when the reading was taken; resets are relative to `now`. */
+export function limitsFileFor(fixture: unknown, now: number): Record<string, unknown> {
+  const f = fixture as { five_hour: { used_percentage: number }; seven_day: { used_percentage: number }; stale?: boolean }
+  const at = f.stale ? now - 3 * 3_600_000 : now - 30_000
+  return {
+    v: 1,
+    at,
+    session_id: 'fixture-session',
+    model: { id: 'claude-opus-5-5' },
+    rate_limits: {
+      five_hour: { used_percentage: f.five_hour.used_percentage, resets_at: Math.floor((now + 95 * 60_000) / 1000) },
+      seven_day: { used_percentage: f.seven_day.used_percentage, resets_at: Math.floor((now + 3 * 86_400_000 + 4 * 3_600_000) / 1000) },
+    },
+  }
 }
 
 /** Cost config variants (plan section 10). Inert until the config tasks read them. */
@@ -479,7 +505,14 @@ export function materializeFixtures(opts: {
   if (opts.limits && LIMITS_FIXTURES[opts.limits] !== null) {
     if (!(opts.limits in LIMITS_FIXTURES)) throw new Error(`unknown limits fixture ${opts.limits}`)
     fs.mkdirSync(path.join(af, 'limits'), { recursive: true })
-    fs.writeFileSync(path.join(af, 'limits', 'claude.json'), JSON.stringify(LIMITS_FIXTURES[opts.limits], null, 2))
+    fs.writeFileSync(path.join(af, 'limits', 'claude.json'), JSON.stringify(limitsFileFor(LIMITS_FIXTURES[opts.limits], now), null, 2), { mode: 0o600 })
+    // A reading only exists because the wrapper is installed: install it for real, into the scratch HOME only,
+    // chaining a demo status line command.
+    const settings = path.join(opts.home, '.claude', 'settings.json')
+    fs.mkdirSync(path.dirname(settings), { recursive: true })
+    fs.writeFileSync(settings, JSON.stringify({ statusLine: { type: 'command', command: 'echo demo-status' } }, null, 2) + '\n')
+    const r = installStatusLine({ home: opts.home, nodePath: process.execPath, managedSettingsPaths: [path.join(opts.home, 'no-managed-settings.json')], claudeConfigDir: path.join(opts.home, '.claude') })
+    if (!r.ok) throw new Error(`could not install the demo statusLine wrapper: ${r.message}`)
   } else if (opts.limits && !(opts.limits in LIMITS_FIXTURES)) {
     throw new Error(`unknown limits fixture ${opts.limits}`)
   }

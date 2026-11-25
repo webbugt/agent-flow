@@ -56,6 +56,61 @@ export type ExtensionToWebviewMessage =
   | { type: 'session-updated'; sessionId: string; label: string }
   | { type: 'costs-config'; costs: CostsConfigPayload }
   | { type: 'costs-config-write-result'; requestId: string; ok: boolean; error?: string; /** The file changed since the drawer loaded it. */ conflict?: boolean; /** Version of the file just written. */ fingerprint?: string }
+  | { type: 'limits-update'; limits: LimitsUpdatePayload }
+  | { type: 'statusline-action-result'; requestId: string; action: 'install' | 'uninstall'; ok: boolean; message: string }
+
+// ─── Observed limits (task P6a; the host reads ~/.agent-flow/limits/claude.json, see limits-observer.ts) ───
+
+export type ObservedWindowKind = 'five_hour' | 'seven_day' | 'other'
+
+/** One window of the account's usage meter as Claude Code reported it (numbers only). */
+export interface ObservedLimitWindow {
+  /** Key in Claude Code's `rate_limits` (`five_hour`, `seven_day`, ...). */
+  key: string
+  kind: ObservedWindowKind
+  /** Used percentage 0-100; null when unknown or when the window has ended (`expired`). */
+  usedPct: number | null
+  /** End of the window, ms epoch; null when the reading did not carry it. */
+  resetsAt: number | null
+  /** `fresh`: recent reading. `stale`: the reading is old (show `as of`). `expired`: `resetsAt` has passed, no value. */
+  state: 'fresh' | 'stale' | 'expired'
+}
+
+/**
+ * The `limits-update` message body. Mirror of `LimitsUpdatePayload` in web/lib/costs/observed-types.ts.
+ * `observed` is null when there is no reading (wrapper not installed, or no reading yet): the UI then falls back
+ * to estimates. No transcript, prompt, path or credential is ever part of it.
+ */
+export interface LimitsUpdatePayload {
+  version: 1
+  /** Increases on every change the host publishes. */
+  seq: number
+  provider: 'claude'
+  source: 'statusline'
+  /** The host can install / remove the wrapper when the person clicks in the UI. */
+  canConfigure: boolean
+  install: {
+    state: 'not-installed' | 'installed' | 'refused' | 'broken'
+    /** An install would succeed right now. */
+    canInstall: boolean
+    /** Why an install was refused, or what is broken. Plain text, never file content. */
+    reason?: string
+    code?: string
+    /** Project settings files (home shown as `~`) whose own statusLine hides the wrapper inside that project. */
+    shadowedBy?: string[]
+    warnings?: string[]
+  }
+  observed: null | {
+    /** When Claude Code reported the numbers (ms epoch). */
+    at: number
+    /** The reading is older than the freshness limit: show `as of HH:MM`, tag `stale`. */
+    stale: boolean
+    modelId?: string
+    windows: ObservedLimitWindow[]
+  }
+  /** The limits file exists but cannot be used (not JSON, wrong version, too large). No content is quoted. */
+  fileError?: string
+}
 
 // ─── Costs config (the host reads files, the webview validates; see web/lib/costs/layers.ts) ───
 
@@ -109,6 +164,8 @@ export type WebviewToExtensionMessage =
   | { type: 'request-disconnect' }
   | { type: 'open-file'; filePath: string; line?: number }
   | { type: 'open-costs-config' }
+  /** Opt-in: install / remove the chained Claude statusLine wrapper. The host asks the person to confirm. */
+  | { type: 'statusline-action'; requestId: string; action: 'install' | 'uninstall' }
   /** Settings drawer save: the host validates the shape, writes the file atomically (0600) and reloads. */
   | { type: 'write-costs-config'; requestId: string; layer: 'user' | 'project'; doc: unknown; /** Fingerprint of the file version `doc` was edited from; required. */ base: string }
   | { type: 'log'; level: 'info' | 'warn' | 'error'; message: string }

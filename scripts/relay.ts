@@ -32,6 +32,8 @@ import {
 } from '../extension/src/constants'
 import { setLogLevel } from '../extension/src/logger'
 import { CostsConfigLoader, costsConfigMessage } from '../extension/src/costs-config'
+import { LimitsObserver, limitsUpdateMessage } from '../extension/src/limits-observer'
+import { defaultInstallerEnv } from '../extension/src/statusline-installer'
 import type { TelemetryClient } from './telemetry'
 import { buildHistoryBatch } from './history-batch'
 
@@ -515,6 +517,18 @@ export async function createRelay(options: RelayOptions): Promise<Relay> {
   costsLoader.onChange(costs => broadcast(JSON.stringify(costsConfigMessage(costs))))
   costsLoader.start()
 
+  // ─── Observed Claude limits (P6a) ─────────────────────────────────────────
+  // Read-only here: ~/.agent-flow/limits/claude.json is pushed as a `limits-update` message. Installing the
+  // statusLine wrapper edits ~/.claude/settings.json, so it is only offered from the VS Code extension
+  // (canConfigure: false makes the page show the command to run instead of a button).
+  const limitsObserver = new LimitsObserver({
+    env: () => defaultInstallerEnv({ nodePath: process.execPath, workspaceDirs: [workspace] }),
+    // Harness only: lets the screenshot of the opt-in prompt show the VS Code variant (with the install button).
+    canConfigure: process.env.AGENT_FLOW_SHOT_LIMITS_CONFIGURABLE === '1',
+  })
+  limitsObserver.onChange(limits => broadcast(JSON.stringify(limitsUpdateMessage(limits))))
+  limitsObserver.start()
+
   const telemetry = options.telemetry
   const sessionStart = Date.now()
   let relayDisposed = false
@@ -565,6 +579,7 @@ export async function createRelay(options: RelayOptions): Promise<Relay> {
 
       // Costs config first (also on a resumed stream: it is small and the page may have restarted)
       sendSSE(res, costsConfigMessage(costsLoader.snapshot()))
+      sendSSE(res, limitsUpdateMessage(limitsObserver.snapshot()))
 
       // Send current session list (Claude + Codex)
       const sessionList: SessionInfo[] = []
@@ -636,6 +651,7 @@ export async function createRelay(options: RelayOptions): Promise<Relay> {
       codexWatcher?.dispose()
       hermesLogs?.dispose()
       costsLoader.dispose()
+      limitsObserver.dispose()
     },
   }
 }

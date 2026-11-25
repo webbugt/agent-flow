@@ -350,6 +350,14 @@ export const BUILTIN_PLANS: Record<string, ShotPlan> = {
       { name: 'tariff-tou-editor', viewports: ['desktop', 'phone'], steps: [...LOCAL, ...OPEN_DRAWER, { eval: SCROLL_TO('tariff-editor') }, { wait: 400 }] },
     ],
   },
+  // Costs P6a: observed limits. Run three times, with --limits L-4 (opt-in prompt), L-1 (fresh) and L-3 (stale, "as of"), and a
+  // distinct --start-index each time. The top-bar chip is in every shot; the drawer section is scrolled into view.
+  p6a: {
+    shots: [
+      { name: 'limits-drawer', viewports: ['desktop', 'phone'], steps: [{ key: '$' }, { wait: 3000 }, ...OPEN_DRAWER, { eval: SCROLL_TO('claude-limits') }, { wait: 400 }] },
+      { name: 'limits-topbar', viewports: ['desktop', 'phone'], steps: [{ key: '$' }, { wait: 3000 }] },
+    ],
+  },
   h0: {
     shots: [
       { name: 'baseline-overlay-off', viewports: ['desktop'] },

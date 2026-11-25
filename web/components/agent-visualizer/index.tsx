@@ -38,6 +38,7 @@ import { MessageFeedPanel } from "./message-feed-panel"
 import { TopBar } from "./top-bar"
 import { CostsConfigBanner } from "./costs-config-banner"
 import { useCostsConfig } from "@/hooks/use-costs-config"
+import { useLimitsFeed } from "@/hooks/use-limits"
 import { useAudioEffects } from "@/hooks/use-audio-effects"
 import { useViewportWidth } from "@/hooks/use-viewport-width"
 import { detailInset } from "@/lib/session-detail"
@@ -314,6 +315,7 @@ export function AgentVisualizer() {
   }, [agents])
 
   const costsStatus = useCostsConfig()
+  useLimitsFeed()
   const [showCostSettings, setShowCostSettings] = useState(false)
   const costUnit = useSyncExternalStore(subscribeOverlayUnit, overlayUnitVersion, overlayUnitVersion)
   // Top bar cost: split by billing kind (billed / list-equiv / estimated), in the unit in effect. Follows a config change.

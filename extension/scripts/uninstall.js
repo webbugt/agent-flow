@@ -19,6 +19,62 @@ const HOOK_COMMAND_MARKER = 'agent-flow/hook.js';
 const LEGACY_HOOK_URL_RE = /^http:\/\/127\.0\.0\.1:\d+\/?$/;
 const DISCOVERY_DIR = path.join(os.homedir(), '.claude', 'agent-flow');
 const MANIFEST_PATH = path.join(DISCOVERY_DIR, 'workspaces.json');
+// Chained statusLine wrapper (src/statusline-installer.ts). The wrapper script lives in DISCOVERY_DIR, which is
+// deleted below, so the user's own statusLine must be put back first or Claude Code would call a missing file.
+const STATUSLINE_MARKER = 'agent-flow/statusline-shim.js';
+const AF_HOME = path.join(os.homedir(), '.agent-flow');
+const STATUSLINE_RECORD = path.join(AF_HOME, 'statusline-original.json');
+const LIMITS_FILE = path.join(AF_HOME, 'limits', 'claude.json');
+
+function isPlainObject(v) { return !!v && typeof v === 'object' && !Array.isArray(v); }
+
+function deepEqual(a, b) {
+  if (a === b) { return true; }
+  if (typeof a !== typeof b || a === null || b === null || typeof a !== 'object') { return false; }
+  if (Array.isArray(a) !== Array.isArray(b)) { return false; }
+  const ka = Object.keys(a);
+  const kb = Object.keys(b);
+  return ka.length === kb.length && ka.every(k => Object.prototype.hasOwnProperty.call(b, k) && deepEqual(a[k], b[k]));
+}
+
+// ─── Restore the user's statusLine ──────────────────────────────────────────
+
+function restoreStatusLine(settingsPath) {
+  try {
+    if (!fs.existsSync(settingsPath)) { return; }
+    const raw = fs.readFileSync(settingsPath, 'utf-8');
+    const settings = JSON.parse(raw);
+    if (!isPlainObject(settings)) { return; }
+    const sl = settings.statusLine;
+    if (!isPlainObject(sl) || typeof sl.command !== 'string' || !sl.command.replace(/\\/g, '/').includes(STATUSLINE_MARKER)) { return; }
+
+    let rec = null;
+    try { rec = JSON.parse(fs.readFileSync(STATUSLINE_RECORD, 'utf-8')); } catch { /* no record */ }
+    const recOk = isPlainObject(rec) && rec.v === 1 && typeof rec.hadStatusLine === 'boolean';
+    if (recOk && rec.hadStatusLine && isPlainObject(rec.original) && deepEqual(sl, rec.installed)) {
+      settings.statusLine = rec.original; // exact restore, the key keeps its position
+    } else if (recOk && rec.hadStatusLine && isPlainObject(rec.original) && typeof rec.original.command === 'string') {
+      settings.statusLine = { ...sl, command: rec.original.command }; // edited since: keep the edits, drop only our wrapper
+    } else {
+      delete settings.statusLine; // there was none, or the original is unknown: a call to a deleted script would only error
+    }
+
+    if (Object.keys(settings).length === 0 && recOk && rec.createdSettings === true) {
+      fs.unlinkSync(settingsPath);
+      return;
+    }
+    const m = /^[ \t]+(?=")/m.exec(raw);
+    const tmpPath = `${settingsPath}.${process.pid}.tmp`;
+    fs.writeFileSync(tmpPath, JSON.stringify(settings, null, m ? m[0] : 2) + (raw.endsWith('\n') || raw === '' ? '\n' : ''), { mode: fs.statSync(settingsPath).mode & 0o777 });
+    fs.renameSync(tmpPath, settingsPath);
+  } catch { /* best effort */ }
+}
+
+function removeStatusLineFiles() {
+  for (const f of [STATUSLINE_RECORD, LIMITS_FILE]) { try { fs.unlinkSync(f); } catch { /* not there */ } }
+  try { fs.rmdirSync(path.dirname(LIMITS_FILE)); } catch { /* not empty or not there */ }
+  try { fs.unlinkSync(path.join(os.homedir(), '.claude', 'settings.json.agent-flow.bak')); } catch { /* not there */ }
+}
 
 // ─── Remove hooks from a settings file ─────────────────────────────────────
 
@@ -94,6 +150,10 @@ function collectWorkspaces() {
 }
 
 // ─── Main ───────────────────────────────────────────────────────────────────
+
+// 0. Put the user's own statusLine back (the wrapper script is deleted in step 3)
+restoreStatusLine(path.join(os.homedir(), '.claude', 'settings.json'));
+removeStatusLineFiles();
 
 // 1. Global settings
 removeHooksFromFile(path.join(os.homedir(), '.claude', 'settings.json'));
