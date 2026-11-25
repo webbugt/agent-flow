@@ -27,6 +27,7 @@ import { OpenFileProvider } from "./tool-content-renderer"
 import { stopPropagationHandlers } from "./shared-ui"
 import { CARD, TimelineEvent, TIMING } from "@/lib/agent-types"
 import { COLORS } from "@/lib/colors"
+import { registerShotHook, markShotReady } from "@/lib/shot-mode"
 
 import { MOCK_DURATION } from "@/lib/mock-scenario"
 import { MessageFeedPanel } from "./message-feed-panel"
@@ -152,6 +153,25 @@ export function AgentVisualizer() {
 
   const [isReviewing, setIsReviewing] = useState(false)
   const { isMuted, seekingRef, handleToggleMute } = useAudioEffects(agents, toolCalls, isReviewing)
+
+  // Screenshot harness (?shot=1 only, see lib/shot-mode.ts): freeze the simulation, open a panel by name
+  useEffect(() => {
+    const offFreeze = registerShotHook('freeze', () => { pause(); markShotReady() })
+    const offPanel = registerShotHook('setPanel', (name: string) => {
+      setShowFileAttention(name === 'files')
+      setShowTranscript(name === 'transcript')
+      setShowCostOverlay(name === 'cost')
+      setShowSessionDetail(name === 'session')
+    })
+    const offSeek = registerShotHook('seekEnd', () => {
+      // The last message event (else the last event), not maxTimeReached, which also counts the wall time
+      // the page has been playing: speech bubbles expire 12 s after their event, so this keeps them shown
+      const log = frameRef.current.eventLog
+      const last = [...log].reverse().find(e => e.type === 'message') ?? log[log.length - 1]
+      pause(); seekToTime(last ? last.time : 0)
+    })
+    return () => { offFreeze(); offPanel(); offSeek() }
+  }, [pause, seekToTime, frameRef])
 
   // Auto-play on mount
   useEffect(() => {

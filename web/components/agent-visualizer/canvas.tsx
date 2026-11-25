@@ -1,7 +1,7 @@
 'use client'
 
 import { useRef, useEffect, useState, useCallback } from 'react'
-import { Agent, Particle, Edge, Discovery, DepthParticle } from '@/lib/agent-types'
+import { Agent, Particle, Edge, Discovery, DepthParticle, NODE } from '@/lib/agent-types'
 import type { SimulationState } from '@/hooks/simulation/types'
 import { getStateColor } from '@/lib/colors'
 import { ANIM_SPEED, PERF_OVERLAY, PERF_OVERLAY_ENABLED } from '@/lib/canvas-constants'
@@ -22,6 +22,12 @@ import {
 } from './canvas/index'
 import { useCanvasCamera } from '@/hooks/use-canvas-camera'
 import { useCanvasInteraction } from '@/hooks/use-canvas-interaction'
+import { SHOT_MODE, registerShotHook, type ShotRect } from '@/lib/shot-mode'
+import { costPillRect } from './canvas/draw-cost'
+
+function unregisterAll(...fns: Array<() => void>): () => void {
+  return () => { for (const f of fns) f() }
+}
 
 interface CanvasProps {
   /** Ref to simulation state — read every frame without React re-renders */
@@ -197,7 +203,8 @@ export function AgentCanvas({
       } = drawPropsRef.current
       const transform = transformRef.current
 
-      const deltaTime = lastFrameTimeRef.current ? (timestamp - lastFrameTimeRef.current) / 1000 : ANIM_SPEED.defaultDeltaTime
+      // ?shot=1 (screenshot harness): a fixed clock, so the picture does not depend on timing
+      const deltaTime = SHOT_MODE ? 0 : lastFrameTimeRef.current ? (timestamp - lastFrameTimeRef.current) / 1000 : ANIM_SPEED.defaultDeltaTime
       lastFrameTimeRef.current = timestamp
       timeRef.current += deltaTime
       if (simTime != null) simTimeRef.current = simTime
@@ -220,6 +227,8 @@ export function AgentCanvas({
 
       // Detect state changes → visual effects
       detectStateChanges()
+      // Screenshot mode: transient effects would stay at age 0 forever with a fixed clock
+      if (SHOT_MODE) effectsRef.current.length = 0
 
       // Update effects (mutate in place to avoid GC pressure)
       {
@@ -331,6 +340,50 @@ export function AgentCanvas({
   }, [detectStateChanges, updateCamera, updateDragLerp, transformRef])
 
   drawRef.current = draw
+
+  // ─── Screenshot harness hooks (only with ?shot=1, see lib/shot-mode.ts) ───
+  const shotCameraRef = useRef({ sig: '', at: 0 })
+  useEffect(() => {
+    if (!SHOT_MODE) return
+    const canvasOrigin = () => mainCanvasRef.current?.getBoundingClientRect() ?? null
+    const findAgent = (name: string): Agent | undefined => {
+      const agents = drawPropsRef.current.agents
+      if (name === 'first') return agents.values().next().value
+      return agents.get(name) ?? Array.from(agents.values()).find(a => a.name === name)
+    }
+    const offs = unregisterAll(
+      registerShotHook('agentNames', () => Array.from(drawPropsRef.current.agents.values()).map(a => a.name)),
+      registerShotHook('agentRect', (name): ShotRect | null => {
+        const a = findAgent(name); const o = canvasOrigin()
+        if (!a || !o) return null
+        const t = transformRef.current
+        const r = (a.isMain ? NODE.radiusMain : NODE.radiusSub) * t.scale
+        return { x: o.left + t.x + a.x * t.scale - r, y: o.top + t.y + a.y * t.scale - r, w: 2 * r, h: 2 * r }
+      }),
+      registerShotHook('pillRect', (name): ShotRect | null => {
+        const o = canvasOrigin(); const ctx = mainCanvasRef.current?.getContext('2d')
+        if (!o || !ctx) return null
+        // 'first' = the first agent that has a cost pill (the main node often has none)
+        const a = name === 'first'
+          ? Array.from(drawPropsRef.current.agents.values()).find(x => costPillRect(ctx, x) !== null)
+          : findAgent(name)
+        if (!a) return null
+        const p = costPillRect(ctx, a)
+        if (!p) return null
+        const t = transformRef.current
+        return { x: o.left + t.x + p.x * t.scale, y: o.top + t.y + p.y * t.scale, w: p.w * t.scale, h: p.h * t.scale }
+      }),
+      registerShotHook('settled', () => {
+        const t = transformRef.current
+        const sig = `${t.x.toFixed(2)},${t.y.toFixed(2)},${t.scale.toFixed(4)}`
+        const now = performance.now()
+        if (sig !== shotCameraRef.current.sig) { shotCameraRef.current = { sig, at: now }; return false }
+        return now - shotCameraRef.current.at >= 400
+      }),
+    )
+    return offs
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- refs only; registered once
+  }, [])
 
   useEffect(() => {
     const loop = (timestamp: number) => drawRef.current(timestamp)

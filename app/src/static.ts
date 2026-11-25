@@ -39,8 +39,14 @@ const MIME_TYPES: Record<string, string> = {
   '.html': 'text/html',
 }
 
+/** The request path without its query string or fragment (`/?shot=1` -> `/`). */
+export function pathOnly(rawUrl: string): string {
+  const cut = rawUrl.search(/[?#]/)
+  return cut === -1 ? rawUrl : rawUrl.slice(0, cut)
+}
+
 export function serveStatic(req: http.IncomingMessage, res: http.ServerResponse) {
-  const url = req.url || '/'
+  const url = pathOnly(req.url || '/')
 
   if (url === '/' || url === '/index.html') {
     res.writeHead(200, { 'Content-Type': 'text/html' })

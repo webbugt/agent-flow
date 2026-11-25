@@ -1,5 +1,6 @@
 import { useRef, useEffect, useCallback, type MutableRefObject } from 'react'
 import { Agent, ToolCallNode, Discovery, ANIM, NODE } from '@/lib/agent-types'
+import { SHOT_MODE } from '@/lib/shot-mode'
 import { BUBBLE_HOLD, BUBBLE_FADE_OUT, BUBBLE_MAX_W, TOOL_CARD_W, TOOL_CARD_H, DISC_BOUNDS_HALF_W, DISC_BOUNDS_HALF_H } from '@/lib/canvas-constants'
 
 /** Extra padding added to agent node radii for auto-fit bounding box */
@@ -209,7 +210,8 @@ export function useCanvasCamera({
     // Smooth lerp toward target
     const target = targetTransformRef.current
     if (target) {
-      const lerpSpeed = ANIM.autoFitLerp
+      // ?shot=1 (screenshot harness): snap to the fit instead of easing, so a frozen page is stable at once
+      const lerpSpeed = SHOT_MODE ? 1 : ANIM.autoFitLerp
       const t = transformRef.current
       const nx = t.x + (target.x - t.x) * lerpSpeed
       const ny = t.y + (target.y - t.y) * lerpSpeed

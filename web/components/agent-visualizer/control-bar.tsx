@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useRef, memo } from 'react'
 import { TimelineEvent, Z, POPUP, TIMING } from '@/lib/agent-types'
 import { COLORS } from '@/lib/colors'
+import { SHOT_MODE } from '@/lib/shot-mode'
 
 interface ControlBarProps {
   isPlaying: boolean
@@ -100,7 +101,7 @@ function LiveControlBar({
   const scrubberEvents = useScrubberEvents(timelineEvents, totalDuration)
 
   useEffect(() => {
-    if (isReviewing) return
+    if (isReviewing || SHOT_MODE) return // ?shot=1: no pulsing, so screenshots repeat
     const interval = setInterval(() => setPulseOn(p => !p), TIMING.livePulseMs)
     return () => clearInterval(interval)
   }, [isReviewing])

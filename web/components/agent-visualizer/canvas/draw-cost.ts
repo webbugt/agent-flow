@@ -49,6 +49,32 @@ function groupToolsByAgent(toolCalls: Map<string, ToolCallNode>): Map<string, To
   return grouped
 }
 
+/** The text of an agent's cost pill (without drawing it). */
+export function costPillLabel(agent: Agent): string | null {
+  const { usd: cost, estimate } = agentSpendUsd(agent)
+  if (cost < COST_DRAW.minDisplayCost) return null
+  return `${estimate ? '~' : ''}$${cost < 0.01 ? cost.toFixed(4) : cost.toFixed(3)}`
+}
+
+/**
+ * Canvas-space rectangle of an agent's cost pill, the same geometry drawCostLabels uses.
+ * Used by the screenshot harness (lib/shot-mode.ts) to hover a pill. Keep in sync with
+ * drawCostLabels; null when the agent has no pill.
+ */
+export function costPillRect(
+  ctx: CanvasRenderingContext2D,
+  agent: Agent,
+): { x: number; y: number; w: number; h: number } | null {
+  const label = costPillLabel(agent)
+  if (label === null || agent.opacity < MIN_VISIBLE_OPACITY) return null
+  const r = agent.isMain ? NODE.radiusMain : NODE.radiusSub
+  ctx.save()
+  ctx.font = 'bold 9px monospace'
+  const w = ctx.measureText(label).width + COST_DRAW.pillPadding
+  ctx.restore()
+  return { x: agent.x - w / 2, y: agent.y - r - COST_DRAW.pillYOffset, w, h: COST_DRAW.pillHeight }
+}
+
 export function drawCostLabels(
   ctx: CanvasRenderingContext2D,
   agents: Map<string, Agent>,

@@ -159,6 +159,7 @@ export const TopBar = memo(function TopBar({
             onClick={() => onTogglePanel('cost')}
             activeColor={{ bg: COLORS.costActiveBg, text: COLORS.complete }}
             style={{ background: showCostOverlay ? undefined : 'transparent', border: 'none' }}
+            testId="cost-toggle"
           >
             $Cost
           </ToggleButton>

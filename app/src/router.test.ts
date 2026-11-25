@@ -98,3 +98,13 @@ test('unbundled (tests, tsx) the default build info is "unknown"', () => {
   const html = renderHtmlShell()
   assert.match(html, /<meta name="build-branch" content="unknown">/)
 })
+
+test('the page is served with a query string (?shot=1 for the screenshot harness); other paths still 404', async () => {
+  const plain = await call('/')
+  const shot = await call('/?shot=1')
+  assert.equal(shot.status, 200)
+  assert.equal(shot.body, plain.body)
+  assert.equal((await call('/index.html?x=1#y')).status, 200)
+  assert.equal((await call('/nope?x=1')).status, 404)
+  assert.equal((await call('/index.js?v=1')).status, 404 /* not built in a unit test: no webview dir */)
+})

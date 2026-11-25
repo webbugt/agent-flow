@@ -1,3 +1,5 @@
+// First import: with ?shot=1 it seeds Math.random and installs window.__AF_TEST__ (no-op otherwise)
+import './lib/shot-mode'
 import { createRoot } from 'react-dom/client'
 import { AgentVisualizer } from './components/agent-visualizer'
 import './app/globals.css'
