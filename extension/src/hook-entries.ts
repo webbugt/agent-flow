@@ -39,14 +39,19 @@ export type SettingsReadResult =
 
 /**
  * Read a settings file. A missing file reads as `{}`. A file that exists but
- * can't be parsed is reported as an error so callers never overwrite it.
+ * can't be parsed is reported as an error so callers never overwrite it. So is
+ * a symlink whose target is missing (or that loops): writing would replace the
+ * link with a regular file, so it is refused like the statusLine installer does.
  */
 export function readSettingsFile(settingsPath: string): SettingsReadResult {
   let raw: string
   try {
     raw = fs.readFileSync(settingsPath, 'utf-8')
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') { return { ok: true, settings: {} } }
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+      if (isDanglingLink(settingsPath)) { return { ok: false, error: danglingLinkMessage(settingsPath) } }
+      return { ok: true, settings: {} }
+    }
     return { ok: false, error: (err as Error).message }
   }
   if (raw.trim() === '') { return { ok: true, settings: {} } }
@@ -61,17 +66,44 @@ export function readSettingsFile(settingsPath: string): SettingsReadResult {
   }
 }
 
-/** Write JSON via temp file + rename so a crash mid-write can't truncate the file. */
+/** True when `p` is itself a symlink (lstat succeeds) but nothing readable is behind it. */
+function isDanglingLink(p: string): boolean {
+  try { return fs.lstatSync(p).isSymbolicLink() } catch { return false }
+}
+
+function danglingLinkMessage(p: string): string {
+  return `${p} is a symbolic link that cannot be followed (missing target or a loop); fix the link first`
+}
+
+/**
+ * Write JSON via temp file + rename so a crash mid-write can't truncate the file.
+ *
+ * - A symlinked file (dotfile managers) is written THROUGH: tmp next to the real target, rename onto the target, so the link stays a link.
+ * - A link that cannot be followed is refused (throws), never replaced by a regular file.
+ * - The existing file's mode is kept (the target's, through a link); a new file is 0600.
+ * - The temp file is created exclusively with a random suffix and removed if anything fails.
+ *
+ * Mirrored in scripts/setup.js; keep the two in sync.
+ */
 export function writeJsonAtomic(requestedPath: string, value: unknown): void {
-  // Write through a symlinked file (dotfile managers) instead of replacing the link.
   let filePath = requestedPath
-  try {
-    if (fs.lstatSync(requestedPath).isSymbolicLink()) filePath = fs.realpathSync(requestedPath)
-  } catch { /* missing file: create it at the requested path */ }
+  let isLink = false
+  try { isLink = fs.lstatSync(requestedPath).isSymbolicLink() } catch { /* missing file: create it at the requested path */ }
+  if (isLink) {
+    try { filePath = fs.realpathSync(requestedPath) } catch { throw new Error(danglingLinkMessage(requestedPath)) }
+  }
+  let mode = 0o600
+  try { mode = fs.statSync(filePath).mode & 0o777 } catch { /* new file */ }
   fs.mkdirSync(path.dirname(filePath), { recursive: true })
-  const tmpPath = `${filePath}.${process.pid}.tmp`
-  fs.writeFileSync(tmpPath, JSON.stringify(value, null, 2) + '\n')
-  fs.renameSync(tmpPath, filePath)
+  const tmpPath = `${filePath}.${process.pid}.${Math.random().toString(36).slice(2, 8)}.tmp`
+  try {
+    fs.writeFileSync(tmpPath, JSON.stringify(value, null, 2) + '\n', { mode, flag: 'wx' })
+    fs.chmodSync(tmpPath, mode) // the umask can narrow the create mode; chmod is exact
+    fs.renameSync(tmpPath, filePath)
+  } catch (err) {
+    try { fs.unlinkSync(tmpPath) } catch { /* nothing to clean */ }
+    throw err
+  }
 }
 
 /**

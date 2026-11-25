@@ -137,4 +137,106 @@ describe('writeJsonAtomic', () => {
     assert.ok(fs.lstatSync(link).isSymbolicLink())
     assert.equal(fs.readFileSync(target, 'utf-8'), '{\n  "a": 2\n}\n')
   })
+
+  it('writes through a relative link chain and keeps every link', () => {
+    const dir = tmpDir()
+    fs.mkdirSync(path.join(dir, 'dotfiles'))
+    fs.mkdirSync(path.join(dir, 'claude'))
+    const target = path.join(dir, 'dotfiles', 'settings.json')
+    fs.writeFileSync(target, '{}\n')
+    fs.symlinkSync('settings.json', path.join(dir, 'dotfiles', 'mid.json')) // relative, same dir
+    const link = path.join(dir, 'claude', 'settings.json')
+    fs.symlinkSync('../dotfiles/mid.json', link) // relative, up and over
+    writeJsonAtomic(link, { chain: true })
+    assert.ok(fs.lstatSync(link).isSymbolicLink())
+    assert.ok(fs.lstatSync(path.join(dir, 'dotfiles', 'mid.json')).isSymbolicLink())
+    assert.equal(fs.readlinkSync(link), '../dotfiles/mid.json')
+    assert.ok(fs.lstatSync(target).isFile())
+    assert.deepEqual(JSON.parse(fs.readFileSync(target, 'utf-8')), { chain: true })
+    assert.deepEqual(fs.readdirSync(path.join(dir, 'dotfiles')).sort(), ['mid.json', 'settings.json'])
+  })
+
+  it('refuses a dangling link: throws, leaves it a link, creates no target and no temp file', () => {
+    const dir = tmpDir()
+    const link = path.join(dir, 'settings.json')
+    fs.symlinkSync(path.join(dir, 'gone', 'settings.json'), link)
+    assert.throws(() => writeJsonAtomic(link, { a: 1 }), /symbolic link that cannot be followed/)
+    assert.ok(fs.lstatSync(link).isSymbolicLink())
+    assert.equal(fs.existsSync(path.join(dir, 'gone')), false)
+    assert.deepEqual(fs.readdirSync(dir), ['settings.json'])
+  })
+
+  it('refuses a looping link', () => {
+    const dir = tmpDir()
+    const a = path.join(dir, 'a.json')
+    const b = path.join(dir, 'b.json')
+    fs.symlinkSync(b, a)
+    fs.symlinkSync(a, b)
+    assert.throws(() => writeJsonAtomic(a, {}), /cannot be followed/)
+    assert.ok(fs.lstatSync(a).isSymbolicLink())
+    assert.ok(fs.lstatSync(b).isSymbolicLink())
+  })
+
+  const mode = (f: string) => fs.statSync(f).mode & 0o777
+
+  it('keeps the mode of an existing regular file (600 stays 600, 644 stays 644)', () => {
+    const dir = tmpDir()
+    for (const m of [0o600, 0o644]) {
+      const file = path.join(dir, `s${m.toString(8)}.json`)
+      fs.writeFileSync(file, '{}\n')
+      fs.chmodSync(file, m)
+      writeJsonAtomic(file, { m })
+      assert.equal(mode(file), m)
+      assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf-8')), { m })
+    }
+  })
+
+  it("keeps the target's mode when writing through a link", () => {
+    const dir = tmpDir()
+    const target = path.join(dir, 'real.json')
+    fs.writeFileSync(target, '{}\n')
+    fs.chmodSync(target, 0o600)
+    const link = path.join(dir, 'settings.json')
+    fs.symlinkSync('real.json', link)
+    writeJsonAtomic(link, { a: 3 })
+    assert.ok(fs.lstatSync(link).isSymbolicLink())
+    assert.equal(mode(target), 0o600)
+  })
+
+  it('creates a new file as 0600 whatever the umask', () => {
+    const dir = tmpDir()
+    const file = path.join(dir, 'new', 'settings.json')
+    const old = process.umask(0o000)
+    try { writeJsonAtomic(file, { a: 1 }) } finally { process.umask(old) }
+    assert.equal(mode(file), 0o600)
+  })
+
+  it('removes its temp file when the rename fails', () => {
+    const dir = tmpDir()
+    const file = path.join(dir, 'settings.json')
+    fs.mkdirSync(file) // renaming a file onto a directory fails
+    assert.throws(() => writeJsonAtomic(file, { a: 1 }))
+    assert.deepEqual(fs.readdirSync(dir), ['settings.json'])
+  })
+})
+
+describe('readSettingsFile: links', () => {
+  it('refuses a dangling link instead of reading it as empty', () => {
+    const dir = tmpDir()
+    const link = path.join(dir, 'settings.json')
+    fs.symlinkSync(path.join(dir, 'missing.json'), link)
+    const r = readSettingsFile(link)
+    assert.equal(r.ok, false)
+    assert.match((r as { error: string }).error, /cannot be followed/)
+    assert.ok(fs.lstatSync(link).isSymbolicLink())
+  })
+
+  it('reads through a working link (absolute and relative)', () => {
+    const dir = tmpDir()
+    fs.writeFileSync(path.join(dir, 'real.json'), '{"a":1}')
+    fs.symlinkSync('real.json', path.join(dir, 'rel.json'))
+    fs.symlinkSync(path.join(dir, 'real.json'), path.join(dir, 'abs.json'))
+    assert.deepEqual(readSettingsFile(path.join(dir, 'rel.json')), { ok: true, settings: { a: 1 } })
+    assert.deepEqual(readSettingsFile(path.join(dir, 'abs.json')), { ok: true, settings: { a: 1 } })
+  })
 })
