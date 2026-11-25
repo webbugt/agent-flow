@@ -64,7 +64,7 @@ exist yet; each UI task adds its own and uses them with `--hover '[data-testid=.
 
 One-shot flags run in the order given: `--key <c>` (press a key; `$` toggles the cost overlay),
 `--click <t>`, `--hover <t>` (mouse, desktop), `--tap <t>` (touch, phone only), `--wait <ms>`,
-`--wait-for <css>`. A target `<t>` is one of:
+`--wait-for <css>`. A plan step `{ "config": "C-eur" }` rewrites the scratch `~/.agent-flow/costs.json` to a C-* fixture while the page stays open (hot reload; `C-default` deletes the file). Built-in plan `builtin:hotreload` is the costs P3 pair. A target `<t>` is one of:
 
 - a CSS selector (`[data-testid="cost-toggle"]`)
 - `agent:first` or `agent:<name>`: an agent node
@@ -73,7 +73,7 @@ One-shot flags run in the order given: `--key <c>` (press a key; `$` toggles the
 - `x,y`: viewport coordinates in CSS pixels
 
 A plan file is `{ "shots": [ { "name": "slug", "viewports": ["desktop"], "steps": [ {"key":"$"}, {"hover":"pill:first"}, {"wait":300} ] } ] }`
-(`--plan file.json`). Step objects have exactly one key: `key`, `click`, `hover`, `tap`, `wait`, `waitFor`, `eval`.
+(`--plan file.json`). Step objects have exactly one key: `key`, `click`, `hover`, `tap`, `wait`, `waitFor`, `eval`, `config`.
 Files are numbered in plan order across viewports; `--start-index` continues a numbering. Names get `-hover`
 appended when the steps contain a hover.
 

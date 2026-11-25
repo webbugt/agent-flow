@@ -413,6 +413,22 @@ export function materializeFixtures(opts: {
   return { home: opts.home, workspace: opts.workspace, hermesRoot, claudeFiles, hermesLogFiles }
 }
 
+/**
+ * Rewrite `<home>/.agent-flow/costs.json` to a C-* fixture while the app runs (hot-reload shots). The write is
+ * atomic (temp file + rename, like the app's own), so the watcher never sees half a file. `C-default` removes the file.
+ */
+export function rewriteConfigFixture(home: string, name: string): void {
+  if (!(name in CONFIG_FIXTURES)) throw new Error(`unknown config fixture ${name}`)
+  const af = path.join(home, '.agent-flow')
+  const file = path.join(af, 'costs.json')
+  const doc = CONFIG_FIXTURES[name]
+  if (doc === null) { fs.rmSync(file, { force: true }); return }
+  fs.mkdirSync(af, { recursive: true })
+  const tmp = path.join(af, `.costs.json.${process.pid}.tmp`)
+  fs.writeFileSync(tmp, JSON.stringify(doc, null, 2) + '\n', { mode: 0o600 })
+  fs.renameSync(tmp, file)
+}
+
 /** Append the usage and tool lines of the scenario's Hermes fixtures to their agent.log (after the relay attached). */
 export function appendHermesLines(m: Materialized, scenario: string, now = Date.now()): number {
   const { hermes } = loadScenario(scenario)

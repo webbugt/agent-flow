@@ -21,7 +21,7 @@ import {
   ArgError, BUILTIN_PLANS, VIEWPORTS, assertAllowedPort, expandPlan, parseShotArgs, validatePlan,
   type ShotOptions, type ShotPlan, type Step, type Viewport,
 } from './shot-lib'
-import { appendHermesLines, loadScenario, materializeFixtures, resolveScenario, type Materialized } from './shot-fixtures'
+import { appendHermesLines, loadScenario, materializeFixtures, resolveScenario, rewriteConfigFixture, type Materialized } from './shot-fixtures'
 
 const REPO = path.resolve(__dirname, '..')
 const APP_JS = path.join(REPO, 'app', 'dist', 'app.js')
@@ -275,8 +275,14 @@ async function settleAfterSessionChange(page: Page): Promise<void> {
   await waitFor('the camera to settle after changing the session', () => page.eval<boolean>('window.__AF_TEST__.settled()'), 15_000)
 }
 
+/** Scratch HOME of the run in progress; the `config` step writes its costs.json. */
+let scratchHome: string | undefined
+
 async function runStep(page: Page, step: Step, viewport: Viewport): Promise<void> {
-  if ('key' in step || 'press' in step) {
+  if ('config' in step) {
+    if (!scratchHome) throw new Error('config step: no scratch HOME')
+    rewriteConfigFixture(scratchHome, step.config)
+  } else if ('key' in step || 'press' in step) {
     await pressKey(page, ('key' in step ? step.key : (step as { press: string }).press))
   } else if ('wait' in step) {
     await sleep(step.wait)
@@ -419,6 +425,7 @@ export async function run(argv: string[]): Promise<number> {
   const workspace = path.join(tmp, 'workspace')
   fs.mkdirSync(home, { recursive: true })
   const m: Materialized = materializeFixtures({ home, workspace, scenario: opts.scenario, limits: opts.limits, config: opts.config })
+  scratchHome = home
   log(`scratch HOME ${home}`)
 
   const outDir = path.resolve(REPO, opts.outDir, opts.taskId)

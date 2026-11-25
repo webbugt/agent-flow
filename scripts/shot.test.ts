@@ -9,7 +9,7 @@ import {
 } from './shot-lib'
 import {
   CLAUDE_SESSIONS, CONFIG_FIXTURES, FIXTURE_IDS, HERMES_SESSIONS, LIMITS_FIXTURES, SCENARIOS,
-  appendHermesLines, claudeTranscriptLines, encodeProjectDir, hermesLiveLines, loadScenario, materializeFixtures,
+  appendHermesLines, claudeTranscriptLines, encodeProjectDir, hermesLiveLines, loadScenario, materializeFixtures, rewriteConfigFixture,
 } from './shot-fixtures'
 
 // ─── Argument parsing ───────────────────────────────────────────────────────
@@ -183,4 +183,34 @@ test('materializeFixtures writes transcripts, profile folders and state.db into 
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true })
   }
+})
+
+// ─── Hot-reload step (costs P3 screenshots 03/04) ───────────────────────────
+
+test('the config step is a valid plan step and the hotreload plan rewrites to C-eur after the overlay is on', () => {
+  assert.doesNotThrow(() => validatePlan({ shots: [{ name: 'a', steps: [{ config: 'C-eur' }] }] }))
+  assert.throws(() => validatePlan({ shots: [{ name: 'a', steps: [{ config: '' }] }] }), ArgError)
+  const jobs = expandPlan(BUILTIN_PLANS.hotreload, ['desktop', 'phone'], 3)
+  assert.deepEqual(jobs.map(j => j.file), ['03-hot-reload-before-usd-desktop.png', '04-hot-reload-after-eur-desktop.png'])
+  const steps = BUILTIN_PLANS.hotreload.shots[1].steps!
+  const iKey = steps.findIndex(s => 'key' in s); const iCfg = steps.findIndex(s => 'config' in s)
+  assert.ok(iKey >= 0 && iCfg > iKey, 'the overlay is turned on (USD) before costs.json is rewritten')
+  assert.deepEqual(steps[iCfg], { config: 'C-eur' })
+  assert.ok(!(BUILTIN_PLANS.hotreload.shots[0].steps ?? []).some(s => 'config' in s), 'the "before" shot never rewrites the file')
+})
+
+test('rewriteConfigFixture replaces costs.json atomically, removes it for C-default, and refuses unknown names', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'shot-cfg-'))
+  try {
+    const file = path.join(home, '.agent-flow', 'costs.json')
+    rewriteConfigFixture(home, 'C-eur')
+    assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).currency.display, 'EUR')
+    assert.equal(fs.statSync(file).mode & 0o777, 0o600)
+    rewriteConfigFixture(home, 'C-custom-price')
+    assert.ok(JSON.parse(fs.readFileSync(file, 'utf8')).pricing)
+    assert.deepEqual(fs.readdirSync(path.dirname(file)), ['costs.json'], 'no temp file left behind')
+    rewriteConfigFixture(home, 'C-default')
+    assert.equal(fs.existsSync(file), false)
+    assert.throws(() => rewriteConfigFixture(home, 'C-9'), /unknown config fixture/)
+  } finally { fs.rmSync(home, { recursive: true, force: true }) }
 })

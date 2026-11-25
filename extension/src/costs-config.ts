@@ -95,6 +95,97 @@ function errCode(e: unknown): string | undefined {
   return typeof e === 'object' && e !== null && 'code' in e ? String((e as { code: unknown }).code) : undefined
 }
 
+/**
+ * Offset of the first character that makes `text` invalid JSON (a small strict scanner), or null when it cannot
+ * tell (the text is valid, or nested deeper than 1000). Needed because V8's "Unexpected token" form has no position.
+ */
+function jsonErrorOffset(text: string): number | null {
+  let i = 0
+  const n = text.length
+  const ws = () => { while (i < n && (text[i] === ' ' || text[i] === '\t' || text[i] === '\n' || text[i] === '\r')) i++ }
+  const fail = (): never => { throw i }
+  const string = () => {
+    i++
+    for (;;) {
+      if (i >= n) fail()
+      const c = text.charCodeAt(i)
+      if (c === 0x22) { i++; return }
+      if (c < 0x20) fail()
+      if (c === 0x5c) {
+        i++
+        const e = text[i]
+        if (e === 'u') {
+          for (let k = 1; k <= 4; k++) if (!/[0-9a-fA-F]/.test(text[i + k] ?? '')) { i += k; fail() }
+          i += 4
+        } else if (e === undefined || !'"\\/bfnrt'.includes(e)) fail()
+      }
+      i++
+    }
+  }
+  const value = (depth: number): void => {
+    if (depth > 1000) throw -1
+    ws()
+    const c = text[i]
+    if (c === '{') {
+      i++; ws()
+      if (text[i] === '}') { i++; return }
+      for (;;) {
+        ws(); if (text[i] !== '"') fail()
+        string(); ws(); if (text[i] !== ':') fail()
+        i++; value(depth + 1); ws()
+        if (text[i] === ',') { i++; continue }
+        if (text[i] === '}') { i++; return }
+        fail()
+      }
+    } else if (c === '[') {
+      i++; ws()
+      if (text[i] === ']') { i++; return }
+      for (;;) {
+        value(depth + 1); ws()
+        if (text[i] === ',') { i++; continue }
+        if (text[i] === ']') { i++; return }
+        fail()
+      }
+    } else if (c === '"') string()
+    else {
+      const m = /^(?:-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?|true|false|null)/.exec(text.slice(i, i + 400))
+      if (!m) fail()
+      i += (m as RegExpExecArray)[0].length
+    }
+  }
+  try { value(0); ws(); return i < n ? i : null } catch (at) { return typeof at === 'number' && at >= 0 ? at : null }
+}
+
+function lineCol(text: string, pos: number): { line: number; column: number } {
+  let line = 1
+  let lastNl = -1
+  for (let k = text.indexOf('\n'); k !== -1 && k < pos; k = text.indexOf('\n', k + 1)) { line++; lastNl = k }
+  return { line, column: pos - lastNl }
+}
+
+/**
+ * A JSON.parse failure reduced to what is safe to show: fixed wording plus position, line and column.
+ * V8 also quotes an excerpt of the input (`Unexpected token 's', ..."<key>": <value>"... is not valid JSON`, or the
+ * offending character in older engines). The file may hold secrets and this text goes into the payload, the banner
+ * and the relay SSE, so everything that is not fixed wording or a number is dropped; the position of an
+ * excerpt-style error is found by our own scan instead of by quoting the parser.
+ */
+export function describeJsonError(e: unknown, text?: string): string {
+  const m = e instanceof Error ? e.message : ''
+  // "<fixed wording> in JSON at position N (line L column C)"; the line/column part is absent on older engines.
+  const at = /^([^]*?) in JSON at position (\d+)(?: \(line (\d+) column (\d+)\))?/.exec(m)
+  if (at) {
+    const head = at[1].startsWith('Unexpected token') ? 'Unexpected token' : at[1].slice(0, 80)
+    const lc = at[3] !== undefined ? { line: Number(at[3]), column: Number(at[4]) } : text !== undefined ? lineCol(text, Number(at[2])) : null
+    return `${head} at ${lc ? `line ${lc.line} column ${lc.column}, ` : ''}position ${at[2]}`
+  }
+  const what = /^Unexpected end of JSON input/.test(m) ? 'Unexpected end of input' : /^Unexpected token/.test(m) ? 'Unexpected token' : 'Syntax error'
+  const pos = text !== undefined ? jsonErrorOffset(text) : null
+  if (pos === null || text === undefined) return what
+  const lc = lineCol(text, pos)
+  return `${what} at line ${lc.line} column ${lc.column}, position ${pos}`
+}
+
 export interface ReadLayerOptions {
   home: string
   /** The file must resolve (symlinks followed) inside this directory, which must itself be a real path
@@ -137,8 +228,7 @@ export function readLayerFile(file: string, id: CostsLayerId, opts: ReadLayerOpt
     if (text.trim() === '') return { ...base, status: 'ok', raw: {} }
     let parsed: unknown
     try { parsed = JSON.parse(text) } catch (e) {
-      const m = e instanceof Error ? e.message : 'parse error'
-      return fail(`invalid JSON: ${m.slice(0, 160)}`)
+      return fail(`invalid JSON: ${describeJsonError(e, text)}`)
     }
     if (!isPlainObject(parsed)) return fail('the document must be a JSON object')
     const warnings: string[] = []
@@ -217,6 +307,30 @@ export function writeFileAtomic(file: string, text: string, mode = 0o600): void 
     const dfd = fs.openSync(dir, fs.constants.O_RDONLY)
     try { fs.fsyncSync(dfd) } finally { fs.closeSync(dfd) }
   } catch { /* best effort */ }
+}
+
+/**
+ * Where an atomic write for the USER file must land. The user file is the one the person owns, and dotfiles setups
+ * make it a symlink into a repo; renaming a temp file over the link would turn it into a regular file and leave the
+ * dotfile target stale. So a symlink is followed to its real file (the temp file is then created in the real file's
+ * directory, keeping the rename atomic on the same filesystem). A dangling link is refused with a clear error rather
+ * than guessed at. A regular file or a missing path is returned unchanged. Not used for the project layer, whose
+ * writes must stay inside `.agent-flow` and replace the entry there.
+ */
+export function resolveUserWriteTarget(file: string, home: string): string {
+  let st: fs.Stats
+  try { st = fs.lstatSync(file) } catch (e) {
+    if (errCode(e) === 'ENOENT') return file
+    throw new Error(`cannot inspect ${displayPath(file, home)} (${errCode(e) ?? 'error'})`)
+  }
+  if (!st.isSymbolicLink()) return file
+  let real: string
+  try { real = fs.realpathSync(file) } catch (e) {
+    throw new Error(`${displayPath(file, home)} is a symlink whose target cannot be resolved (${errCode(e) ?? 'error'}); fix or remove the link, then retry`)
+  }
+  const rs = fs.statSync(real)
+  if (!rs.isFile()) throw new Error(`${displayPath(file, home)} is a symlink to something that is not a regular file; refusing to replace it`)
+  return real
 }
 
 // ─── Loader ─────────────────────────────────────────────────────────────────
@@ -418,7 +532,8 @@ export class CostsConfigLoader {
     if (layer === 'user') {
       const up = this.userPath()
       if ('error' in up) throw new Error(up.error)
-      target = up.path
+      // A symlinked user file (dotfiles) is written through, so the link survives and its target is updated.
+      target = resolveUserWriteTarget(up.path, this.home())
     } else {
       if (PROJECT_FORBIDDEN_KEYS.some(k => Object.prototype.hasOwnProperty.call(doc, k))) {
         throw new Error('"configPath" cannot be set in a project file')
@@ -439,8 +554,9 @@ export class CostsConfigLoader {
   ensureUserFile(): string {
     const up = this.userPath()
     if ('error' in up) throw new Error(up.error)
-    if (!fs.existsSync(up.path)) {
-      writeFileAtomic(up.path, JSON.stringify({ schemaVersion: 1 }, null, 2) + '\n', 0o600)
+    const target = resolveUserWriteTarget(up.path, this.home()) // a dangling symlink is refused, never replaced
+    if (!fs.existsSync(target)) {
+      writeFileAtomic(target, JSON.stringify({ schemaVersion: 1 }, null, 2) + '\n', 0o600)
       this.reload()
     }
     return up.path

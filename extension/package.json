@@ -47,6 +47,12 @@
         "category": "Agent Flow"
       }
     ],
+    "jsonValidation": [
+      {
+        "fileMatch": "**/.agent-flow/costs.json",
+        "url": "./costs.schema.json"
+      }
+    ],
     "keybindings": [
       {
         "command": "agentVisualizer.open",

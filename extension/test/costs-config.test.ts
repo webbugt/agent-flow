@@ -8,8 +8,8 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import {
-  CostsConfigLoader, MAX_COSTS_FILE_BYTES, defaultUserConfigPath, displayPath, expandHome, isInside,
-  projectConfigPath, readLayerFile, resolveUserConfigPath, settingsLayer, writeFileAtomic,
+  CostsConfigLoader, MAX_COSTS_FILE_BYTES, defaultUserConfigPath, describeJsonError, displayPath, expandHome, isInside,
+  projectConfigPath, readLayerFile, resolveUserConfigPath, resolveUserWriteTarget, settingsLayer, writeFileAtomic,
 } from '../src/costs-config'
 import type { CostsConfigPayload } from '../src/protocol'
 
@@ -447,5 +447,130 @@ describe('hot reload', () => {
     put(userFile(), '{"a":{"b":[1,2,{"c":null}]}}')
     const p = mk().snapshot()
     assert.deepEqual(JSON.parse(JSON.stringify(p)), p)
+  })
+})
+
+describe('invalid JSON messages carry no file content (R1 finding 3)', () => {
+  const SECRET = 'sk-ant-SECRET-DO-NOT-LEAK'
+  const cases: [string, string][] = [
+    ['unquoted value (V8 quotes an excerpt)', `{\n  "apiKey": ${SECRET}\n}`],
+    ['same on one line', `{"apiKey": ${SECRET}}`],
+    ['trailing comma', `{"apiKey": "${SECRET}",}`],
+    ['trailing garbage', `{"apiKey": "${SECRET}"} ${SECRET}`],
+    ['unterminated string', `{"apiKey": "${SECRET}`],
+    ['missing colon', `{"apiKey" "${SECRET}"}`],
+    ['bad literal in an array', `["${SECRET}", tru]`],
+  ]
+
+  for (const [name, text] of cases) {
+    it(`${name}: the error has position, line and column and none of the text`, () => {
+      put(userFile(), text)
+      const u = readLayerFile(userFile(), 'user', { home })
+      assert.equal(u.status, 'error')
+      const msg = u.error!
+      assert.match(msg, /^invalid JSON: /)
+      assert.doesNotMatch(msg, /sk-ant|SECRET|apiKey|LEAK/, msg)
+      assert.match(msg, /line \d+ column \d+, position \d+/, msg)
+      // What goes out in the payload (banner + SSE) is clean too.
+      const l = mk()
+      assert.doesNotMatch(JSON.stringify(l.snapshot()), /sk-ant|SECRET|LEAK/)
+    })
+  }
+
+  it('reports the real position, line and column of the first bad character', () => {
+    put(userFile(), '{\n  "a": 1,\n  "b": nope\n}')
+    const msg = readLayerFile(userFile(), 'user', { home }).error!
+    // "nope" starts on line 3, column 8 (offset 8 + 11 = 19)
+    assert.match(msg, /line 3 column 8, position 19$/, msg)
+  })
+
+  it('describeJsonError copes with older engines and unknown errors', () => {
+    assert.equal(describeJsonError(new SyntaxError('Unexpected token } in JSON at position 7')), 'Unexpected token at position 7')
+    assert.equal(describeJsonError(new SyntaxError('Unexpected token } in JSON at position 7'), 'abc\n{"a":}'), 'Unexpected token at line 2 column 4, position 7')
+    assert.equal(describeJsonError(new SyntaxError(`Unexpected token 'x', "${SECRET}" is not valid JSON`)), 'Unexpected token')
+    assert.equal(describeJsonError(new SyntaxError('Unexpected end of JSON input')), 'Unexpected end of input')
+    assert.equal(describeJsonError('not an error'), 'Syntax error')
+    // a file that embeds the parser's own wording cannot smuggle text through the numbers
+    const msg = describeJsonError(new SyntaxError(`Unexpected token 'x', "${SECRET} in JSON at position 5 (line 1 column 6)" is not valid JSON`))
+    assert.doesNotMatch(msg, /SECRET/)
+  })
+})
+
+describe('writeConfig(user) and symlinks (R1 finding 4)', () => {
+  it('a symlinked user file stays a symlink; the dotfile target gets the new content (0600, no temp files)', () => {
+    const dot = path.join(root, 'dotfiles'); const target = path.join(dot, 'costs.json')
+    put(target, '{"schemaVersion":1}\n')
+    fs.chmodSync(target, 0o644)
+    fs.mkdirSync(path.dirname(userFile()), { recursive: true })
+    fs.symlinkSync(target, userFile())
+    const l = mk()
+    const r = l.writeConfig('user', { schemaVersion: 1, currency: { display: 'EUR', fx: { EUR: 0.92 } } })
+    assert.equal(fs.lstatSync(userFile()).isSymbolicLink(), true, 'the link was not replaced by a regular file')
+    assert.equal(fs.readlinkSync(userFile()), target)
+    assert.equal(r.path, target)
+    assert.deepEqual(JSON.parse(fs.readFileSync(target, 'utf8')), { schemaVersion: 1, currency: { display: 'EUR', fx: { EUR: 0.92 } } })
+    assert.equal(fs.statSync(target).mode & 0o777, 0o600)
+    assert.deepEqual(fs.readdirSync(dot), ['costs.json'], 'the temp file lived in the real directory and is gone')
+    assert.deepEqual(fs.readdirSync(path.dirname(userFile())), ['costs.json'], 'nothing was written next to the link')
+    assert.equal(layer(l.snapshot(), 'user')!.status, 'ok')
+    assert.deepEqual((layer(l.snapshot(), 'user')!.raw as { currency: unknown }).currency, { display: 'EUR', fx: { EUR: 0.92 } })
+  })
+
+  it('a chain of links is followed to the real file', () => {
+    const real = path.join(root, 'repo', 'costs.json'); const mid = path.join(root, 'mid.json')
+    put(real, '{}')
+    fs.symlinkSync(real, mid)
+    fs.mkdirSync(path.dirname(userFile()), { recursive: true })
+    fs.symlinkSync(mid, userFile())
+    mk().writeConfig('user', { schemaVersion: 1 })
+    assert.equal(fs.lstatSync(userFile()).isSymbolicLink(), true)
+    assert.equal(fs.lstatSync(mid).isSymbolicLink(), true)
+    assert.deepEqual(JSON.parse(fs.readFileSync(real, 'utf8')), { schemaVersion: 1 })
+  })
+
+  it('a dangling symlink is refused with a clear error and left as it was', () => {
+    fs.mkdirSync(path.dirname(userFile()), { recursive: true })
+    fs.symlinkSync(path.join(root, 'gone', 'costs.json'), userFile())
+    const l = mk()
+    assert.throws(() => l.writeConfig('user', { schemaVersion: 1 }), /symlink whose target cannot be resolved/)
+    assert.throws(() => l.ensureUserFile(), /symlink whose target cannot be resolved/)
+    assert.equal(fs.lstatSync(userFile()).isSymbolicLink(), true)
+    assert.equal(fs.existsSync(path.join(root, 'gone')), false)
+  })
+
+  it('a symlink to a directory is refused', () => {
+    const d = path.join(root, 'adir'); fs.mkdirSync(d)
+    fs.mkdirSync(path.dirname(userFile()), { recursive: true })
+    fs.symlinkSync(d, userFile())
+    assert.throws(() => mk().writeConfig('user', { schemaVersion: 1 }), /not a regular file/)
+    assert.deepEqual(fs.readdirSync(d), [])
+  })
+
+  it('ensureUserFile does not touch an existing symlinked file', () => {
+    const target = path.join(root, 'dot', 'costs.json')
+    put(target, '{"mine":1}')
+    fs.mkdirSync(path.dirname(userFile()), { recursive: true })
+    fs.symlinkSync(target, userFile())
+    mk().ensureUserFile()
+    assert.equal(fs.lstatSync(userFile()).isSymbolicLink(), true)
+    assert.equal(fs.readFileSync(target, 'utf8'), '{"mine":1}')
+  })
+
+  it('a regular or missing user file is written where it is (resolveUserWriteTarget is the identity)', () => {
+    assert.equal(resolveUserWriteTarget(userFile(), home), userFile())
+    put(userFile(), '{}')
+    assert.equal(resolveUserWriteTarget(userFile(), home), userFile())
+    mk().writeConfig('user', { schemaVersion: 1 })
+    assert.equal(fs.lstatSync(userFile()).isFile(), true)
+  })
+
+  it('the project layer keeps its behaviour: a symlinked costs.json inside .agent-flow is replaced by a regular file', () => {
+    fs.mkdirSync(path.dirname(projFile()), { recursive: true })
+    put(path.join(path.dirname(projFile()), 'real.json'), '{"keep":1}')
+    fs.symlinkSync('real.json', projFile())
+    mk().writeConfig('project', { pricing: { multiplier: 2 } })
+    assert.equal(fs.lstatSync(projFile()).isSymbolicLink(), false)
+    assert.deepEqual(JSON.parse(fs.readFileSync(projFile(), 'utf8')), { pricing: { multiplier: 2 } })
+    assert.equal(fs.readFileSync(path.join(path.dirname(projFile()), 'real.json'), 'utf8'), '{"keep":1}', 'the old target is untouched')
   })
 })

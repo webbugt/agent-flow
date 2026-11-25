@@ -32,6 +32,8 @@ export type Step =
   | { waitFor: string }
   | { eval: string }
   | { press: string }
+  /** Rewrite the scratch ~/.agent-flow/costs.json to a C-* fixture while the app and the page keep running (hot reload). C-default removes the file. */
+  | { config: string }
 
 export interface ShotSpec {
   /** Slug used in the file name */
@@ -185,7 +187,7 @@ export function shotFileName(index: number, name: string, viewport: ViewportName
   return `${nn}-${slug(name)}-${viewport}${hasHover(steps) ? '-hover' : ''}.png`
 }
 
-const STEP_KEYS = ['key', 'click', 'hover', 'tap', 'wait', 'waitFor', 'eval', 'press'] as const
+const STEP_KEYS = ['key', 'click', 'hover', 'tap', 'wait', 'waitFor', 'eval', 'press', 'config'] as const
 
 /** Validate a plan read from JSON; returns it typed or throws ArgError. */
 export function validatePlan(raw: unknown): ShotPlan {
@@ -233,6 +235,16 @@ export function validatePlan(raw: unknown): ShotPlan {
 
 /** Built-in plans. `h0` is the harness self-test of task H0; `overlay` is what `pnpm shot:smoke` runs. */
 export const BUILTIN_PLANS: Record<string, ShotPlan> = {
+  // Costs P3 hot-reload pair. Run with `--config C-default --start-index 3`. The second shot opens the page with the
+  // USD config, turns the overlay on (pill in USD), THEN rewrites costs.json to C-eur in the same page without
+  // restarting anything, so the EUR pill in the picture came from the live reload, not from a fresh page load.
+  // C-default means no file and no ~/.agent-flow directory, which the loader can only watch by its 5 s poll, hence the long wait.
+  hotreload: {
+    shots: [
+      { name: 'hot-reload-before-usd', viewports: ['desktop'], steps: [{ key: '$' }, { wait: 400 }] },
+      { name: 'hot-reload-after-eur', viewports: ['desktop'], steps: [{ key: '$' }, { wait: 600 }, { config: 'C-eur' }, { wait: 7000 }] },
+    ],
+  },
   overlay: {
     shots: [
       { name: 'cost-overlay', viewports: ['desktop', 'phone'], steps: [{ key: '$' }, { wait: 300 }] },
