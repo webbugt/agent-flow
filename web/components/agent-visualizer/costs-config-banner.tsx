@@ -1,6 +1,7 @@
 'use client'
 
 import { Z } from '@/lib/agent-types'
+import { useViewportWidth } from '@/hooks/use-viewport-width'
 import { COLORS } from '@/lib/colors'
 import { vscodeBridge } from '@/lib/vscode-bridge'
 import { describeIssue } from '@/lib/costs/layers'
@@ -22,6 +23,7 @@ export function fallbackSentence(r: CostsStatus['resolution']): string {
  */
 export function CostsConfigBanner({ status }: { status: CostsStatus }) {
   const { resolution, dismissed } = status
+  const narrow = useViewportWidth(1280) < 640 // the top bar wraps to two rows on a phone
   if (resolution.errors.length === 0 || dismissed) return null
   const lines = resolution.errors.slice(0, MAX_LINES).map(describeIssue)
   const more = resolution.errors.length - lines.length
@@ -32,7 +34,7 @@ export function CostsConfigBanner({ status }: { status: CostsStatus }) {
       data-testid="costs-config-banner"
       className="absolute left-1/2 -translate-x-1/2 font-mono text-[11px] rounded"
       style={{
-        top: 'calc(3.25rem + env(safe-area-inset-top, 0px))', width: 'min(640px, calc(100vw - 24px))', zIndex: Z.info + 1,
+        top: `calc(${narrow ? '4.6rem' : '3.25rem'} + env(safe-area-inset-top, 0px))`, width: 'min(640px, calc(100vw - 24px))', zIndex: Z.info + 1,
         background: 'rgba(40, 10, 18, 0.92)', border: `1px solid ${COLORS.error}99`, color: '#ffd0d6',
         boxShadow: `0 0 18px ${COLORS.error}33`, padding: '8px 10px', backdropFilter: 'blur(8px)',
       }}

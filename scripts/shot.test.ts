@@ -108,11 +108,11 @@ test('validatePlan accepts a good plan and rejects bad ones', () => {
 // ─── Fixtures (H0-A3, H0-A6, H0-A7) ─────────────────────────────────────────
 
 test('fixture ids F-A..F-H, L-1..L-4 and C-* all exist', () => {
-  for (const id of ['F-A', 'F-B', 'F-C', 'F-D', 'F-E', 'F-F', 'F-G', 'F-H', 'L-1', 'L-2', 'L-3', 'L-4', 'C-default', 'C-eur', 'C-invalid', 'C-local-energy']) {
+  for (const id of ['F-A', 'F-B', 'F-C', 'F-D', 'F-E', 'F-F', 'F-G', 'F-H', 'L-1', 'L-2', 'L-3', 'L-4', 'C-default', 'C-eur', 'C-invalid', 'C-custom-price', 'C-local-energy']) {
     assert.ok(FIXTURE_IDS.includes(id), `missing fixture ${id}`)
   }
   assert.deepEqual(Object.keys(LIMITS_FIXTURES), ['L-1', 'L-2', 'L-3', 'L-4'])
-  assert.deepEqual(Object.keys(CONFIG_FIXTURES), ['C-default', 'C-eur', 'C-invalid', 'C-local-energy'])
+  assert.deepEqual(Object.keys(CONFIG_FIXTURES), ['C-default', 'C-eur', 'C-invalid', 'C-custom-price', 'C-local-energy'])
 })
 
 test('the costs scenario has an API, a subscription, a Copilot, a local-model and a Fable session', () => {

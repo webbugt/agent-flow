@@ -83,7 +83,7 @@ task H0: overlay off/on, agent hover, agent tap on the phone, pill hover and the
 ## Options
 
 `--task-id` (required) · `--plan` · `--viewports desktop,phone` · `--scenario costs|all|claude|hermes` ·
-`--session <label|none>` · `--port` · `--limits L-1..L-4` · `--config C-default|C-eur|C-invalid|C-local-energy` ·
+`--session <label|none>` · `--port` · `--limits L-1..L-4` · `--config C-default|C-eur|C-invalid|C-custom-price|C-local-energy` ·
 `--out` · `--start-index` · `--no-build` · `--keep-temp` · `-v`. `pnpm shot --help` prints the list.
 
 `--session`: the page shows one session at a time, and which one it shows depends on which events arrive

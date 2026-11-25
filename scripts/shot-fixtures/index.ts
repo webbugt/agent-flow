@@ -19,7 +19,7 @@
  *   F-G  Hermes, unknown model acme-xyz-9
  *   F-H  Claude Code transcript with no usage reported (context-size estimate path)
  *   L-1..L-4  limits file variants (not read by the app until the limits tasks land)
- *   C-default / C-eur / C-invalid / C-local-energy  cost config variants (same note)
+ *   C-default / C-eur / C-invalid / C-custom-price / C-local-energy  cost config variants (same note)
  *
  * Hermes watcher behaviour (H0-A7, verified in scripts/hermes-logs.ts `discover`):
  * a profile's agent.log is read from its END at the moment the watcher first sees
@@ -204,6 +204,8 @@ export const CONFIG_FIXTURES: Record<string, unknown> = {
   'C-default': null,
   'C-eur': { currency: { display: 'EUR', fx: { EUR: 0.92 }, fxAsOf: '2026-11-25' } },
   'C-invalid': { currency: { display: 3 }, pricing: { unknownModel: { policy: 'nonsense' } } },
+  // A valid custom price: Sonnet at 4x the list price, so the change is visible at a glance (task P3)
+  'C-custom-price': { schemaVersion: 1, pricing: { models: [{ match: { provider: 'anthropic', model: 'claude-sonnet-*' }, rate: { input: 12, output: 60, cacheRead: 1.2, cacheWrite5m: 15, cacheWrite1h: 24 } }] } },
   'C-local-energy': { energy: { profiles: { ollama: { loadWatts: 220, idleWatts: 40 } }, tariff: { perKwh: 0.18 } } },
 }
 
