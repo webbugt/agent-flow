@@ -5,6 +5,8 @@
  * Webview → Extension: user commands (inject, connect/disconnect)
  */
 
+import type { PromptBucket } from './spend-tiers'
+
 // ─── Agent Event Types (from real agent sessions) ────────────────────────────
 
 export type AgentEventType =
@@ -217,8 +219,8 @@ export interface WatchedSession {
   seenUsageIds: Set<string>
 }
 
-/** Cumulative billed token counts for one agent, as reported by the API */
-export interface SpendTotals {
+/** Token counts of one kind of usage (the flat part of `SpendTotals`). */
+export interface TokenCounts {
   inputTokens: number
   outputTokens: number
   cacheReadTokens: number
@@ -226,8 +228,30 @@ export interface SpendTotals {
   cacheWrite5mTokens: number
   /** Cache writes with the 1-hour TTL (billed at a higher rate) */
   cacheWrite1hTokens: number
+}
+
+/** Cumulative billed token counts for one agent, as reported by the API */
+export interface SpendTotals extends TokenCounts {
   /** Last real model id seen for this agent */
   model?: string
+  /**
+   * Provider id of the latest call: `anthropic` for Claude Code transcripts, the Hermes
+   * `provider=` value for Hermes (`copilot`, `claude-subscription-directsdk-experimental`,
+   * `ollama`, ...). One value per agent, like `model`: an agent that switched provider keeps
+   * the latest. Absent for runtimes that report none.
+   */
+  provider?: string
+  /**
+   * The same totals split by the prompt size of each request (see spend-tiers.ts). The buckets
+   * sum to the flat totals above. Absent when the ledger saw no per-request usage.
+   */
+  byBucket?: Partial<Record<PromptBucket, TokenCounts>>
+  /** API calls counted into these totals */
+  calls?: number
+  /** Calls that reported a latency (<= `calls`; Claude Code transcripts report none) */
+  timedCalls?: number
+  /** Sum of the reported per-call latencies, in seconds */
+  latencySeconds?: number
 }
 
 // ─── Claude Settings Types ──────────────────────────────────────────────────

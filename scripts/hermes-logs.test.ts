@@ -36,18 +36,59 @@ test('parses tool completions with and without a session tag', () => {
   assert.deepEqual(parseHermesLogLine(TOOL_FAILED)?.event, { kind: 'tool', tool: 'patch', status: 'failed', seconds: 1.5 })
 })
 
-test('parses API calls with cache read and write counts', () => {
+test('parses API calls with provider, latency, cache read and write counts', () => {
   assert.deepEqual(parseHermesLogLine(API_LINE)?.event, {
     kind: 'api',
     model: 'claude-haiku-5-5',
+    provider: 'claude-subscription-directsdk-experimental',
+    latencySeconds: 15.8,
     inputTokens: 249062,
     outputTokens: 1999,
     cacheReadTokens: 245280,
     cacheWriteTokens: 3780,
   })
   assert.deepEqual(parseHermesLogLine(API_NO_CACHE)?.event, {
-    kind: 'api', model: 'gpt-5', inputTokens: 100, outputTokens: 5, cacheReadTokens: 0, cacheWriteTokens: 0,
+    kind: 'api', model: 'gpt-5', provider: 'x', latencySeconds: 1, inputTokens: 100, outputTokens: 5, cacheReadTokens: 0, cacheWriteTokens: 0,
   })
+})
+
+// Copilot lines as they appear in real agent.log files (dotted model ids; ids redacted).
+const API_COPILOT_NO_CACHE = '2026-11-02 09:00:48,096 INFO [20261102_090036_68da8bd7] agent.conversation_loop: API call #1: model=claude-sonnet-5.5 provider=copilot in=20344 out=130 total=20474 latency=2.3s id=<redacted>'
+const API_COPILOT_CACHE = '2026-11-02 09:31:19,250 INFO [20261102_090036_68da8bd7] agent.conversation_loop: API call #2: model=claude-sonnet-5.5 provider=copilot in=22566 out=98 total=22664 latency=1.8s cache=21992/22566 (97%) id=<redacted>'
+const API_COPILOT_WRITE = '2026-11-01 20:57:05,771 INFO [local-04eb23fc] agent.conversation_loop: API call #1: model=gpt-6.1-sol provider=copilot in=15728 out=5 total=15733 latency=2.6s write=15725 id=mJ/0mS0E+6fo/Q=='
+const API_NO_LATENCY = '2026-11-23 12:06:45,094 INFO agent.conversation_loop: API call #3: model=gemini-3.8-flash provider=copilot in=39905 out=229 total=40134 cache=34956/39905 (88%)'
+const API_LOCAL_MS = '2026-11-23 22:00:01,000 INFO [20261123_220000_aaaaaaaa] agent.conversation_loop: API call #1: model=llama3.1:8b provider=ollama in=900 out=40 total=940 latency=850ms'
+
+test('P2: Copilot lines keep provider=copilot, latency, cache= and write=', () => {
+  assert.deepEqual(parseHermesLogLine(API_COPILOT_NO_CACHE)?.event, {
+    kind: 'api', model: 'claude-sonnet-5.5', provider: 'copilot', latencySeconds: 2.3,
+    inputTokens: 20344, outputTokens: 130, cacheReadTokens: 0, cacheWriteTokens: 0,
+  })
+  assert.deepEqual(parseHermesLogLine(API_COPILOT_CACHE)?.event, {
+    kind: 'api', model: 'claude-sonnet-5.5', provider: 'copilot', latencySeconds: 1.8,
+    inputTokens: 22566, outputTokens: 98, cacheReadTokens: 21992, cacheWriteTokens: 0,
+  })
+  // Copilot GPT lines do carry write=; the opaque trailing id= is ignored.
+  assert.deepEqual(parseHermesLogLine(API_COPILOT_WRITE)?.event, {
+    kind: 'api', model: 'gpt-6.1-sol', provider: 'copilot', latencySeconds: 2.6,
+    inputTokens: 15728, outputTokens: 5, cacheReadTokens: 0, cacheWriteTokens: 15725,
+  })
+})
+
+function apiOf(line: string) {
+  const ev = parseHermesLogLine(line)?.event
+  if (!ev || ev.kind !== 'api') throw new Error('not an API line: ' + line)
+  return ev
+}
+
+test('P2: a line without latency has no latencySeconds; ms latencies are converted; local providers are kept', () => {
+  const noLatency = apiOf(API_NO_LATENCY)
+  assert.equal('latencySeconds' in noLatency, false)
+  assert.equal(noLatency.provider, 'copilot')
+  assert.equal(noLatency.cacheReadTokens, 34956)
+  const local = apiOf(API_LOCAL_MS)
+  assert.equal(local.provider, 'ollama')
+  assert.equal(local.latencySeconds, 0.85)
 })
 
 test('ignores lines the watcher does not use', () => {
@@ -428,6 +469,96 @@ test('a profile that was live and then finished is not idle (it stays a normal c
   const s = w.getActiveSessions().find(x => x.id === 'hermes-taxis')!
   assert.equal(s.status, 'completed')
   assert.equal(s.idle, undefined)
+})
+
+// ─── P2: provider, latency and prompt-size buckets through the watcher ──────
+
+function apiLine(n: number, o: { provider: string; model: string; inTok: number; out: number; cache?: number; write?: number; latency?: string }): string {
+  const parts = [`in=${o.inTok}`, `out=${o.out}`, `total=${o.inTok + o.out}`]
+  if (o.latency) parts.push(`latency=${o.latency}`)
+  if (o.cache) parts.push(`cache=${o.cache}/${o.inTok} (${Math.round((100 * o.cache) / o.inTok)}%)`)
+  if (o.write) parts.push(`write=${o.write}`)
+  return `2026-11-23 12:06:${String(10 + (n % 50)).padStart(2, '0')},000 INFO [20261123_103037_d0ddaef5] agent.conversation_loop: API call #${n}: model=${o.model} provider=${o.provider} ${parts.join(' ')} id=<redacted>`
+}
+
+type Counts = { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWrite5mTokens: number; cacheWrite1hTokens: number }
+type Spend = Counts & {
+  provider?: string; model?: string; calls?: number; timedCalls?: number; latencySeconds?: number
+  byBucket?: Record<string, Counts>
+}
+
+/** Feed API lines to a fresh watcher and return the spend of the last context_update. */
+function lastSpend(lines: string[], profile = 'sophia'): Spend {
+  const { profilesRoot, logFile } = fixture(profile, '')
+  const c = collector()
+  let clock = 0
+  const w = new HermesLogWatcher({ profilesRoot, emit: c.emit, lifecycle: c.lifecycleFn, now: () => clock, titleFor: () => 'Costs', transcriptFor: false, recentSessionsFor: () => [] })
+  w.poll()
+  fs.appendFileSync(logFile, lines.join('\n') + '\n')
+  clock += 1000
+  w.poll()
+  const ctx = c.events.filter(e => e.event.type === 'context_update')
+  assert.equal(ctx.length, lines.length, 'one context_update per API line')
+  return (ctx[ctx.length - 1].event.payload as { spend: Spend }).spend
+}
+
+test('P2: Hermes context_update carries provider, calls and latency (Copilot, with a call without latency)', () => {
+  const spend = lastSpend([
+    apiLine(1, { provider: 'copilot', model: 'claude-sonnet-5.5', inTok: 20344, out: 130, latency: '2.3s' }),
+    apiLine(2, { provider: 'copilot', model: 'claude-sonnet-5.5', inTok: 22566, out: 98, cache: 21992, latency: '1.8s' }),
+    apiLine(3, { provider: 'copilot', model: 'gemini-3.8-flash', inTok: 39905, out: 229, cache: 34956 }),
+  ])
+  assert.equal(spend.provider, 'copilot')
+  assert.equal(spend.model, 'gemini-3.8-flash')
+  assert.equal(spend.calls, 3)
+  assert.equal(spend.timedCalls, 2)
+  assert.ok(Math.abs((spend.latencySeconds ?? 0) - 4.1) < 1e-9)
+  assert.equal(spend.cacheReadTokens, 21992 + 34956)
+  assert.equal(spend.inputTokens, 20344 + (22566 - 21992) + (39905 - 34956))
+})
+
+test('P2: prompt-size buckets follow the whole prompt (cache included) per request', () => {
+  const p = 'claude-subscription-directsdk-experimental'
+  const spend = lastSpend([
+    apiLine(1, { provider: p, model: 'claude-haiku-5-5', inTok: 99_000, out: 10, cache: 90_000, write: 4_000 }),
+    apiLine(2, { provider: p, model: 'claude-haiku-5-5', inTok: 249_062, out: 1999, cache: 245_280, write: 3_780, latency: '15.8s' }),
+    apiLine(3, { provider: p, model: 'claude-haiku-5-5', inTok: 300_000, out: 5 }),
+  ])
+  assert.equal(spend.provider, p)
+  assert.deepEqual(Object.keys(spend.byBucket ?? {}).sort(), ['gt272000', 'le100000', 'le272000'])
+  assert.equal(spend.byBucket!.le100000.inputTokens, 99_000 - 90_000 - 4_000)
+  assert.equal(spend.byBucket!.le272000.cacheReadTokens, 245_280)
+  assert.equal(spend.byBucket!.le272000.cacheWrite5mTokens, 3_780)
+  assert.equal(spend.byBucket!.gt272000.inputTokens, 300_000)
+})
+
+test('P2: property: the byBucket totals always equal the flat totals (deterministic pseudo-random Hermes lines)', () => {
+  let seed = 20261125
+  const rnd = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 2 ** 32 }
+  const providers = ['copilot', 'claude-subscription-directsdk-experimental', 'ollama', 'custom']
+  for (let run = 0; run < 25; run++) {
+    const n = 1 + Math.floor(rnd() * 12)
+    const lines: string[] = []
+    for (let i = 1; i <= n; i++) {
+      const inTok = 1 + Math.floor(rnd() * 420_000)
+      const cache = rnd() < 0.5 ? Math.floor(rnd() * inTok) : 0
+      const write = rnd() < 0.3 ? Math.floor(rnd() * (inTok - cache)) : 0
+      lines.push(apiLine(i, {
+        provider: providers[Math.floor(rnd() * providers.length)], model: 'claude-sonnet-5.5',
+        inTok, out: Math.floor(rnd() * 5000), cache, write, latency: rnd() < 0.8 ? `${(rnd() * 20).toFixed(1)}s` : undefined,
+      }))
+    }
+    const s = lastSpend(lines, `p${run}`)
+    const sum: Counts = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWrite5mTokens: 0, cacheWrite1hTokens: 0 }
+    for (const b of Object.values(s.byBucket ?? {})) {
+      for (const k of Object.keys(sum) as Array<keyof Counts>) sum[k] += b[k]
+    }
+    assert.deepEqual(sum, {
+      inputTokens: s.inputTokens, outputTokens: s.outputTokens, cacheReadTokens: s.cacheReadTokens,
+      cacheWrite5mTokens: s.cacheWrite5mTokens, cacheWrite1hTokens: s.cacheWrite1hTokens,
+    }, `run ${run}`)
+    assert.equal(s.calls, n)
+  }
 })
 
 test('idle window 0 keeps to live activity only', () => {

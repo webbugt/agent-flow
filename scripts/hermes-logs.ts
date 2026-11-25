@@ -36,7 +36,8 @@
  */
 import * as fs from 'fs'
 import * as path from 'path'
-import type { AgentEvent, SessionInfo } from '../extension/src/protocol'
+import type { AgentEvent, SessionInfo, SpendTotals } from '../extension/src/protocol'
+import { addUsage } from '../extension/src/usage-ledger'
 import { readSessionTranscript, rowsToItems } from './hermes-transcript'
 import type { TranscriptReader } from './hermes-transcript'
 import { isAnonymized, warnUnknownProfiles } from '../web/lib/content-privacy'
@@ -57,6 +58,10 @@ export type HermesLogEvent =
   | {
       kind: 'api'
       model: string
+      /** Hermes `provider=` value (`copilot`, `claude-subscription-directsdk-experimental`, `ollama`, ...) */
+      provider: string
+      /** Latency of this call in seconds; absent when the line has no `latency=` */
+      latencySeconds?: number
       inputTokens: number
       outputTokens: number
       /** Tokens read from the prompt cache (part of `in`) */
@@ -73,9 +78,12 @@ export interface ParsedHermesLine {
 
 const LINE_RE = /^\S+ \S+ \w+ (?:\[([^\]]+)\] )?agent\.(?:tool_executor|conversation_loop): (.*)$/
 const TOOL_RE = /^tool (\S+) (completed|failed) \(([\d.]+)s/
-const API_RE = /^API call #\d+: model=(\S+) provider=\S+ in=(\d+) out=(\d+)\b/
+const API_RE = /^API call #\d+: model=(\S+) provider=(\S+) in=(\d+) out=(\d+)\b/
+const LATENCY_RE = /\blatency=(\d+(?:\.\d+)?)(ms|s)\b/
 const CACHE_RE = /\bcache=(\d+)\/\d+\b/
 const WRITE_RE = /\bwrite=(\d+)\b/
+/** The trailing ` id=<opaque>` field (a response id; may be long and arbitrary) is cut off before the counters are read. */
+const ID_TAIL_RE = / id=\S*$/
 
 /** Parse one agent.log line. Returns null for lines the watcher does not use. */
 export function parseHermesLogLine(line: string): ParsedHermesLine | null {
@@ -94,15 +102,19 @@ export function parseHermesLogLine(line: string): ParsedHermesLine | null {
 
   const api = API_RE.exec(body)
   if (api) {
-    const cache = CACHE_RE.exec(body)
-    const write = WRITE_RE.exec(body)
+    const fields = body.replace(ID_TAIL_RE, '')
+    const cache = CACHE_RE.exec(fields)
+    const write = WRITE_RE.exec(fields)
+    const latency = LATENCY_RE.exec(fields)
     return {
       sid,
       event: {
         kind: 'api',
         model: api[1],
-        inputTokens: Number(api[2]),
-        outputTokens: Number(api[3]),
+        provider: api[2],
+        ...(latency ? { latencySeconds: latency[2] === 'ms' ? Number(latency[1]) / 1000 : Number(latency[1]) } : {}),
+        inputTokens: Number(api[3]),
+        outputTokens: Number(api[4]),
         cacheReadTokens: cache ? Number(cache[1]) : 0,
         cacheWriteTokens: write ? Number(write[1]) : 0,
       },
@@ -354,13 +366,8 @@ interface SessionState {
     /** Platform and sender of the session (its `sessions` row) */
     origin?: { platform?: string; sender?: string }
   }
-  spend: {
-    inputTokens: number
-    outputTokens: number
-    cacheReadTokens: number
-    cacheWrite5mTokens: number
-    cacheWrite1hTokens: number
-  }
+  /** Cumulative usage of the session: flat totals, per-prompt-size buckets, provider, latency (see SpendTotals) */
+  spend: SpendTotals
 }
 
 interface ProfileState {
@@ -667,15 +674,25 @@ export class HermesLogWatcher {
         this.emitFor(p, s, agent => ({ time, type: 'model_detected', payload: { agent, model: ev.model } }))
       }
       const newInput = Math.max(0, ev.inputTokens - ev.cacheReadTokens - ev.cacheWriteTokens)
-      s.spend = {
-        inputTokens: s.spend.inputTokens + newInput,
-        outputTokens: s.spend.outputTokens + ev.outputTokens,
-        cacheReadTokens: s.spend.cacheReadTokens + ev.cacheReadTokens,
-        // Hermes does not say which cache TTL it used; the default 5-minute bucket is assumed.
-        cacheWrite5mTokens: s.spend.cacheWrite5mTokens + ev.cacheWriteTokens,
-        cacheWrite1hTokens: s.spend.cacheWrite1hTokens,
-      }
-      const spend = { ...s.spend, model: ev.model }
+      s.spend = addUsage(
+        s.spend,
+        {
+          inputTokens: newInput,
+          outputTokens: ev.outputTokens,
+          cacheReadTokens: ev.cacheReadTokens,
+          // Hermes does not say which cache TTL it used; the default 5-minute bucket is assumed.
+          cacheWrite5mTokens: ev.cacheWriteTokens,
+          cacheWrite1hTokens: 0,
+        },
+        {
+          model: ev.model,
+          provider: ev.provider,
+          latencySeconds: ev.latencySeconds,
+          // `in=` is the whole prompt (cache read and write included); newInput is clamped at 0, so keep the larger.
+          promptTokens: Math.max(ev.inputTokens, ev.cacheReadTokens + ev.cacheWriteTokens),
+        },
+      )
+      const spend = { ...s.spend, ...(s.spend.byBucket ? { byBucket: { ...s.spend.byBucket } } : {}) }
       const time = this.elapsed(s, t)
       this.emitFor(p, s, agent => ({
         time,
@@ -766,7 +783,7 @@ export class HermesLogWatcher {
       agentName: '',
       pending: [],
       toolSeq: 0,
-      spend: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWrite5mTokens: 0, cacheWrite1hTokens: 0 },
+      spend: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWrite5mTokens: 0, cacheWrite1hTokens: 0, calls: 0, timedCalls: 0, latencySeconds: 0 },
     }
     p.sessions.set(sid, s)
     return s

@@ -1,6 +1,8 @@
 // Agent Visualizer Types — Holographic Edition v2
 // Now with actual information visibility
 
+import type { PromptBucket } from './costs/tiers'
+
 export type AgentState = 'idle' | 'thinking' | 'tool_calling' | 'complete' | 'error' | 'paused' | 'waiting_permission'
 
 // Context window composition — the key insight
@@ -12,14 +14,28 @@ export interface ContextBreakdown {
   subagentResults: number // results from child agents
 }
 
-/** Cumulative billed token counts for one agent (from the transcript's usage) */
-export interface SpendTotals {
+/** Token counts of one kind of usage (the flat part of `SpendTotals`). Mirror of extension/src/protocol.ts. */
+export interface TokenCounts {
   inputTokens: number
   outputTokens: number
   cacheReadTokens: number
   cacheWrite5mTokens: number
   cacheWrite1hTokens: number
+}
+
+/** Cumulative billed token counts for one agent (from the transcript's usage). Mirror of extension/src/protocol.ts. */
+export interface SpendTotals extends TokenCounts {
   model?: string
+  /** Provider id of the latest call (`anthropic`, or the Hermes `provider=` value) */
+  provider?: string
+  /** The same totals split by per-request prompt size; the buckets sum to the flat totals */
+  byBucket?: Partial<Record<PromptBucket, TokenCounts>>
+  /** API calls counted into these totals */
+  calls?: number
+  /** Calls that reported a latency */
+  timedCalls?: number
+  /** Sum of the reported per-call latencies, in seconds */
+  latencySeconds?: number
 }
 
 export interface Agent {

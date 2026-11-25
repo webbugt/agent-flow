@@ -1,4 +1,4 @@
-import type { ContextBreakdown, SpendTotals } from '@/lib/agent-types'
+import type { ContextBreakdown, SpendTotals, TokenCounts } from '@/lib/agent-types'
 import type { ConversationMessage } from './types'
 import { appendConversation, asString, asNumber, MAX_BUBBLES } from './types'
 import type { MutableEventState } from './process-event'
@@ -67,18 +67,49 @@ export function handleMessage(
   })
 }
 
-/** Validate the billed-usage totals sent with a context update. */
-function parseSpend(raw: unknown): SpendTotals | undefined {
+const BUCKET_KEYS = ['le100000', 'le200000', 'le272000', 'gt272000'] as const
+const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
+
+function parseCounts(raw: unknown): TokenCounts | undefined {
   if (!raw || typeof raw !== 'object') return undefined
   const r = raw as Record<string, unknown>
-  const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
   return {
     inputTokens: num(r.inputTokens),
     outputTokens: num(r.outputTokens),
     cacheReadTokens: num(r.cacheReadTokens),
     cacheWrite5mTokens: num(r.cacheWrite5mTokens),
     cacheWrite1hTokens: num(r.cacheWrite1hTokens),
+  }
+}
+
+/**
+ * Validate the billed-usage totals sent with a context update: flat counts, model, and (P2) the
+ * provider, the per-prompt-size buckets and the call/latency counters. Unknown bucket keys are dropped.
+ */
+export function parseSpend(raw: unknown): SpendTotals | undefined {
+  const counts = parseCounts(raw)
+  if (!counts) return undefined
+  const r = raw as Record<string, unknown>
+  let byBucket: SpendTotals['byBucket']
+  if (r.byBucket && typeof r.byBucket === 'object') {
+    const src = r.byBucket as Record<string, unknown>
+    for (const key of BUCKET_KEYS) {
+      const c = parseCounts(src[key])
+      if (c) (byBucket ??= {})[key] = c
+    }
+  }
+  const optNum = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : undefined)
+  const calls = optNum(r.calls)
+  const timedCalls = optNum(r.timedCalls)
+  const latencySeconds = optNum(r.latencySeconds)
+  return {
+    ...counts,
     model: typeof r.model === 'string' ? r.model : undefined,
+    ...(typeof r.provider === 'string' && r.provider ? { provider: r.provider } : {}),
+    ...(byBucket ? { byBucket } : {}),
+    ...(calls !== undefined ? { calls } : {}),
+    ...(timedCalls !== undefined ? { timedCalls } : {}),
+    ...(latencySeconds !== undefined ? { latencySeconds } : {}),
   }
 }
 
