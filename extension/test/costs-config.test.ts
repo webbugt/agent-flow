@@ -8,7 +8,7 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import {
-  CostsConfigLoader, MAX_COSTS_FILE_BYTES, defaultUserConfigPath, describeJsonError, displayPath, expandHome, isInside,
+  CostsConfigLoader, CostsConflictError, MAX_COSTS_FILE_BYTES, MISSING_FINGERPRINT, fileFingerprint, fingerprintBytes, defaultUserConfigPath, describeJsonError, displayPath, expandHome, isInside,
   projectConfigPath, readLayerFile, resolveUserConfigPath, resolveUserWriteTarget, settingsLayer, writeFileAtomic,
 } from '../src/costs-config'
 import type { CostsConfigPayload } from '../src/protocol'
@@ -572,5 +572,97 @@ describe('writeConfig(user) and symlinks (R1 finding 4)', () => {
     assert.equal(fs.lstatSync(projFile()).isSymbolicLink(), false)
     assert.deepEqual(JSON.parse(fs.readFileSync(projFile(), 'utf8')), { pricing: { multiplier: 2 } })
     assert.equal(fs.readFileSync(path.join(path.dirname(projFile()), 'real.json'), 'utf8'), '{"keep":1}', 'the old target is untouched')
+  })
+})
+
+describe('file fingerprints and the base-version check on write (P4 review: the drawer must not wipe or roll back the file)', () => {
+  it('a layer carries the fingerprint of the bytes read; it changes with the content and is stable otherwise', () => {
+    put(userFile(), '{"schemaVersion":1}')
+    const a = layer(mk().snapshot(), 'user')!
+    assert.equal(a.status, 'ok')
+    assert.equal(a.fingerprint, fingerprintBytes(Buffer.from('{"schemaVersion":1}')))
+    assert.equal(layer(mk().snapshot(), 'user')!.fingerprint, a.fingerprint)
+    put(userFile(), '{"schemaVersion":1,"display":{"unit":"tokens"}}')
+    assert.notEqual(layer(mk().snapshot(), 'user')!.fingerprint, a.fingerprint)
+  })
+
+  it('a file that does not parse still reports its fingerprint; a missing file has none (the version is "missing")', () => {
+    put(userFile(), '{ broken')
+    const bad = layer(mk().snapshot(), 'user')!
+    assert.equal(bad.status, 'error')
+    assert.equal(bad.fingerprint, fingerprintBytes(Buffer.from('{ broken')))
+    fs.rmSync(userFile())
+    const gone = layer(mk().snapshot(), 'user')!
+    assert.equal(gone.status, 'missing')
+    assert.equal(gone.fingerprint, undefined)
+    assert.equal(fileFingerprint(userFile()), MISSING_FINGERPRINT)
+  })
+
+  it('fileFingerprint equals the layer fingerprint for the same bytes, and follows a symlink like the reader does', () => {
+    put(userFile(), '{"schemaVersion":1}\n')
+    assert.equal(fileFingerprint(userFile()), layer(mk().snapshot(), 'user')!.fingerprint)
+    const real = path.join(root, 'dotfiles', 'costs.json')
+    put(real, '{"schemaVersion":1,"x":1}')
+    fs.rmSync(userFile()); fs.symlinkSync(real, userFile())
+    assert.equal(fileFingerprint(userFile()), fingerprintBytes(Buffer.from('{"schemaVersion":1,"x":1}')))
+  })
+
+  it('writeConfig with the current fingerprint writes and returns the new one', () => {
+    put(userFile(), '{"schemaVersion":1}')
+    const l = mk()
+    const base = layer(l.snapshot(), 'user')!.fingerprint!
+    const r = l.writeConfig('user', { schemaVersion: 1, display: { unit: 'tokens' } }, base)
+    assert.equal(r.fingerprint, fileFingerprint(userFile()))
+    assert.equal(layer(l.snapshot(), 'user')!.fingerprint, r.fingerprint)
+    // the next save, based on what the first one returned, goes through too
+    l.writeConfig('user', { schemaVersion: 1 }, r.fingerprint)
+  })
+
+  it('CHANGED ON DISK: the file was edited after the page loaded it, so the write is refused and the edit survives', () => {
+    put(userFile(), '{"schemaVersion":1}')
+    const l = mk()
+    const base = layer(l.snapshot(), 'user')!.fingerprint!
+    const edited = '{"schemaVersion":1,"pricing":{"models":[{"match":"x","input":1,"output":2}]}}\n'
+    put(userFile(), edited)
+    assert.throws(() => l.writeConfig('user', { schemaVersion: 1, currency: { display: 'EUR', fx: { EUR: 0.9 } } }, base), (e: unknown) => e instanceof CostsConflictError && /changed since/.test(e.message))
+    assert.equal(fs.readFileSync(userFile(), 'utf8'), edited, 'the hand edit is untouched')
+    assert.deepEqual(fs.readdirSync(path.dirname(userFile())), ['costs.json'], 'no temp file left')
+  })
+
+  it('BROKEN FILE: a base taken from a broken file cannot be used to replace it with a minimal document', () => {
+    put(userFile(), '{ "pricing": { oops')
+    const l = mk()
+    const broken = layer(l.snapshot(), 'user')!
+    assert.equal(broken.status, 'error')
+    // A stale client that kept the previous good fingerprint is refused...
+    assert.throws(() => l.writeConfig('user', { schemaVersion: 1 }, fingerprintBytes(Buffer.from('{"schemaVersion":1}'))), CostsConflictError)
+    // ...and so is one that thinks the file is missing.
+    assert.throws(() => l.writeConfig('user', { schemaVersion: 1 }, MISSING_FINGERPRINT), CostsConflictError)
+    assert.equal(fs.readFileSync(userFile(), 'utf8'), '{ "pricing": { oops')
+  })
+
+  it('MISSING then created: a writer that saw no file refuses once one appears, and writes when it is still absent', () => {
+    const l = mk()
+    assert.equal(layer(l.snapshot(), 'user')!.status, 'missing')
+    put(userFile(), '{"schemaVersion":1,"currency":{"display":"EUR","fx":{"EUR":0.9}}}')
+    assert.throws(() => l.writeConfig('user', { schemaVersion: 1 }, MISSING_FINGERPRINT), CostsConflictError)
+    fs.rmSync(userFile())
+    const r = l.writeConfig('user', { schemaVersion: 1 }, MISSING_FINGERPRINT)
+    assert.equal(r.fingerprint, fileFingerprint(userFile()))
+  })
+
+  it('the project layer is checked the same way', () => {
+    const l = mk()
+    l.writeConfig('project', { pricing: { multiplier: 2 } }, MISSING_FINGERPRINT)
+    const base = layer(l.snapshot(), 'project')!.fingerprint!
+    put(projFile(), '{"pricing":{"multiplier":3}}')
+    assert.throws(() => l.writeConfig('project', { pricing: { multiplier: 4 } }, base), CostsConflictError)
+    assert.equal(fs.readFileSync(projFile(), 'utf8'), '{"pricing":{"multiplier":3}}')
+  })
+
+  it('without a base the old unconditional behaviour is kept for in-process callers', () => {
+    put(userFile(), '{"keep":1}')
+    mk().writeConfig('user', { schemaVersion: 1 })
+    assert.equal(JSON.parse(fs.readFileSync(userFile(), 'utf8')).schemaVersion, 1)
   })
 })

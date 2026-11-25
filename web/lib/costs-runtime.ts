@@ -47,7 +47,10 @@ export function applyCostsPayload(payload: CostsConfigPayload): void {
     resolution = next
     // A new set of errors un-dismisses the banner; the same errors stay dismissed.
     if (next.errors.length === 0) dismissedKey = ''
-    sources = payload.layers.map(l => ({ id: l.id, path: l.path, status: l.status, inUse: l.status === 'ok' || (l.status === 'error' && l.stale === true) }))
+    sources = payload.layers.map(l => ({
+      id: l.id, path: l.path, status: l.status, inUse: l.status === 'ok' || (l.status === 'error' && l.stale === true),
+      ...(l.fingerprint ? { fingerprint: l.fingerprint } : {}), ...(l.error ? { error: l.error } : {}),
+    }))
     setActiveCosts(next.config)
   } catch {
     // resolveCostsLayers does not throw by design; if it ever does, keep what we had.

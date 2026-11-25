@@ -24,7 +24,7 @@
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
-import { randomBytes } from 'crypto'
+import { createHash, randomBytes } from 'crypto'
 import type { CostsConfigLayer, CostsConfigPayload, CostsLayerId } from './protocol'
 import { createLogger } from './logger'
 
@@ -195,10 +195,48 @@ export interface ReadLayerOptions {
   forbiddenKeys?: readonly string[]
 }
 
+/** Fingerprint of a file that does not exist. A writer that read "missing" and finds a file later is in conflict. */
+export const MISSING_FINGERPRINT = 'missing'
+
+/** Fingerprint of file content: a SHA-256 prefix of the bytes. It identifies a version of the file; it is not a secret. */
+export function fingerprintBytes(bytes: Uint8Array): string {
+  return createHash('sha256').update(bytes).digest('hex').slice(0, 24)
+}
+
+/**
+ * Fingerprint of the file as it is on disk right now (symlinks followed, like `readLayerFile`), so a writer can
+ * check that it is replacing the version it read. `missing` when there is no file; `unreadable:<code>` / `oversize:<n>`
+ * when it cannot be read (these never equal a fingerprint the reader reported, so a write over them is refused).
+ */
+export function fileFingerprint(file: string): string {
+  let real: string
+  try { real = fs.realpathSync(file) } catch (e) {
+    const code = errCode(e)
+    if (code === 'ENOENT' || code === 'ENOTDIR') return MISSING_FINGERPRINT
+    return `unreadable:${code ?? 'error'}`
+  }
+  try {
+    const st = fs.statSync(real)
+    if (!st.isFile()) return 'unreadable:not-a-file'
+    if (st.size > MAX_COSTS_FILE_BYTES) return `oversize:${st.size}`
+    return fingerprintBytes(fs.readFileSync(real))
+  } catch (e) {
+    return `unreadable:${errCode(e) ?? 'error'}`
+  }
+}
+
+/** Thrown by `writeConfig` when the file is not the version the caller based its edit on. */
+export class CostsConflictError extends Error {
+  readonly code = 'conflict'
+  constructor(message: string) { super(message); this.name = 'CostsConflictError' }
+}
+
 /** Read and parse one layer file. Never throws; problems come back as `status: 'error'` with a message (no file content). */
 export function readLayerFile(file: string, id: CostsLayerId, opts: ReadLayerOptions): CostsConfigLayer {
   const base = { id, path: displayPath(file, opts.home) }
-  const fail = (error: string): CostsConfigLayer => ({ ...base, status: 'error', error })
+  // Set as soon as the bytes are read, so a file that is read but does not parse still reports its version.
+  let fingerprint: string | undefined
+  const fail = (error: string): CostsConfigLayer => ({ ...base, status: 'error', error, ...(fingerprint ? { fingerprint } : {}) })
 
   let real: string
   try { real = fs.realpathSync(file) } catch (e) {
@@ -223,9 +261,10 @@ export function readLayerFile(file: string, id: CostsLayerId, opts: ReadLayerOpt
       n += r
       if (n > MAX_COSTS_FILE_BYTES) return fail(`file is larger than the limit of ${MAX_COSTS_FILE_BYTES} bytes`)
     }
+    fingerprint = fingerprintBytes(buf.subarray(0, n))
     let text = buf.toString('utf8', 0, n)
     if (text.charCodeAt(0) === 0xfeff) text = text.slice(1)
-    if (text.trim() === '') return { ...base, status: 'ok', raw: {} }
+    if (text.trim() === '') return { ...base, status: 'ok', raw: {}, fingerprint }
     let parsed: unknown
     try { parsed = JSON.parse(text) } catch (e) {
       return fail(`invalid JSON: ${describeJsonError(e, text)}`)
@@ -238,7 +277,7 @@ export function readLayerFile(file: string, id: CostsLayerId, opts: ReadLayerOpt
         warnings.push(`"${k}" is not allowed in a project file and was ignored`)
       }
     }
-    return { ...base, status: 'ok', raw: parsed, ...(warnings.length ? { warnings } : {}) }
+    return { ...base, status: 'ok', raw: parsed, fingerprint, ...(warnings.length ? { warnings } : {}) }
   } catch (e) {
     return fail(`cannot read the file (${errCode(e) ?? 'error'})`)
   } finally {
@@ -521,8 +560,15 @@ export class CostsConfigLoader {
    * validated here (web/lib/costs/validate.ts does that in the UI before it asks). Refuses poisoned keys,
    * oversize documents, `configPath` in a project file, and a project directory that is not inside the workspace.
    * Throws on refusal or I/O failure; the existing file is then untouched.
+   *
+   * `baseFingerprint` is the fingerprint of the file version the document was edited from (`layer.fingerprint`
+   * of the `costs-config` message, or `missing`). When given, the write happens only if the file on disk still
+   * has it; otherwise a `CostsConflictError` is thrown and nothing is written, so an editor that opened a stale
+   * or since-changed file cannot roll back or wipe what is there now. (The check and the rename are not one
+   * atomic step: an edit landing between them can still be overwritten, a window of microseconds.)
+   * Returns the written path and the fingerprint of the new content.
    */
-  writeConfig(layer: 'user' | 'project', doc: unknown): { path: string } {
+  writeConfig(layer: 'user' | 'project', doc: unknown, baseFingerprint?: string): { path: string; fingerprint: string } {
     if (!isPlainObject(doc)) throw new Error('the config must be a JSON object')
     if (hasForbiddenKey(doc)) throw new Error('the config contains a forbidden key')
     const text = JSON.stringify(doc, null, 2) + '\n'
@@ -545,9 +591,15 @@ export class CostsConfigLoader {
       if (!isInside(fs.realpathSync(ws), fs.realpathSync(dir))) throw new Error(`${CONFIG_DIR_NAME} resolves outside the workspace`)
       target = path.join(dir, COSTS_FILE_NAME)
     }
+    if (baseFingerprint !== undefined) {
+      const now = fileFingerprint(target)
+      if (now !== baseFingerprint) {
+        throw new CostsConflictError(`${displayPath(target, this.home())} changed since it was loaded; nothing was written. Reload the settings and apply your edits again.`)
+      }
+    }
     writeFileAtomic(target, text, 0o600)
     this.reload()
-    return { path: target }
+    return { path: target, fingerprint: fingerprintBytes(Buffer.from(text, 'utf8')) }
   }
 
   /** Create the user file with a minimal template when it does not exist yet; returns its path. */

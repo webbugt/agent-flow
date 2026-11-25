@@ -39,6 +39,8 @@ export interface CostsLayer {
   error?: string
   /** Host-side notes, e.g. an ignored key. */
   warnings?: string[]
+  /** Version of the file's bytes as the host read them (also for a file that does not parse); see edit-base.ts. */
+  fingerprint?: string
 }
 
 /** The `costs-config` message body. Mirror of `CostsConfigPayload` in extension/src/protocol.ts. */

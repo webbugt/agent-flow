@@ -25,6 +25,39 @@ export function resolveUnit(cfg: ResolvedConfig, override: OverlayUnit | null): 
   return u === 'auto' ? 'money' : u
 }
 
+/** A unit the person picked with the header toggle, and the config's default unit at that moment. */
+export interface UnitOverride { unit: OverlayUnit; cfgUnit: DisplayUnit }
+
+/**
+ * The toggle's choice, while it still applies. It was made against one default (`display.unit`); when the
+ * config's default changes (the drawer's "Default unit", or an edit of costs.json) the new default wins and the
+ * choice is dropped, so editing the default always has a visible effect. `cfgUnitNow` is null while no config
+ * has been loaded yet (a page that has not received the host's message): the choice is kept until it is known.
+ */
+export function activeUnitOverride(o: UnitOverride | null, cfgUnitNow: DisplayUnit | null): OverlayUnit | null {
+  if (!o) return null
+  if (cfgUnitNow === null) return o.unit
+  return o.cfgUnit === cfgUnitNow ? o.unit : null
+}
+
+const DISPLAY_UNITS: readonly DisplayUnit[] = ['auto', 'money', 'kwh', 'tokens']
+
+/** Parse what the store keeps in localStorage; anything unexpected (including the pre-review plain string) is no override. */
+export function parseUnitOverride(raw: string | null): UnitOverride | null {
+  if (!raw) return null
+  try {
+    const v = JSON.parse(raw) as { unit?: unknown; cfg?: unknown }
+    if (typeof v?.unit === 'string' && (OVERLAY_UNITS as readonly string[]).includes(v.unit) && typeof v.cfg === 'string' && (DISPLAY_UNITS as readonly string[]).includes(v.cfg)) {
+      return { unit: v.unit as OverlayUnit, cfgUnit: v.cfg as DisplayUnit }
+    }
+  } catch { /* not JSON */ }
+  return null
+}
+
+export function serializeUnitOverride(o: UnitOverride): string {
+  return JSON.stringify({ unit: o.unit, cfg: o.cfgUnit })
+}
+
 /** The header toggle cycles money -> kWh -> tokens -> money. */
 export function nextUnit(u: OverlayUnit): OverlayUnit {
   return OVERLAY_UNITS[(OVERLAY_UNITS.indexOf(u) + 1) % OVERLAY_UNITS.length]
@@ -159,10 +192,17 @@ export function buildCostSummary(items: readonly SummaryItem[], unit: OverlayUni
   const lines: SummaryLine[] = []
 
   const money: Record<BillingKind, number> = { billed: 0, 'list-equivalent': 0, estimated: 0, unpriced: 0 }
+  // Kinds that have at least one counted result. A line is printed for every kind that was summed, whatever
+  // the agent's own flavor is: a billed agent that also holds an estimated result still shows that money.
+  const summed = new Set<BillingKind>()
   items.forEach((it, i) => {
     if (flavors[i] === 'local') return
     const a = amountsByKind(it.cost)
-    for (const k of KIND_ORDER) money[k] += a[k] ?? 0
+    for (const k of KIND_ORDER) {
+      if (a[k] === undefined) continue
+      money[k] += a[k] as number
+      summed.add(k)
+    }
   })
 
   if (unit === 'tokens') {
@@ -171,11 +211,12 @@ export function buildCostSummary(items: readonly SummaryItem[], unit: OverlayUni
     if (count('local') > 0) lines.push({ flavor: 'local', text: KWH_PENDING, label: FLAVOR_WORD.local })
     else notes.push('kWh applies to local models only; none in this session')
   } else {
-    // list-equivalent agents that are hidden contribute nothing; billed/estimated/list-equivalent each get a line when present
+    // Hidden subscription results are excluded from the sums. billed / list-equivalent / estimated each get a line when
+    // an agent has that flavor OR a result of that kind was summed (so no summed money goes unprinted).
     const present: Record<BillingKind, boolean> = {
-      billed: items.some((_, i) => flavors[i] === 'billed'),
-      'list-equivalent': items.some((_, i) => flavors[i] === 'list-equivalent'),
-      estimated: items.some((_, i) => flavors[i] === 'estimated'),
+      billed: summed.has('billed') || items.some((_, i) => flavors[i] === 'billed'),
+      'list-equivalent': summed.has('list-equivalent') || items.some((_, i) => flavors[i] === 'list-equivalent'),
+      estimated: summed.has('estimated') || items.some((_, i) => flavors[i] === 'estimated'),
       unpriced: false,
     }
     if (present.billed) lines.push({ flavor: 'billed', text: moneyText(cfg, money.billed, false), label: FLAVOR_WORD.billed })
@@ -251,7 +292,13 @@ export function buildTopBarCost(items: readonly SummaryItem[], unit: OverlayUnit
 
 // ── config sources ──────────────────────────────────────────────────────────
 
-export interface SourceInfo { id: 'settings' | 'user' | 'project'; path: string | null; status: 'ok' | 'missing' | 'error'; inUse: boolean }
+export interface SourceInfo {
+  id: 'settings' | 'user' | 'project'; path: string | null; status: 'ok' | 'missing' | 'error'; inUse: boolean
+  /** Version of the file's bytes as the host read them (see lib/costs/edit-base.ts). */
+  fingerprint?: string
+  /** Why the host could not use the file (status `error`). */
+  error?: string
+}
 
 /** Which config files the prices come from, and whether a project file overrides the user's. */
 export function describeSources(sources: readonly SourceInfo[]): { text: string; projectOverrides: boolean; files: string[] } {

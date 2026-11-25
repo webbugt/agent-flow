@@ -5,20 +5,21 @@ import type { AddressInfo } from 'net'
 import { createRequestListener } from './router'
 import { isCostsPath, isSameSiteRequest, MAX_BODY } from './costs-route'
 
-interface Reply { status: number; body: string; json: { ok?: boolean; error?: string; path?: string } | null }
-interface Write { layer: string; doc: unknown }
+interface Reply { status: number; body: string; json: { ok?: boolean; error?: string; path?: string; conflict?: boolean; fingerprint?: string } | null }
+interface Write { layer: string; doc: unknown; base: string }
 
 /** The real listener with a recording writer; `fail` makes the writer throw. */
-async function post(body: string | Buffer, headers: Record<string, string> = {}, opts: { method?: string; path?: string; writer?: 'none' | 'ok' | 'fail' } = {}): Promise<Reply & { writes: Write[] }> {
+async function post(body: string | Buffer, headers: Record<string, string> = {}, opts: { method?: string; path?: string; writer?: 'none' | 'ok' | 'fail' | 'conflict' } = {}): Promise<Reply & { writes: Write[] }> {
   const writes: Write[] = []
   const writer = opts.writer ?? 'ok'
   const server = http.createServer(createRequestListener({
     handleSSE: (_req, res) => { res.writeHead(200); res.end() },
     costs: writer === 'none' ? undefined : {
-      writeConfig: (layer, doc) => {
+      writeConfig: (layer, doc, base) => {
         if (writer === 'fail') throw new Error('refused: bad shape')
-        writes.push({ layer, doc })
-        return { path: '/home/u/.agent-flow/costs.json' }
+        if (writer === 'conflict') throw Object.assign(new Error('costs.json changed since it was loaded'), { code: 'conflict' })
+        writes.push({ layer, doc, base })
+        return { path: '/home/u/.agent-flow/costs.json', fingerprint: 'newfp' }
       },
     },
   }))
@@ -43,7 +44,7 @@ async function post(body: string | Buffer, headers: Record<string, string> = {},
   }
 }
 
-const OK = JSON.stringify({ layer: 'user', doc: { schemaVersion: 1, currency: { display: 'EUR', fx: { EUR: 0.92 } } } })
+const OK = JSON.stringify({ layer: 'user', base: 'abc123', doc: { schemaVersion: 1, currency: { display: 'EUR', fx: { EUR: 0.92 } } } })
 
 test('isCostsPath matches /costs-config with or without a query, nothing else', () => {
   assert.equal(isCostsPath('/costs-config'), true)
@@ -54,15 +55,16 @@ test('isCostsPath matches /costs-config with or without a query, nothing else', 
 test('a same-origin JSON POST reaches the writer with the layer and the document', async () => {
   const r = await post(OK)
   assert.equal(r.status, 200)
-  assert.deepEqual(r.json, { ok: true, path: '/home/u/.agent-flow/costs.json' })
+  assert.deepEqual(r.json, { ok: true, path: '/home/u/.agent-flow/costs.json', fingerprint: 'newfp' })
   assert.equal(r.writes.length, 1)
   assert.equal(r.writes[0].layer, 'user')
+  assert.equal(r.writes[0].base, 'abc123')
   assert.deepEqual(r.writes[0].doc, { schemaVersion: 1, currency: { display: 'EUR', fx: { EUR: 0.92 } } })
 })
 
 test('the project layer is accepted too; any other layer is refused', async () => {
-  assert.equal((await post(JSON.stringify({ layer: 'project', doc: {} }))).status, 200)
-  const r = await post(JSON.stringify({ layer: 'settings', doc: {} }))
+  assert.equal((await post(JSON.stringify({ layer: 'project', base: 'missing', doc: {} }))).status, 200)
+  const r = await post(JSON.stringify({ layer: 'settings', base: 'x', doc: {} }))
   assert.equal(r.status, 400)
   assert.equal(r.writes.length, 0)
 })
@@ -83,7 +85,7 @@ test('a cross-site request is refused before anything is read or written', async
 })
 
 test('a same-origin Origin header and Sec-Fetch-Site: same-origin are accepted', async () => {
-  const server = http.createServer(createRequestListener({ handleSSE: () => {}, costs: { writeConfig: () => ({ path: 'p' }) } }))
+  const server = http.createServer(createRequestListener({ handleSSE: () => {}, costs: { writeConfig: () => ({ path: 'p', fingerprint: 'f' }) } }))
   await new Promise<void>(r => server.listen(0, '127.0.0.1', r))
   const { port } = server.address() as AddressInfo
   try {
@@ -123,7 +125,7 @@ test('invalid or oversized bodies are 400 / 413 and never reach the writer', asy
   assert.equal((await post('[1,2]')).status, 400)
   assert.equal((await post('"str"')).status, 400)
   assert.equal((await post(JSON.stringify({ doc: {} }))).status, 400)
-  const big = await post(JSON.stringify({ layer: 'user', doc: { pad: 'x'.repeat(MAX_BODY) } }))
+  const big = await post(JSON.stringify({ layer: 'user', base: 'x', doc: { pad: 'x'.repeat(MAX_BODY) } }))
   assert.equal(big.status, 413)
   assert.equal(big.writes.length, 0)
 })
@@ -139,7 +141,7 @@ test('without a writer the route answers 503', async () => {
 })
 
 test('responses are never cached', async () => {
-  const server = http.createServer(createRequestListener({ handleSSE: () => {}, costs: { writeConfig: () => ({ path: 'p' }) } }))
+  const server = http.createServer(createRequestListener({ handleSSE: () => {}, costs: { writeConfig: () => ({ path: 'p', fingerprint: 'f' }) } }))
   await new Promise<void>(r => server.listen(0, '127.0.0.1', r))
   const { port } = server.address() as AddressInfo
   try {
@@ -150,4 +152,26 @@ test('responses are never cached', async () => {
     })
     assert.equal(cc, 'no-store')
   } finally { server.close() }
+})
+
+test('a save without the base fingerprint is 400 and never reaches the writer (it could replace a newer file unseen)', async () => {
+  for (const body of [
+    JSON.stringify({ layer: 'user', doc: {} }),
+    JSON.stringify({ layer: 'user', base: '', doc: {} }),
+    JSON.stringify({ layer: 'user', base: 7, doc: {} }),
+    JSON.stringify({ layer: 'user', base: 'x'.repeat(200), doc: {} }),
+  ]) {
+    const r = await post(body)
+    assert.equal(r.status, 400, body.slice(0, 60))
+    assert.match(String(r.json?.error), /base/)
+    assert.equal(r.writes.length, 0)
+  }
+})
+
+test('a file that changed since it was loaded is 409 with conflict: true', async () => {
+  const r = await post(OK, {}, { writer: 'conflict' })
+  assert.equal(r.status, 409)
+  assert.equal(r.json?.ok, false)
+  assert.equal(r.json?.conflict, true)
+  assert.match(String(r.json?.error), /changed since/)
 })

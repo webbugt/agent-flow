@@ -6,7 +6,7 @@ import { startClaudeRuntime } from './claude-runtime'
 import { startCodexRuntime } from './codex-runtime'
 import { promptHookSetupIfNeeded, configureClaudeHooks, isDisable1MContext } from './hooks-config'
 import { createLogger } from './logger'
-import { CostsConfigLoader, type CostsScalars } from './costs-config'
+import { CostsConfigLoader, CostsConflictError, type CostsScalars } from './costs-config'
 import type { AgentRuntime, AgentRuntimeMode } from './session-runtime'
 
 const log = createLogger('Extension')
@@ -266,15 +266,17 @@ function wirePanel(panel: VisualizerPanel): void {
 
       case 'write-costs-config': {
         const requestId = typeof message.requestId === 'string' ? message.requestId.slice(0, 64) : ''
-        const reply = (ok: boolean, error?: string) =>
-          panel.postMessage({ type: 'costs-config-write-result', requestId, ok, ...(error ? { error } : {}) })
-        if (!costsLoader) { reply(false, 'costs config is not available'); break }
-        if (message.layer !== 'user' && message.layer !== 'project') { reply(false, 'unknown layer'); break }
+        const reply = (ok: boolean, extra: { error?: string; conflict?: boolean; fingerprint?: string } = {}) =>
+          panel.postMessage({ type: 'costs-config-write-result', requestId, ok, ...extra })
+        if (!costsLoader) { reply(false, { error: 'costs config is not available' }); break }
+        if (message.layer !== 'user' && message.layer !== 'project') { reply(false, { error: 'unknown layer' }); break }
+        // The page must say which version of the file it edited, so a write can never replace a newer one unseen.
+        if (typeof message.base !== 'string' || message.base === '' || message.base.length > 128) { reply(false, { error: 'the save did not say which version of the file it was based on' }); break }
         try {
-          costsLoader.writeConfig(message.layer, message.doc)
-          reply(true)
+          const written = costsLoader.writeConfig(message.layer, message.doc, message.base)
+          reply(true, { fingerprint: written.fingerprint })
         } catch (err) {
-          reply(false, err instanceof Error ? err.message : 'write failed')
+          reply(false, { error: err instanceof Error ? err.message : 'write failed', ...(err instanceof CostsConflictError ? { conflict: true } : {}) })
         }
         break
       }

@@ -55,7 +55,7 @@ export type ExtensionToWebviewMessage =
   | { type: 'session-ended'; sessionId: string }
   | { type: 'session-updated'; sessionId: string; label: string }
   | { type: 'costs-config'; costs: CostsConfigPayload }
-  | { type: 'costs-config-write-result'; requestId: string; ok: boolean; error?: string }
+  | { type: 'costs-config-write-result'; requestId: string; ok: boolean; error?: string; /** The file changed since the drawer loaded it. */ conflict?: boolean; /** Version of the file just written. */ fingerprint?: string }
 
 // ─── Costs config (the host reads files, the webview validates; see web/lib/costs/layers.ts) ───
 
@@ -76,6 +76,12 @@ export interface CostsConfigLayer {
   error?: string
   /** Host-side notes, e.g. an ignored key. */
   warnings?: string[]
+  /**
+   * Version of the file's bytes (SHA-256 prefix) when they were read, also for a file that does not parse.
+   * Absent for the settings layer, a missing file (the version is then `missing`) and a file that could not be read.
+   * The settings drawer sends it back with a save; the host refuses the write if the file no longer has it.
+   */
+  fingerprint?: string
 }
 
 /** The `costs-config` message body. Mirror of `CostsConfigPayload` in web/lib/costs/layers.ts. */
@@ -104,7 +110,7 @@ export type WebviewToExtensionMessage =
   | { type: 'open-file'; filePath: string; line?: number }
   | { type: 'open-costs-config' }
   /** Settings drawer save: the host validates the shape, writes the file atomically (0600) and reloads. */
-  | { type: 'write-costs-config'; requestId: string; layer: 'user' | 'project'; doc: unknown }
+  | { type: 'write-costs-config'; requestId: string; layer: 'user' | 'project'; doc: unknown; /** Fingerprint of the file version `doc` was edited from; required. */ base: string }
   | { type: 'log'; level: 'info' | 'warn' | 'error'; message: string }
 
 // ─── Transcript Types (from Claude Code JSONL files) ─────────────────────────

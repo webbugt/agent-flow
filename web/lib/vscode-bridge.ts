@@ -7,7 +7,7 @@
  */
 
 export type { AgentEvent, SessionInfo, ConnectionStatus } from './bridge-types'
-import type { AgentEvent, SessionInfo, ConnectionStatus } from './bridge-types'
+import type { AgentEvent, SessionInfo, ConnectionStatus, CostsSaveResult } from './bridge-types'
 import type { CostsConfigPayload } from './costs/layers'
 
 type InitCallback = () => void
@@ -31,7 +31,7 @@ class VSCodeBridge {
   /** Latest `costs-config` message; a late subscriber gets it at once. */
   private lastCosts: CostsConfigPayload | null = null
   private writeSeq = 0
-  private pendingWrites = new Map<string, (r: { ok: true } | { ok: false; error: string }) => void>()
+  private pendingWrites = new Map<string, (r: CostsSaveResult) => void>()
 
   constructor() {
     if (typeof window !== 'undefined') {
@@ -95,7 +95,9 @@ class VSCodeBridge {
         const pending = this.pendingWrites.get(String(data.requestId))
         if (pending) {
           this.pendingWrites.delete(String(data.requestId))
-          pending(data.ok === true ? { ok: true } : { ok: false, error: typeof data.error === 'string' ? data.error : 'write failed' })
+          pending(data.ok === true
+            ? { ok: true, ...(typeof data.fingerprint === 'string' ? { fingerprint: data.fingerprint } : {}) }
+            : { ok: false, error: typeof data.error === 'string' ? data.error : 'write failed', ...(data.conflict === true ? { conflict: true } : {}) })
         }
         break
       }
@@ -193,14 +195,14 @@ class VSCodeBridge {
    * Save the costs document through the extension host (the settings drawer). Resolves when the host answers;
    * the new config then arrives as a normal `costs-config` message. Rejects nothing: failures come back as `{ ok: false, error }`.
    */
-  writeCostsConfig(layer: 'user' | 'project', doc: unknown, timeoutMs = 10_000): Promise<{ ok: true } | { ok: false; error: string }> {
+  writeCostsConfig(layer: 'user' | 'project', doc: unknown, base: string, timeoutMs = 10_000): Promise<CostsSaveResult> {
     return new Promise(resolve => {
       const requestId = `w${++this.writeSeq}-${Date.now().toString(36)}`
       const timer = setTimeout(() => {
         if (this.pendingWrites.delete(requestId)) resolve({ ok: false, error: 'the extension did not answer' })
       }, timeoutMs)
       this.pendingWrites.set(requestId, r => { clearTimeout(timer); resolve(r) })
-      this.postToExtension({ type: 'write-costs-config', requestId, layer, doc })
+      this.postToExtension({ type: 'write-costs-config', requestId, layer, doc, base })
     })
   }
 

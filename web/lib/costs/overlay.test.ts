@@ -4,7 +4,7 @@ import { priceAgent } from './agent-cost'
 import type { AgentSpendInput } from './agent-cost'
 import { defaultConfig, validateConfig } from './validate'
 import {
-  BADGE_LABEL, blendedPerMillion, buildAgentTooltip, buildCostSummary, buildPillLabel, buildToolBreakdown, buildTopBarCost,
+  BADGE_LABEL, activeUnitOverride, parseUnitOverride, serializeUnitOverride, blendedPerMillion, buildAgentTooltip, buildCostSummary, buildPillLabel, buildToolBreakdown, buildTopBarCost,
   costToggleLabel, describeSources, findCostPillAt, flavorOf, nextUnit, pillGeometry, placeSummaryPanel, resolveUnit,
   tooltipPlainText, NARROW_CANVAS_PX,
 } from './overlay'
@@ -220,4 +220,49 @@ test('config sources: a project file in use is reported as an override of the us
     { id: 'project', path: null, status: 'missing', inUse: false },
   ])
   assert.equal(userOnly.projectOverrides, false)
+})
+
+// ── P4 review: minority kinds in the summary, and the toggle vs display.unit ──
+
+test('SUMMARY: a minority kind inside a billed agent is summed AND printed (estimated money under a billed flavor)', () => {
+  const billed = priceAgent(cfg, API)
+  const est = priceAgent(cfg, NO_USAGE)
+  // one agent whose results mix kinds: billed usage plus an estimated remainder; its flavor is the first result's (billed)
+  const mixed = { ...billed, amount: billed.amount + est.amount, results: [...billed.results, ...est.results] }
+  assert.equal(flavorOf(mixed), 'billed')
+  const s = buildCostSummary([{ name: 'mixed', cost: mixed, tokens: 90_000 }], 'money', cfg)
+  assert.deepEqual(s.lines.map(l => l.flavor), ['billed', 'estimated'])
+  assert.ok(s.lines[1].text.startsWith('~'), 'the estimated line is marked as an estimate')
+  const printed = s.lines.map(l => l.text).join(' ')
+  assert.match(printed, /\$/)
+  // the estimate really is the second agent's money, nothing is lost or doubled
+  const alone = buildCostSummary([{ name: 'est', cost: est, tokens: 50_000 }], 'money', cfg)
+  assert.equal(s.lines[1].text, alone.lines[0].text)
+  assert.equal(buildTopBarCost([{ name: 'mixed', cost: mixed, tokens: 90_000 }], 'money', cfg), s.lines.map(l => l.text).join(' · '))
+})
+
+test('SUMMARY: every kind that was summed has a line, for any mix of agents', () => {
+  const items = [
+    { name: 'a', cost: priceAgent(cfg, API), tokens: 40_000 },
+    { name: 'b', cost: priceAgent(cfg, SUB), tokens: 40_000 },
+    { name: 'c', cost: priceAgent(cfg, COPILOT), tokens: 40_000 },
+  ]
+  const s = buildCostSummary(items, 'money', cfg)
+  const kinds = new Set(items.flatMap(i => i.cost.results.filter(r => !r.hidden && r.kind !== 'unpriced').map(r => r.kind)))
+  for (const k of kinds) assert.ok(s.lines.some(l => l.flavor === k), `no line for ${k}`)
+})
+
+test('UNIT OVERRIDE: the toggle applies only while the default it was chosen against is unchanged', () => {
+  const o = { unit: 'tokens' as const, cfgUnit: 'auto' as const }
+  assert.equal(activeUnitOverride(null, 'auto'), null)
+  assert.equal(activeUnitOverride(o, 'auto'), 'tokens', 'same default: the toggle wins')
+  assert.equal(activeUnitOverride(o, 'kwh'), null, 'the default changed: the new default wins')
+  assert.equal(activeUnitOverride(o, 'money'), null, 'auto -> money is a change too')
+  assert.equal(activeUnitOverride(o, null), 'tokens', 'no config loaded yet: keep the choice until the default is known')
+})
+
+test('UNIT OVERRIDE: storage format round-trips; the pre-review plain string and junk are no override', () => {
+  const o = { unit: 'kwh' as const, cfgUnit: 'tokens' as const }
+  assert.deepEqual(parseUnitOverride(serializeUnitOverride(o)), o)
+  for (const bad of [null, '', 'tokens', '{', '{"unit":"tokens"}', '{"unit":"x","cfg":"auto"}', '{"unit":"tokens","cfg":"y"}', '[]', '"tokens"']) assert.equal(parseUnitOverride(bad), null, String(bad))
 })

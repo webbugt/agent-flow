@@ -47,7 +47,7 @@ async function main() {
 
     // Settings drawer save (dev: the page is on another local port, so its origin is checked against the dev pattern)
     if (isCostsPath(req.url)) {
-      void handleCostsWrite(req, res, { writeConfig: (layer, doc) => relay.writeCostsConfig(layer, doc) }, o => DEV_WEB_ORIGIN_PATTERN.test(o)).catch(() => {
+      void handleCostsWrite(req, res, { writeConfig: (layer, doc, base) => relay.writeCostsConfig(layer, doc, base) }, o => DEV_WEB_ORIGIN_PATTERN.test(o)).catch(() => {
         if (!res.headersSent) res.writeHead(500, { 'Content-Type': 'application/json' })
         res.end(JSON.stringify({ ok: false, error: 'costs config write failed' }))
       })

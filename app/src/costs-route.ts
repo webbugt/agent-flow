@@ -16,7 +16,11 @@ export const COSTS_PATH = '/costs-config'
 export const MAX_BODY = 256 * 1024 + 4096
 
 export interface CostsWriter {
-  writeConfig(layer: 'user' | 'project', doc: unknown): { path: string }
+  /**
+   * `base` is the fingerprint of the file version `doc` was edited from; the writer refuses (an error with
+   * `code: 'conflict'`) when the file no longer has it. Returns the fingerprint of the new content.
+   */
+  writeConfig(layer: 'user' | 'project', doc: unknown, base: string): { path: string; fingerprint?: string }
 }
 
 export function isCostsPath(url: string | undefined): boolean {
@@ -72,13 +76,17 @@ export async function handleCostsWrite(req: http.IncomingMessage, res: http.Serv
   let body: unknown
   try { body = JSON.parse(text) } catch { return json(res, 400, { ok: false, error: 'request body is not valid JSON' }) }
   if (typeof body !== 'object' || body === null || Array.isArray(body)) return json(res, 400, { ok: false, error: 'request body must be an object' })
-  const { layer, doc } = body as { layer?: unknown; doc?: unknown }
+  const { layer, doc, base } = body as { layer?: unknown; doc?: unknown; base?: unknown }
   if (layer !== 'user' && layer !== 'project') return json(res, 400, { ok: false, error: 'layer must be "user" or "project"' })
+  // Required: a save that does not say which version of the file it edited could replace a newer one unseen.
+  if (typeof base !== 'string' || base === '' || base.length > 128) return json(res, 400, { ok: false, error: 'base (the fingerprint of the file version that was edited) is required' })
 
   try {
-    const { path } = writer.writeConfig(layer, doc)
-    return json(res, 200, { ok: true, path })
+    const { path, fingerprint } = writer.writeConfig(layer, doc, base)
+    return json(res, 200, { ok: true, path, ...(fingerprint ? { fingerprint } : {}) })
   } catch (err) {
-    return json(res, 400, { ok: false, error: err instanceof Error ? err.message : 'write failed' })
+    const message = err instanceof Error ? err.message : 'write failed'
+    if ((err as { code?: unknown } | null)?.code === 'conflict') return json(res, 409, { ok: false, conflict: true, error: message })
+    return json(res, 400, { ok: false, error: message })
   }
 }
