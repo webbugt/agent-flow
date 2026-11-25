@@ -39,7 +39,7 @@ Usage: pnpm shot --task-id <id> [options]
                         scenario's first session (Claude: "Fixture F-A", else the first Hermes title).
                         Without this the page shows whichever session's events arrived last = not stable
   --limits <L-n>        seed ~/.agent-flow/limits/claude.json from fixture L-1..L-4
-  --config <C-name>     seed ~/.agent-flow/costs.json from C-default|C-eur|C-invalid|C-custom-price|C-local-energy
+  --config <C-name>     seed ~/.agent-flow/costs.json from C-default|C-eur|C-invalid|C-custom-price|C-project-override|C-local-energy
   --out <dir>           base folder (default docs/screenshots)
   --start-index <n>     first NN in file names (default 1)
   --no-build            do not rebuild app/dist when it exists
@@ -277,11 +277,13 @@ async function settleAfterSessionChange(page: Page): Promise<void> {
 
 /** Scratch HOME of the run in progress; the `config` step writes its costs.json. */
 let scratchHome: string | undefined
+/** Scratch workspace (the app's cwd); the `config` step writes C-project* fixtures under it. */
+let scratchWorkspace: string | undefined
 
 async function runStep(page: Page, step: Step, viewport: Viewport): Promise<void> {
   if ('config' in step) {
     if (!scratchHome) throw new Error('config step: no scratch HOME')
-    rewriteConfigFixture(scratchHome, step.config)
+    rewriteConfigFixture(scratchHome, step.config, scratchWorkspace)
   } else if ('key' in step || 'press' in step) {
     await pressKey(page, ('key' in step ? step.key : (step as { press: string }).press))
   } else if ('wait' in step) {
@@ -426,6 +428,7 @@ export async function run(argv: string[]): Promise<number> {
   fs.mkdirSync(home, { recursive: true })
   const m: Materialized = materializeFixtures({ home, workspace, scenario: opts.scenario, limits: opts.limits, config: opts.config })
   scratchHome = home
+  scratchWorkspace = workspace
   log(`scratch HOME ${home}`)
 
   const outDir = path.resolve(REPO, opts.outDir, opts.taskId)

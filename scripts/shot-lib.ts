@@ -275,6 +275,7 @@ export const BUILTIN_PLANS: Record<string, ShotPlan> = {
       { name: 'tooltip-subscription', viewports: ['desktop'], steps: [{ click: 'text:Sub Demo' }, { wait: 500 }, { key: '$' }, { hover: 'pill:first' }, { wait: 300 }] },
       { name: 'tooltip-copilot', viewports: ['desktop'], steps: [{ click: 'text:Copilot Demo' }, { wait: 500 }, { key: '$' }, { hover: 'pill:first' }, { wait: 300 }] },
       { name: 'tooltip-tap', viewports: ['phone'], steps: [{ click: 'text:Sub Demo' }, { wait: 500 }, { key: '$' }, { tap: 'pill:first' }, { wait: 300 }] },
+      { name: 'tooltip-tap-copilot', viewports: ['phone'], steps: [{ click: 'text:Copilot Demo' }, { wait: 500 }, { key: '$' }, { tap: 'pill:first' }, { wait: 300 }] },
       { name: 'settings-drawer', viewports: ['desktop', 'phone'], steps: [{ key: '$' }, { config: 'C-custom-price' }, { wait: 7000 }, { click: '[data-testid="cost-settings-open"]' }, { waitFor: '[data-testid="costs-settings-drawer"]' }, { wait: 300 }] },
       {
         name: 'settings-drawer-error', viewports: ['desktop', 'phone'], steps: [
@@ -295,6 +296,20 @@ export const BUILTIN_PLANS: Record<string, ShotPlan> = {
       // real toggle until it reads the wanted unit (the click path is the thing being shown), whatever the previous shot left.
       { name: 'unit-tokens', viewports: ['desktop', 'phone'], steps: [{ key: '$' }, { eval: TOGGLE_TO('tokens') }, { wait: 400 }] },
       { name: 'unit-kwh-local', viewports: ['desktop', 'phone'], steps: [{ click: 'text:Local Demo' }, { wait: 500 }, { config: 'C-local-energy' }, { wait: 2500 }, { key: '$' }, { eval: TOGGLE_TO('kwh') }, { wait: 400 }] },
+      // P4-A4: display.subscriptionValue = hide takes the subscription money out of pill, panel and top-bar total
+      { name: 'subscription-hidden', viewports: ['desktop'], steps: [{ click: 'text:Sub Demo' }, { wait: 500 }, { key: '$' }, { eval: TOGGLE_TO('money') }, { config: 'C-hide-subscription' }, { wait: 7000 }] },
+      // LAST on purpose: the project file stays in the scratch workspace for the rest of the run. It overrides the user's
+      // prices: the top bar shows a "project" badge (its title names the file) and the pill uses the project's rates.
+      { name: 'project-override-badge', viewports: ['desktop', 'phone'], steps: [{ click: 'text:Fixture F-A' }, { wait: 500 }, { key: '$' }, { eval: TOGGLE_TO('money') }, { config: 'C-project-override' }, { wait: 7000 }] },
+    ],
+  },
+  // Costs P4, second half. Run with `--scenario all --start-index <next number>`: these sessions (F-C, F-G, F-H) are not in
+  // the `costs` scenario. PLAN v2 P4 shots 7-9: tier line (F-C, a 120K-token prompt), unpriced fallback (F-G), no reported usage (F-H).
+  p4b: {
+    shots: [
+      { name: 'tooltip-haiku-tier-high', viewports: ['desktop'], steps: [{ click: 'text:Fixture F-C' }, { wait: 500 }, { key: '$' }, { hover: 'pill:first' }, { wait: 300 }] },
+      { name: 'tooltip-unknown-fallback', viewports: ['desktop'], steps: [{ click: 'text:Unknown Demo' }, { wait: 500 }, { key: '$' }, { hover: 'pill:first' }, { wait: 300 }] },
+      { name: 'tooltip-estimate-no-usage', viewports: ['desktop'], steps: [{ click: 'text:Fixture F-H' }, { wait: 500 }, { key: '$' }, { hover: 'pill:first' }, { wait: 300 }] },
     ],
   },
   h0: {

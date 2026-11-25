@@ -112,7 +112,7 @@ test('fixture ids F-A..F-H, L-1..L-4 and C-* all exist', () => {
     assert.ok(FIXTURE_IDS.includes(id), `missing fixture ${id}`)
   }
   assert.deepEqual(Object.keys(LIMITS_FIXTURES), ['L-1', 'L-2', 'L-3', 'L-4'])
-  assert.deepEqual(Object.keys(CONFIG_FIXTURES), ['C-default', 'C-eur', 'C-invalid', 'C-custom-price', 'C-local-energy'])
+  assert.deepEqual(Object.keys(CONFIG_FIXTURES), ['C-default', 'C-eur', 'C-invalid', 'C-custom-price', 'C-hide-subscription', 'C-project-override', 'C-local-energy'])
 })
 
 test('every config fixture except C-invalid passes the real validator (a fixture that silently fails shows the error banner, not its feature)', async () => {
@@ -227,4 +227,16 @@ test('rewriteConfigFixture replaces costs.json atomically, removes it for C-defa
     assert.equal(fs.existsSync(file), false)
     assert.throws(() => rewriteConfigFixture(home, 'C-9'), /unknown config fixture/)
   } finally { fs.rmSync(home, { recursive: true, force: true }) }
+})
+
+test('C-project* fixtures are written to the workspace (project layer), never to HOME, and need a workspace', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'shot-cfg-h-'))
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'shot-cfg-w-'))
+  try {
+    assert.throws(() => rewriteConfigFixture(home, 'C-project-override'), /no workspace/)
+    rewriteConfigFixture(home, 'C-project-override', ws)
+    const file = path.join(ws, '.agent-flow', 'costs.json')
+    assert.ok(JSON.parse(fs.readFileSync(file, 'utf8')).pricing)
+    assert.equal(fs.existsSync(path.join(home, '.agent-flow', 'costs.json')), false)
+  } finally { fs.rmSync(home, { recursive: true, force: true }); fs.rmSync(ws, { recursive: true, force: true }) }
 })

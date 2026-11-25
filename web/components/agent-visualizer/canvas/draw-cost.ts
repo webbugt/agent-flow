@@ -226,7 +226,9 @@ export function drawCostSummaryPanel(
   const headLines = Math.max(1, summary.lines.length)
   const headerH = 10 + headLines * 14 + (summary.tokensText ? 12 : 0) + 4
   const panelH = headerH + (agentRows * lineH) + COST_PANEL.sectionGap + (toolRows > 0 ? 14 + toolRows * lineH : 0) + (noteLines > 0 ? 4 + noteLines * 11 : 0) + 12
-  const place = placeSummaryPanel(canvasW, canvasH, panelW, panelH, COST_PANEL.xMargin, COST_PANEL.yStart)
+  // Never under the top bar: with many session tabs the bar wraps to a second row and publishes its real bottom edge
+  const barBottom = typeof document === 'undefined' ? 0 : parseFloat(document.documentElement.style.getPropertyValue('--af-top-bar-bottom')) || 0
+  const place = placeSummaryPanel(canvasW, canvasH, panelW, panelH, COST_PANEL.xMargin, Math.max(COST_PANEL.yStart, Math.ceil(barBottom) + 8))
   const panelX = place.x
   const panelY = place.y
 

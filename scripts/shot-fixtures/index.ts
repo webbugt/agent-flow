@@ -204,8 +204,13 @@ export const CONFIG_FIXTURES: Record<string, unknown> = {
   'C-default': null,
   'C-eur': { currency: { display: 'EUR', fx: { EUR: 0.92 }, fxAsOf: '2026-11-25' } },
   'C-invalid': { currency: { display: 3 }, pricing: { unknownModel: { policy: 'nonsense' } } },
-  // A valid custom price: Sonnet at 4x the list price, so the change is visible at a glance (task P3)
+  // A valid custom price: Sonnet at 6x the list in/out price (12/60 vs 2/10), so the change is visible at a glance (task P3)
   'C-custom-price': { schemaVersion: 1, pricing: { models: [{ match: { provider: 'anthropic', model: 'claude-sonnet-*' }, rate: { input: 12, output: 60, cacheRead: 1.2, cacheWrite5m: 15, cacheWrite1h: 24 } }] } },
+  // display.subscriptionValue = hide (Q10): subscription / credits money is not shown
+  'C-hide-subscription': { schemaVersion: 1, display: { subscriptionValue: 'hide' } },
+  // A PROJECT override (written to <workspace>/.agent-flow/costs.json, not ~/.agent-flow): Sonnet at 3x the list in/out price (6/30 vs 2/10).
+  // Names starting with `C-project` go to the workspace; the overlay then shows the "project" badge (R1 info finding).
+  'C-project-override': { schemaVersion: 1, pricing: { models: [{ match: { provider: 'anthropic', model: 'claude-sonnet-*' }, rate: { input: 6, output: 30, cacheRead: 0.6, cacheWrite5m: 7.5, cacheWrite1h: 12 } }] } },
   // Local box: 40 W idle / 220 W under load, marginal attribution, 0.18 per kWh (schema as in web/lib/costs/validate.ts)
   'C-local-energy': { schemaVersion: 1, pricing: { providers: { ollama: { billing: 'local', energyProfile: 'box' } } }, energy: { profiles: { box: { powerW: { idle: 40, load: 220 }, throughput: { genTokPerSec: 40, prefillTokPerSec: 800 } } }, tariff: { currency: 'USD', flatPerKWh: 0.18 } } },
 }
@@ -418,9 +423,12 @@ export function materializeFixtures(opts: {
  * Rewrite `<home>/.agent-flow/costs.json` to a C-* fixture while the app runs (hot-reload shots). The write is
  * atomic (temp file + rename, like the app's own), so the watcher never sees half a file. `C-default` removes the file.
  */
-export function rewriteConfigFixture(home: string, name: string): void {
+export function rewriteConfigFixture(home: string, name: string, workspace?: string): void {
   if (!(name in CONFIG_FIXTURES)) throw new Error(`unknown config fixture ${name}`)
-  const af = path.join(home, '.agent-flow')
+  // C-project* fixtures are the project layer: <workspace>/.agent-flow/costs.json
+  const isProject = name.startsWith('C-project')
+  if (isProject && !workspace) throw new Error(`${name} is a project config: the run has no workspace`)
+  const af = path.join(isProject ? workspace as string : home, '.agent-flow')
   const file = path.join(af, 'costs.json')
   const doc = CONFIG_FIXTURES[name]
   if (doc === null) { fs.rmSync(file, { force: true }); return }
