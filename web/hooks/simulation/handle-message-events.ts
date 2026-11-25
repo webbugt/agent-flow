@@ -1,4 +1,5 @@
 import type { ContextBreakdown, SpendTotals, TokenCounts } from '@/lib/agent-types'
+import type { EnergyUsage } from '@/lib/costs/types'
 import type { ConversationMessage } from './types'
 import { appendConversation, asString, asNumber, MAX_BUBBLES } from './types'
 import type { MutableEventState } from './process-event'
@@ -82,6 +83,27 @@ function parseCounts(raw: unknown): TokenCounts | undefined {
   }
 }
 
+const MAX_ENERGY_HOURS = 24 * 400
+
+/** Hour-bucketed local-model busy time (P5). Keys must be integer hour indexes; every field a finite non-negative number. */
+export function parseEnergy(raw: unknown): EnergyUsage | undefined {
+  if (!raw || typeof raw !== 'object') return undefined
+  const src = (raw as Record<string, unknown>).byHour
+  if (!src || typeof src !== 'object') return undefined
+  const byHour: EnergyUsage['byHour'] = {}
+  let n = 0
+  for (const [k, v] of Object.entries(src as Record<string, unknown>)) {
+    if (!/^\d{1,9}$/.test(k) || !v || typeof v !== 'object' || ++n > MAX_ENERGY_HOURS) continue
+    const e = v as Record<string, unknown>
+    byHour[k] = {
+      busySec: num(e.busySec), callSec: num(e.callSec), calls: num(e.calls),
+      untimedCalls: num(e.untimedCalls), untimedInTok: num(e.untimedInTok), untimedOutTok: num(e.untimedOutTok),
+    }
+    for (const f of Object.keys(byHour[k]) as Array<keyof EnergyUsage['byHour'][string]>) if (byHour[k][f] < 0) byHour[k][f] = 0
+  }
+  return n > 0 ? { v: 1, byHour } : undefined
+}
+
 /**
  * Validate the billed-usage totals sent with a context update: flat counts, model, and (P2) the
  * provider, the per-prompt-size buckets and the call/latency counters. Unknown bucket keys are dropped.
@@ -102,8 +124,10 @@ export function parseSpend(raw: unknown): SpendTotals | undefined {
   const calls = optNum(r.calls)
   const timedCalls = optNum(r.timedCalls)
   const latencySeconds = optNum(r.latencySeconds)
+  const energy = parseEnergy(r.energy)
   return {
     ...counts,
+    ...(energy ? { energy } : {}),
     model: typeof r.model === 'string' ? r.model : undefined,
     ...(typeof r.provider === 'string' && r.provider ? { provider: r.provider } : {}),
     ...(byBucket ? { byBucket } : {}),

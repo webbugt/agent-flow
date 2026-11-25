@@ -272,6 +272,25 @@ export interface TokenCounts {
   cacheWrite1hTokens: number
 }
 
+/**
+ * Busy time of a local-model session in one UTC hour (key of `EnergyUsage.byHour` = hours since the epoch).
+ * Mirror of web/lib/costs/types.ts (the extension cannot import from web/). `busySec` is overlap-split device
+ * load time; the page prices it with the watts, throughput and tariff of the CURRENT config.
+ */
+export interface EnergyHour {
+  busySec: number
+  callSec: number
+  calls: number
+  untimedCalls: number
+  untimedInTok: number
+  untimedOutTok: number
+}
+
+export interface EnergyUsage {
+  v: 1
+  byHour: Record<string, EnergyHour>
+}
+
 /** Cumulative billed token counts for one agent, as reported by the API */
 export interface SpendTotals extends TokenCounts {
   /** Last real model id seen for this agent */
@@ -294,6 +313,8 @@ export interface SpendTotals extends TokenCounts {
   timedCalls?: number
   /** Sum of the reported per-call latencies, in seconds */
   latencySeconds?: number
+  /** Hour-bucketed busy time of a local model (Hermes relay only); priced client-side, see web/lib/costs/energy.ts */
+  energy?: EnergyUsage
 }
 
 // ─── Claude Settings Types ──────────────────────────────────────────────────

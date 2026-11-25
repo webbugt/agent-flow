@@ -2,6 +2,7 @@
 // Now with actual information visibility
 
 import type { PromptBucket } from './costs/tiers'
+import type { EnergyUsage } from './costs/types'
 
 export type AgentState = 'idle' | 'thinking' | 'tool_calling' | 'complete' | 'error' | 'paused' | 'waiting_permission'
 
@@ -36,6 +37,8 @@ export interface SpendTotals extends TokenCounts {
   timedCalls?: number
   /** Sum of the reported per-call latencies, in seconds */
   latencySeconds?: number
+  /** Hour-bucketed busy time of a local model; priced with the current config (web/lib/costs/energy.ts) */
+  energy?: EnergyUsage
 }
 
 export interface Agent {

@@ -197,3 +197,33 @@ export interface ValidationResult {
   errors: ValidationIssue[]
   warnings: ValidationIssue[]
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Energy ingestion data (P5). What the host stores per local-model session so the page can price it with
+// whatever watts, throughput and tariff the config has NOW (editing the config re-prices history).
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Busy time of one session in one UTC hour (`byHour` key = hours since the epoch, as text: `Math.floor(ms / 3.6e6)`).
+ * `busySec` is the device's load time attributed to this session: every call gets `dt / k` of each stretch it shared
+ * with k-1 other calls on the same device, so two fully overlapping calls get half each and the total is conserved.
+ */
+export interface EnergyHour {
+  /** Overlap-split load seconds of calls that reported a latency (the busy-time source "call latency"). */
+  busySec: number
+  /** The same calls' own latencies added up, without the split (busySec <= callSec; the gap is time shared with other calls). */
+  callSec: number
+  /** Calls that reported a latency and ended in this hour. */
+  calls: number
+  /** Calls without a latency (busy time is modelled from the configured throughput when the profile has one). */
+  untimedCalls: number
+  /** Uncached input tokens of the calls without a latency. */
+  untimedInTok: number
+  /** Output tokens of the calls without a latency. */
+  untimedOutTok: number
+}
+
+export interface EnergyUsage {
+  v: 1
+  byHour: Record<string, EnergyHour>
+}

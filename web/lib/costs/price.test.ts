@@ -193,7 +193,7 @@ test('tooltip states provider and kind for every billing mode (Webbugt decision 
   assert.match(unk.rows.find(x => x.id === 'inference')!.value, /fallback rate/)
 })
 
-test('tooltip for a local model has the energy rows, marked pending until P5', () => {
+test('tooltip for a local model has the energy rows (profile referenced but not defined)', () => {
   const c = cfg({ pricing: { providers: { ollama: { billing: 'local', energyProfile: 'box' } } }, energy: { profiles: { box: { powerW: { idle: 40, load: 200 }, pue: 1.2 } }, tariff: { currency: 'USD', flatPerKWh: 0.3 } } })
   const r = priceUsage(c, { provider: 'ollama', model: 'qwen3:32b', usage: U({ inputTokens: 1000, outputTokens: 100 }) })
   const t = buildCostTooltip(r, c)
@@ -201,7 +201,8 @@ test('tooltip for a local model has the energy rows, marked pending until P5', (
   const row = (id: string) => t.rows.find(x => x.id === id)!
   assert.match(row('billing-kind').value, /^estimated: configured power, not measured/)
   assert.match(row('power').value, /P_load 200 W · P_idle 40 W/)
-  assert.equal(row('busy-time').pending, true)
+  assert.match(row('busy-time').value, /energy profile "box" is not defined/)
+  assert.equal(row('busy-time').pending, undefined)
   assert.match(row('attribution').value, /marginal · pue 1\.20/)
   assert.equal(t.footnotes[0], 'estimated from configured power, not measured')
 })

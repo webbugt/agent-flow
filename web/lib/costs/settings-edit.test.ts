@@ -129,7 +129,7 @@ test('removing every rule and every provider setting leaves no empty pricing blo
 
 test('forbidden keys are never written, whatever the drawer is given', () => {
   const d = draftFromDoc(undefined)
-  d.providers['__proto__'] = { billing: 'api', implicitCacheWrite: null }
+  d.providers['__proto__'] = { billing: 'api', implicitCacheWrite: null, energyProfile: '' }
   const out = applyDraft(undefined, d)
   assert.equal(JSON.stringify(out).includes('__proto__'), false)
   assert.equal(({} as Obj).billing, undefined)

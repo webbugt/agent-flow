@@ -5,6 +5,8 @@ import * as os from 'os'
 import * as path from 'path'
 import {
   parseHermesLogLine,
+  parseHermesLogTimestamp,
+  mayBeLocalProvider,
   parseGatewayInbound,
   displayProfileName,
   displayToolName,
@@ -573,4 +575,74 @@ test('idle window 0 keeps to live activity only', () => {
   assert.equal(asked, 0)
   assert.deepEqual(w.getActiveSessions(), [])
   assert.equal(c.events.length, 0)
+})
+
+// ─── Energy (P5): busy time of local-model calls ────────────────────────────
+
+test('parseHermesLogTimestamp reads the line prefix as local time, or null', () => {
+  assert.equal(parseHermesLogTimestamp(API_LINE), new Date(2026, 10, 23, 12, 6, 45, 94).getTime())
+  assert.equal(parseHermesLogTimestamp('2026-11-23 12:06:45 INFO x'), new Date(2026, 10, 23, 12, 6, 45, 0).getTime())
+  assert.equal(parseHermesLogTimestamp('not a log line'), null)
+})
+
+test('mayBeLocalProvider: built-in local runtimes and unknown providers yes; Claude and Copilot no', () => {
+  for (const p of ['ollama', 'llama.cpp', 'vllm', 'lmstudio', 'custom', 'my-gpu-box']) assert.equal(mayBeLocalProvider(p), true, p)
+  for (const p of ['copilot', 'anthropic', 'claude-subscription-directsdk-experimental']) assert.equal(mayBeLocalProvider(p), false, p)
+})
+
+test('local-model calls report hour-bucketed busy time; overlapping sessions split the load and the earlier one is corrected', () => {
+  const stamp = (d: Date) => {
+    const p = (n: number, w = 2) => String(n).padStart(w, '0')
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())},${p(d.getMilliseconds(), 3)}`
+  }
+  const line = (end: Date, sid: string, provider: string, latency: string) =>
+    `${stamp(end)} INFO [${sid}] agent.conversation_loop: API call #1: model=qwen3:32b provider=${provider} in=1000 out=100 total=1100 latency=${latency} id=x`
+  const { profilesRoot, logFile } = fixture('omh-coder', '')
+  let clock = 5_000_000
+  const c = collector()
+  const w = new HermesLogWatcher({
+    profilesRoot, emit: c.emit, lifecycle: c.lifecycleFn, now: () => clock,
+    titleFor: (_p, _db, sid) => (sid.endsWith('aaaaaaaa') ? 'Alpha task' : sid.endsWith('bbbbbbbb') ? 'Beta job' : 'Copilot run'),
+    transcriptFor: false,
+  })
+  w.poll()
+  // A ran 12:00:00 -> 12:00:10, B ran 12:00:05 -> 12:00:15, both on ollama. C is a Copilot call.
+  const t0 = new Date(2026, 10, 23, 12, 0, 10, 0)
+  const t1 = new Date(2026, 10, 23, 12, 0, 15, 0)
+  fs.appendFileSync(logFile, line(t0, '20261123_120000_aaaaaaaa', 'ollama', '10.0s') + '\n')
+  clock += 1000
+  w.poll()
+  const energyOf = (name: string) => {
+    const ups = c.events.filter(e => e.event.type === 'context_update' && e.event.payload.agent === name)
+    const last = ups[ups.length - 1]
+    return (last?.event.payload as { spend?: { energy?: { byHour: Record<string, { busySec: number; callSec: number; calls: number }> } } } | undefined)?.spend?.energy
+  }
+  const sum = (e: ReturnType<typeof energyOf>) => Object.values(e?.byHour ?? {}).reduce((s, h) => s + h.busySec, 0)
+  const A = 'OMH Coder · Alpha Task'
+  const B = 'OMH Coder · Beta Job'
+  clock += 4_000
+  assert.equal(sum(energyOf(A)), 10, 'alone: all 10 s')
+
+  fs.appendFileSync(logFile, line(t1, '20261123_120005_bbbbbbbb', 'ollama', '10.0s') + '\n' + line(t1, '20261123_120006_cccccccc', 'copilot', '2.0s') + '\n')
+  clock += 1000
+  w.poll()
+  assert.equal(sum(energyOf(A)), 7.5, 'A was corrected when B overlapped it')
+  assert.equal(sum(energyOf(B)), 7.5)
+  assert.equal(Object.values(energyOf(A)!.byHour)[0].callSec, 10, 'its own latency is kept unsplit')
+  assert.equal(energyOf('OMH Coder · Copilot Run'), undefined, 'Copilot calls carry no energy')
+  // the hour key is the UTC hour of the call's end
+  assert.ok(Object.keys(energyOf(A)!.byHour).every(k => /^\d+$/.test(k)))
+})
+
+test('a local call without a latency is kept as tokens per hour for the page to model', () => {
+  const { profilesRoot, logFile } = fixture('omh-coder', '')
+  const c = collector()
+  const w = new HermesLogWatcher({ profilesRoot, emit: c.emit, lifecycle: c.lifecycleFn, now: () => 9_000_000, titleFor: () => 'Local run', transcriptFor: false })
+  w.poll()
+  fs.appendFileSync(logFile, '2026-11-23 12:06:45,094 INFO [20261123_103037_d0ddaef5] agent.conversation_loop: API call #1: model=qwen3:32b provider=ollama in=500 out=50 total=550\n')
+  w.poll()
+  const up = c.events.filter(e => e.event.type === 'context_update').pop()!
+  const e = (up.event.payload as { spend: { energy: { byHour: Record<string, { untimedCalls: number; untimedInTok: number; untimedOutTok: number; busySec: number }> } } }).spend.energy
+  const h = Object.values(e.byHour)[0]
+  assert.deepEqual([h.untimedCalls, h.untimedInTok, h.untimedOutTok, h.busySec], [1, 500, 50, 0])
 })

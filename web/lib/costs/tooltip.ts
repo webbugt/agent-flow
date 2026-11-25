@@ -5,8 +5,39 @@
  */
 import type { BillingKind, ResolvedConfig } from './types'
 import type { PriceResult } from './price'
-import { formatKwh, formatMoney, formatRate, formatTokensExact, kindLabel } from './format'
+import { formatKwh, formatMoney, formatMoneyExact, formatRate, formatTokensExact, kindLabel } from './format'
 import { providerLabel } from './resolve'
+import { sliceText } from './energy'
+import type { EnergyResult } from './energy'
+
+const sec = (n: number): string => `${formatRate(n)} s`
+
+/** `7.50 s busy = 6.00 s from call latency (2 calls, 1.50 s of their 7.50 s were shared with other calls) + 1.5 s modelled ...` */
+export function busyTimeText(e: EnergyResult): string {
+  const parts: string[] = []
+  if (e.timedCalls > 0) {
+    const shared = e.sharedSec > 0.0005 ? `; overlapping calls split load: their latencies add up to ${sec(e.callSec)}, ${sec(e.sharedSec)} was shared` : ''
+    parts.push(`${sec(e.latencySec)} from call latency (${e.timedCalls} call${e.timedCalls === 1 ? '' : 's'}${shared})`)
+  }
+  if (e.untimedCalls > 0) {
+    parts.push(e.profile.throughput
+      ? `${sec(e.modelledSec)} modelled from configured throughput (${e.untimedCalls} call${e.untimedCalls === 1 ? '' : 's'} without latency: out / ${e.profile.throughput.genTokPerSec} tok/s + new in / ${e.profile.throughput.prefillTokPerSec} tok/s)`
+      : `${e.untimedCalls} call${e.untimedCalls === 1 ? '' : 's'} without latency not counted (profile has no throughput)`)
+  }
+  if (parts.length === 0) return 'no busy time recorded yet; source: call latency, else configured throughput'
+  return `${sec(e.busySec)} busy = ${parts.join(' + ')}`
+}
+
+/** `0.0140 kWh · EUR 0.002800 (= $0.003 at the display currency)` */
+export function energyResultText(e: EnergyResult, config: ResolvedConfig): string {
+  if (!e.tariff || e.cost === null) return `${formatKwh(e.kwh)} (no tariff configured: cost not computed)`
+  const native = `${formatKwh(e.kwh)} · ${formatMoneyExact(e.cost, e.tariff.currency)}`
+  const display = config.currency.display
+  if (e.tariff.currency === display) return native
+  return e.costDisplay === null
+    ? `${native} (no exchange rate ${e.tariff.currency}->${display}: shown in ${e.tariff.currency})`
+    : `${native} = ${formatMoneyExact(e.costDisplay, display)} (FX ${e.tariff.currency}->${display}, manual)`
+}
 
 export type TooltipRowId =
   | 'provider' | 'billing-kind' | 'model' | 'rate-source' | 'rate' | 'tokens' | 'formula' | 'result'
@@ -17,7 +48,7 @@ export interface TooltipRow {
   id: TooltipRowId
   label: string
   value: string
-  /** Filled by a later task (energy accounting lands in P5); the value says so. */
+  /** Not computed yet; the value says why. (No row uses it since P5; kept for the renderer.) */
   pending?: boolean
 }
 
@@ -129,7 +160,7 @@ const FOOTNOTES: Record<BillingKind, string> = {
 }
 
 /** Build the tooltip rows for one priced figure. All rows of PLAN v2 6.1 are present, in order. */
-export function buildCostTooltip(r: PriceResult, config: ResolvedConfig): CostTooltip {
+export function buildCostTooltip(r: PriceResult, config: ResolvedConfig, energy: EnergyResult | null = null): CostTooltip {
   const p = r.pricing
   const label = providerLabel(r.provider)
   const rows: TooltipRow[] = [
@@ -141,15 +172,20 @@ export function buildCostTooltip(r: PriceResult, config: ResolvedConfig): CostTo
 
   if (p.billing === 'local') {
     const prof = p.energyProfile !== null && Object.hasOwn(config.energy.profiles, p.energyProfile) ? config.energy.profiles[p.energyProfile] : null
-    const pending = 'not computed yet (energy accounting lands in task P5)'
+    const tariff = config.energy.tariff
+    const e = energy
+    const noProfile = p.energyProfile === null
+      ? 'no energy profile is set for this provider or model (energy.profiles + pricing.providers.<id>.energyProfile)'
+      : `energy profile "${p.energyProfile}" is not defined`
+    const tariffFlat = tariff ? `${tariff.currency} ${formatRate(tariff.flatPerKWh)} per kWh flat${tariff.timeOfDay.length ? ' + time-of-day windows' : ''}` : 'no tariff configured: kWh only'
     rows.push(
-      { id: 'busy-time', label: 'Busy time', value: `${pending}; source: call latency, else configured throughput`, pending: true },
-      { id: 'power', label: 'Power', value: prof ? `P_load ${prof.powerW.load} W · P_idle ${prof.powerW.idle} W` : 'no energy profile set for this provider or model' },
-      { id: 'attribution', label: 'Attribution', value: prof ? `${prof.attribution} · pue ${formatRate(prof.pue)}` : 'n/a' },
+      { id: 'busy-time', label: 'Busy time', value: e ? busyTimeText(e) : noProfile },
+      { id: 'power', label: 'Power', value: prof ? `P_load ${prof.powerW.load} W · P_idle ${prof.powerW.idle} W` : 'n/a' },
+      { id: 'attribution', label: 'Attribution', value: prof ? `${prof.attribution} · pue ${formatRate(prof.pue)}${prof.attribution === 'marginal' ? ` · charged ${e?.attributedW ?? prof.powerW.load - prof.powerW.idle} W (load - idle)` : ` · charged ${prof.powerW.load} W (load)`}` : 'n/a' },
       { id: 'tokens', label: 'Tokens', value: tokensText(r) },
-      { id: 'kwh-formula', label: 'kWh formula', value: `kWh = (P_attr x pue x busy seconds) / 3.6e6; ${pending}`, pending: true },
-      { id: 'tariff', label: 'Tariff window', value: config.energy.tariff ? `${config.energy.tariff.currency} ${formatRate(config.energy.tariff.flatPerKWh)} per kWh flat${config.energy.tariff.timeOfDay.length ? ' + time-of-day windows' : ''}` : 'no tariff configured', pending: true },
-      { id: 'result', label: 'Result', value: `${formatKwh(0)} so far (${pending})`, pending: true },
+      { id: 'kwh-formula', label: 'kWh formula', value: e ? `kWh = P_attr x pue x busy s / 3.6e6\n${e.formula}` : 'kWh = P_attr x pue x busy s / 3.6e6 (no profile: not computed)' },
+      { id: 'tariff', label: 'Tariff window', value: e?.tariff && e.tariff.slices.length ? e.tariff.slices.map(s => sliceText(s, e.tariff!.currency)).join('\n') : tariffFlat },
+      { id: 'result', label: 'Result', value: e ? energyResultText(e, config) : 'n/a (no energy profile)' },
     )
   } else {
     rows.push(

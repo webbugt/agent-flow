@@ -7,10 +7,11 @@ import { saveCostsConfig } from '@/lib/costs-write'
 import { clearOverlayUnit, getOverlayOverride, overlayUnitVersion, subscribeOverlayUnit } from '@/lib/cost-overlay-store'
 import { editBase, isBaseChanged, type EditBase } from '@/lib/costs/edit-base'
 import {
-  FIELD, applyDraft, checkDoc, draftFromDoc, issuesAt, newRule, otherIssues, providerIds,
-  type Draft, type RuleDraft,
+  FIELD, WEEK, applyDraft, checkDoc, draftFromDoc, draftIssues, issuesAt, newProfile, newRule, newWindow, otherIssues, providerIds,
+  type Draft, type ProfileDraft, type RuleDraft, type WindowDraft,
 } from '@/lib/costs/settings-edit'
 import { unitName } from '@/lib/costs/overlay'
+import { BUILTIN_PROVIDERS } from '@/lib/costs/resolve'
 import { BILLING_MODES } from '@/lib/costs/types'
 import type { DisplayUnit } from '@/lib/costs/types'
 import type { CostsStatus } from '@/lib/costs-runtime'
@@ -41,6 +42,10 @@ function Section({ title, children }: { title: string; children: React.ReactNode
     </section>
   )
 }
+
+const addButton: React.CSSProperties = { color: COLORS.complete, border: `1px solid ${COLORS.glassBorder}`, borderRadius: 4, padding: '3px 8px' }
+/** Providers whose built-in billing is `local` get the profile picker without the user first switching billing. */
+const BUILTIN_LOCAL = new Set(Object.entries(BUILTIN_PROVIDERS).filter(([, v]) => v.billing === 'local').map(([k]) => k))
 
 const BILLING_HELP: Record<string, string> = {
   api: 'api: pay per token (billed)',
@@ -156,7 +161,11 @@ function DrawerForm({ status, seenProviders, base, baseFingerprint, block, onRel
   const [saved, setSaved] = useState(false)
 
   const doc = useMemo(() => applyDraft(base, draft), [base, draft])
-  const check = useMemo(() => checkDoc(doc), [doc])
+  const check = useMemo(() => {
+    const c = checkDoc(doc)
+    const extra = draftIssues(draft)
+    return extra.length === 0 ? c : { ...c, ok: false, errors: [...c.errors, ...extra] }
+  }, [doc, draft])
   const projectSource = status.sources.find(s => s.id === 'project')
   const projectActive = !!projectSource && projectSource.status !== 'missing' && projectSource.inUse
   const canSave = check.ok && !saving && block === null
@@ -253,6 +262,16 @@ function DrawerForm({ status, seenProviders, base, baseFingerprint, block, onRel
                 <option value="">built-in</option>
                 {BILLING_MODES.map(m => <option key={m} value={m}>{BILLING_HELP[m] ?? m}</option>)}
               </select>
+              {(p.billing === 'local' || p.energyProfile !== '' || (p.billing === '' && BUILTIN_LOCAL.has(id))) && (
+                <label style={{ display: 'block', marginTop: 3, fontSize: 9 }}>Energy profile
+                  <select aria-label={`Energy profile of ${id}`} data-testid={`provider-energy-${id}`} value={p.energyProfile} style={inputStyle}
+                    onChange={e => edit(d => ({ ...d, providers: { ...d.providers, [id]: { ...p, energyProfile: e.target.value } } }))}>
+                    <option value="">none (kWh not computed)</option>
+                    {draft.profiles.filter(x => x.name.trim() !== '').map(x => <option key={x.name} value={x.name.trim()}>{x.name.trim()}</option>)}
+                    {p.energyProfile !== '' && !draft.profiles.some(x => x.name.trim() === p.energyProfile) && <option value={p.energyProfile}>{p.energyProfile} (not defined)</option>}
+                  </select>
+                </label>
+              )}
               <Err issues={issuesAt(check.errors, `/pricing/providers/${id}`)} />
             </div>
           )
@@ -296,6 +315,28 @@ function DrawerForm({ status, seenProviders, base, baseFingerprint, block, onRel
           style={{ color: COLORS.complete, border: `1px solid ${COLORS.glassBorder}`, borderRadius: 4, padding: '3px 8px' }}>+ Add price</button>
       </Section>
 
+      <Section title="Local models: energy profiles">
+        <p style={{ margin: '0 0 6px', color: COLORS.textMuted, fontSize: 9 }}>
+          Configured power, not measured. kWh = (load − idle W, or load W with total attribution) × PUE × busy seconds ÷ 3.6e6. Busy time comes from each call&apos;s latency; calls without one are modelled from the throughput.
+        </p>
+        {draft.profiles.length === 0 && <p style={{ margin: 0, color: COLORS.textMuted, fontSize: 10 }}>No profiles: local models show kWh as &quot;–&quot;.</p>}
+        {draft.profiles.map((pr, i) => (
+          <ProfileEditor key={i} i={i} pr={pr} errors={check.errors} projectOnly={false}
+            onChange={patch => edit(d => ({ ...d, profiles: d.profiles.map((x, n) => (n === i ? { ...x, ...patch } : x)) }))}
+            onRemove={() => edit(d => ({ ...d, profiles: d.profiles.filter((_, n) => n !== i) }))} />
+        ))}
+        <button type="button" data-testid="add-profile" onClick={() => edit(d => ({ ...d, profiles: [...d.profiles, newProfile(d.profiles.length === 0 ? 'my-gpu' : '')] }))} style={addButton}>+ Add energy profile</button>
+      </Section>
+
+      <Section title="Electricity price">
+        <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+          <input type="checkbox" data-testid="tariff-enabled" checked={draft.tariff.enabled}
+            onChange={e => edit(d => ({ ...d, tariff: e.target.checked ? { ...d.tariff, enabled: true, currency: d.tariff.currency || d.currency || 'USD' } : { ...d.tariff, enabled: false } }))} />
+          Price the energy (otherwise only kWh is shown)
+        </label>
+        {draft.tariff.enabled && <TariffEditor draft={draft} errors={check.errors} edit={edit} />}
+      </Section>
+
       {rest.length > 0 && (
         <Section title="Other problems">
           <Err issues={rest} />
@@ -321,5 +362,112 @@ function DrawerForm({ status, seenProviders, base, baseFingerprint, block, onRel
         </div>
       </div>
     </>
+  )
+}
+
+type Edit = (fn: (d: Draft) => Draft) => void
+type Issue = { path: string; message: string }
+
+function ProfileEditor({ i, pr, errors, onChange, onRemove }: {
+  i: number; pr: ProfileDraft; errors: Issue[]; projectOnly: boolean; onChange: (p: Partial<ProfileDraft>) => void; onRemove: () => void
+}) {
+  const name = pr.name.trim()
+  const at = (path: string) => issuesAt(errors, path)
+  const bad = (path: string) => (at(path).length ? badStyle : {})
+  const num = (label: string, key: 'idle' | 'load' | 'gen' | 'prefill' | 'pue', path: string, ph: string) => (
+    <label style={{ fontSize: 9 }}>{label}
+      <input aria-label={`Profile ${i + 1} ${label}`} data-testid={`profile-${i}-${key}`} inputMode="decimal" value={pr[key]} placeholder={ph}
+        onChange={e => onChange({ [key]: e.target.value } as Partial<ProfileDraft>)} style={{ ...inputStyle, ...bad(path) }} />
+    </label>
+  )
+  return (
+    <div data-testid={`profile-${i}`} style={{ border: `1px solid ${COLORS.glassBorder}`, borderRadius: 6, padding: 8, marginBottom: 8 }}>
+      <label style={{ display: 'block' }}>Profile name
+        <input aria-label={`Profile ${i + 1} name`} data-testid={`profile-${i}-name`} value={pr.name} placeholder="my-gpu" maxLength={64}
+          onChange={e => onChange({ name: e.target.value })} style={{ ...inputStyle, ...bad(FIELD.profile(i)), ...bad(`/energy/profiles/${name}`) }} />
+      </label>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 6, marginTop: 6 }}>
+        {num('Idle W', 'idle', FIELD.profileField(name, 'idle'), '40')}
+        {num('Load W', 'load', FIELD.profileField(name, 'load'), '350')}
+        {num('PUE', 'pue', FIELD.profileField(name, 'pue'), '1')}
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 6, marginTop: 6 }}>
+        {num('Generate tok/s', 'gen', FIELD.throughput(name), 'optional')}
+        {num('Prompt tok/s', 'prefill', FIELD.throughput(name), 'optional')}
+      </div>
+      <label style={{ display: 'block', marginTop: 6, fontSize: 9 }}>Attribution
+        <select aria-label={`Profile ${i + 1} attribution`} data-testid={`profile-${i}-attribution`} value={pr.attribution}
+          onChange={e => onChange({ attribution: e.target.value === 'total' ? 'total' : 'marginal' })} style={inputStyle}>
+          <option value="marginal">marginal: load − idle (the extra the model causes)</option>
+          <option value="total">total: the whole load power</option>
+        </select>
+      </label>
+      <Err issues={[...at(FIELD.profile(i)), ...at(`/energy/profiles/${name}`)]} />
+      <button type="button" onClick={onRemove} style={{ marginTop: 6, color: '#ff8896', fontSize: 10 }}>Remove profile</button>
+    </div>
+  )
+}
+
+function TariffEditor({ draft, errors, edit }: { draft: Draft; errors: Issue[]; edit: Edit }) {
+  const t = draft.tariff
+  const tcode = t.currency.trim().toUpperCase()
+  const dcode = draft.currency.trim().toUpperCase() || 'USD'
+  const needsFx = tcode !== '' && tcode !== 'USD' && tcode !== dcode
+  const set = (patch: Partial<typeof t>) => edit(d => ({ ...d, tariff: { ...d.tariff, ...patch } }))
+  const setWin = (i: number, patch: Partial<WindowDraft>) => set({ windows: t.windows.map((w, n) => (n === i ? { ...w, ...patch } : w)) })
+  const at = (p: string) => issuesAt(errors, p)
+  return (
+    <div data-testid="tariff-editor" style={{ marginTop: 6 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+        <label>Currency
+          <input aria-label="Tariff currency" data-testid="tariff-currency" value={t.currency} maxLength={3} placeholder="EUR" onChange={e => set({ currency: e.target.value })}
+            style={{ ...inputStyle, textTransform: 'uppercase', ...(at(FIELD.tariffCurrency).length ? badStyle : {}) }} />
+        </label>
+        <label>Price per kWh (flat)
+          <input aria-label="Flat price per kWh" data-testid="tariff-flat" inputMode="decimal" value={t.flat} placeholder="0.25" onChange={e => set({ flat: e.target.value })}
+            style={{ ...inputStyle, ...(at(FIELD.tariffFlat).length ? badStyle : {}) }} />
+        </label>
+      </div>
+      {needsFx && (
+        <label style={{ display: 'block', marginTop: 6 }}>{`1 USD = ? ${tcode} (manual rate)`}
+          <input aria-label="Tariff exchange rate" data-testid="tariff-fx" inputMode="decimal" value={t.fx} placeholder="e.g. 0.92" onChange={e => set({ fx: e.target.value })}
+            style={{ ...inputStyle, ...(issuesAt(errors, `/currency/fx/${tcode}`).length ? badStyle : {}) }} />
+        </label>
+      )}
+      <label style={{ display: 'block', marginTop: 6 }}>Time zone (optional, e.g. Europe/Zagreb; empty = this device&apos;s)
+        <input aria-label="Tariff time zone" data-testid="tariff-tz" value={t.tz} placeholder="device time zone" onChange={e => set({ tz: e.target.value })}
+          style={{ ...inputStyle, ...(at(FIELD.tariffTz).length ? badStyle : {}) }} />
+      </label>
+      <h4 style={{ margin: '8px 0 4px', color: COLORS.textMuted, fontSize: 9 }}>Time-of-day windows (outside every window the flat price applies)</h4>
+      {t.windows.map((w, i) => (
+        <div key={i} data-testid={`window-${i}`} style={{ border: `1px solid ${COLORS.glassBorder}`, borderRadius: 6, padding: 6, marginBottom: 6 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 6 }}>
+            <label style={{ fontSize: 9 }}>From
+              <input aria-label={`Window ${i + 1} from`} data-testid={`window-${i}-from`} value={w.from} placeholder="22:00" onChange={e => setWin(i, { from: e.target.value })} style={inputStyle} />
+            </label>
+            <label style={{ fontSize: 9 }}>To
+              <input aria-label={`Window ${i + 1} to`} data-testid={`window-${i}-to`} value={w.to} placeholder="06:00" onChange={e => setWin(i, { to: e.target.value })} style={inputStyle} />
+            </label>
+            <label style={{ fontSize: 9 }}>Price / kWh
+              <input aria-label={`Window ${i + 1} price`} data-testid={`window-${i}-price`} inputMode="decimal" value={w.perKWh} placeholder="0.10" onChange={e => setWin(i, { perKWh: e.target.value })} style={inputStyle} />
+            </label>
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 4 }}>
+            {WEEK.map(day => {
+              const on = w.days.includes(day)
+              return (
+                <button key={day} type="button" aria-pressed={on} onClick={() => setWin(i, { days: on ? w.days.filter(x => x !== day) : WEEK.filter(x => x === day || w.days.includes(x)) })}
+                  style={{ fontSize: 9, padding: '1px 5px', borderRadius: 3, border: `1px solid ${COLORS.glassBorder}`, color: on ? COLORS.complete : COLORS.textMuted, background: on ? COLORS.costActiveBg : 'transparent' }}>{day}</button>
+              )
+            })}
+          </div>
+          <p style={{ margin: '3px 0 0', color: COLORS.textMuted, fontSize: 9 }}>A window past midnight (22:00 to 06:00) belongs to the day it starts on.</p>
+          <Err issues={at(FIELD.tariffWindow(i))} />
+          <button type="button" onClick={() => set({ windows: t.windows.filter((_, n) => n !== i) })} style={{ marginTop: 4, color: '#ff8896', fontSize: 10 }}>Remove window</button>
+        </div>
+      ))}
+      <button type="button" data-testid="add-window" onClick={() => set({ windows: [...t.windows, newWindow()] })} style={addButton}>+ Add time-of-day window</button>
+      <Err issues={[...at(FIELD.tariffCurrency), ...at(FIELD.tariffFlat), ...at(FIELD.tariffTz), ...at(FIELD.tariff).filter(i => i.path === FIELD.tariff)]} />
+    </div>
   )
 }

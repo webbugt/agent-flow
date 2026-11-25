@@ -10,7 +10,7 @@
 import type { AgentCost } from './agent-cost'
 import { priceUsage, type PriceResult } from './price'
 import { buildCostTooltip, type CostTooltip, type TooltipRow } from './tooltip'
-import { currencySymbol, formatMoney, formatMoneyExact, formatTokensCompact, formatTokensExact } from './format'
+import { currencySymbol, formatKwh, formatMoney, formatMoneyExact, formatTokensCompact, formatTokensExact } from './format'
 import type { BillingKind, DisplayUnit, ResolvedConfig } from './types'
 
 // ── units ───────────────────────────────────────────────────────────────────
@@ -116,6 +116,28 @@ export function moneyFigure(cost: AgentCost, cfg: ResolvedConfig): string {
   return moneyText(cfg, cost.amount, false)
 }
 
+/** kWh of a local agent, or null when no energy could be computed (no profile) or nothing was measured yet. */
+function localKwh(c: AgentCost): number | null {
+  return c.energy && c.energy.kwh > 0 ? c.energy.kwh : null
+}
+
+/** Electricity cost of a local agent in the display currency, or null (no tariff, no exchange rate, nothing used). */
+function localMoney(c: AgentCost): number | null {
+  return c.energy && c.energy.kwh > 0 && c.energy.costDisplay !== null ? c.energy.costDisplay : null
+}
+
+/**
+ * The text of a local model's figure. kWh unit: `0.014 kWh` plus ` · €0.003` when a tariff prices it. Money unit: the
+ * electricity cost (`~€0.003`); without a tariff or an exchange rate the kWh figure stands in. `– kWh` = not computed.
+ */
+export function localFigure(c: AgentCost, unit: OverlayUnit, cfg: ResolvedConfig): string {
+  const kwh = localKwh(c)
+  if (kwh === null) return KWH_PENDING
+  const money = localMoney(c)
+  if (unit === 'kwh') return money === null ? formatKwh(kwh) : `${formatKwh(kwh)} · ${moneyText(cfg, money, true)}`
+  return money === null ? formatKwh(kwh) : moneyText(cfg, money, true)
+}
+
 export interface PillLabel {
   text: string
   /** Small chip next to the text, or null. */
@@ -132,8 +154,8 @@ export const MIN_DISPLAY_COST = 0.0001
  */
 export function buildPillLabel(cost: AgentCost, tokensUsed: number, unit: OverlayUnit, cfg: ResolvedConfig): PillLabel | null {
   const flavor = flavorOf(cost)
-  if (unit === 'kwh') return flavor === 'local' ? { text: KWH_PENDING, badge: BADGE_LABEL.local, flavor } : null
-  if (flavor === 'local') return { text: KWH_PENDING, badge: BADGE_LABEL.local, flavor }
+  if (unit === 'kwh') return flavor === 'local' ? { text: localFigure(cost, unit, cfg), badge: BADGE_LABEL.local, flavor } : null
+  if (flavor === 'local' && unit !== 'tokens') return { text: localFigure(cost, unit, cfg), badge: BADGE_LABEL.local, flavor }
   if (unit === 'tokens' || flavor === 'hidden') {
     if (tokensUsed <= 0) return null
     return { text: `${formatTokensCompact(tokensUsed)} tok`, badge: flavor === 'hidden' ? BADGE_LABEL.hidden : null, flavor }
@@ -184,6 +206,36 @@ function amountsByKind(c: AgentCost): Partial<Record<BillingKind, number>> {
   return out
 }
 
+/**
+ * Header line for the local agents: summed kWh, plus the summed electricity cost when every local agent with energy
+ * has one (a mixed sum would be a lie, so a missing tariff or exchange rate leaves the money out and says so in a note).
+ */
+function localTotal(items: readonly SummaryItem[], flavors: readonly Flavor[], unit: OverlayUnit, cfg: ResolvedConfig, notes: string[]): string {
+  let kwh = 0
+  let money = 0
+  let withEnergy = 0
+  let priced = 0
+  items.forEach((it, i) => {
+    if (flavors[i] !== 'local') return
+    const k = localKwh(it.cost)
+    if (k === null) return
+    withEnergy++
+    kwh += k
+    const m = localMoney(it.cost)
+    if (m !== null) { money += m; priced++ }
+  })
+  if (withEnergy === 0) {
+    const noProfile = items.some((it, i) => flavors[i] === 'local' && it.cost.energy === null)
+    notes.push(noProfile ? 'local model without an energy profile: kWh not computed' : 'local model: no busy time recorded yet')
+    return KWH_PENDING
+  }
+  if (priced === 0 || priced < withEnergy) {
+    if (priced < withEnergy) notes.push(priced === 0 ? 'no tariff / exchange rate: electricity cost not computed' : 'some local agents have no electricity cost (tariff or exchange rate missing)')
+    return formatKwh(kwh)
+  }
+  return unit === 'kwh' ? `${formatKwh(kwh)} · ${moneyText(cfg, money, true)}` : moneyText(cfg, money, true)
+}
+
 export function buildCostSummary(items: readonly SummaryItem[], unit: OverlayUnit, cfg: ResolvedConfig): CostSummary {
   const flavors = items.map(i => flavorOf(i.cost))
   const totalTokens = items.reduce((s, i) => s + i.tokens, 0)
@@ -208,7 +260,7 @@ export function buildCostSummary(items: readonly SummaryItem[], unit: OverlayUni
   if (unit === 'tokens') {
     lines.push({ flavor: 'neutral', text: formatTokensCompact(totalTokens), label: 'tokens' })
   } else if (unit === 'kwh') {
-    if (count('local') > 0) lines.push({ flavor: 'local', text: KWH_PENDING, label: FLAVOR_WORD.local })
+    if (count('local') > 0) lines.push({ flavor: 'local', text: localTotal(items, flavors, unit, cfg, notes), label: FLAVOR_WORD.local })
     else notes.push('kWh applies to local models only; none in this session')
   } else {
     // Hidden subscription results are excluded from the sums. billed / list-equivalent / estimated each get a line when
@@ -222,7 +274,7 @@ export function buildCostSummary(items: readonly SummaryItem[], unit: OverlayUni
     if (present.billed) lines.push({ flavor: 'billed', text: moneyText(cfg, money.billed, false), label: FLAVOR_WORD.billed })
     if (present['list-equivalent']) lines.push({ flavor: 'list-equivalent', text: `${moneyText(cfg, money['list-equivalent'], false)} sub`, label: FLAVOR_WORD['list-equivalent'] })
     if (present.estimated) lines.push({ flavor: 'estimated', text: moneyText(cfg, money.estimated, true), label: FLAVOR_WORD.estimated })
-    if (count('local') > 0) lines.push({ flavor: 'local', text: KWH_PENDING, label: FLAVOR_WORD.local })
+    if (count('local') > 0) lines.push({ flavor: 'local', text: localTotal(items, flavors, 'kwh', cfg, notes), label: FLAVOR_WORD.local })
   }
 
   const hidden = count('hidden')
@@ -234,9 +286,9 @@ export function buildCostSummary(items: readonly SummaryItem[], unit: OverlayUni
   const rows: SummaryRow[] = []
   items.forEach((it, i) => {
     const f = flavors[i]
-    if (unit === 'kwh') { if (f === 'local') rows.push({ name: it.name, text: KWH_PENDING, flavor: f, ratio: 0 }); return }
+    if (unit === 'kwh') { if (f === 'local') rows.push({ name: it.name, text: localFigure(it.cost, unit, cfg), flavor: f, ratio: localKwh(it.cost) ?? 0 }); return }
     if (unit === 'tokens' || f === 'hidden') { rows.push({ name: it.name, text: `${formatTokensCompact(it.tokens)} tok`, flavor: f, ratio: it.tokens }); return }
-    if (f === 'local') { rows.push({ name: it.name, text: KWH_PENDING, flavor: f, ratio: 0 }); return }
+    if (f === 'local') { rows.push({ name: it.name, text: localFigure(it.cost, unit, cfg), flavor: f, ratio: localMoney(it.cost) ?? 0 }); return }
     rows.push({ name: it.name, text: moneyFigure(it.cost, cfg), flavor: f, ratio: it.cost.amount })
   })
   rows.sort((a, b) => b.ratio - a.ratio)
@@ -330,7 +382,7 @@ function sumUsage(rs: readonly PriceResult[]): string {
  * (tiered models): the same rows, with tokens summed, one formula line per bucket and the summed result.
  */
 export function buildAgentTooltip(cost: AgentCost, cfg: ResolvedConfig): CostTooltip {
-  const first = buildCostTooltip(cost.results[0], cfg)
+  const first = buildCostTooltip(cost.results[0], cfg, cost.energy)
   if (cost.results.length < 2) return first
   const total = cost.results.reduce((s, r) => s + (r.hidden || r.kind === 'unpriced' ? 0 : r.amount), 0)
   const estimate = flavorOf(cost) === 'estimated'

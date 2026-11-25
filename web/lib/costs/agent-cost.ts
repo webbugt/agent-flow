@@ -10,11 +10,13 @@
 import { priceUsage } from './price'
 import type { PriceResult } from './price'
 import type { PromptBucket } from './tiers'
-import type { ResolvedConfig, UsageTokens } from './types'
+import { computeEnergy } from './energy'
+import type { EnergyResult } from './energy'
+import type { EnergyUsage, ResolvedConfig, UsageTokens } from './types'
 
 export interface AgentSpendInput {
   /** Billed usage, as reported by the runtime. */
-  spend?: (UsageTokens & { model?: string; provider?: string; byBucket?: Partial<Record<PromptBucket, UsageTokens>> }) | undefined
+  spend?: (UsageTokens & { model?: string; provider?: string; byBucket?: Partial<Record<PromptBucket, UsageTokens>>; energy?: EnergyUsage }) | undefined
   tokensUsed: number
   model?: string
   runtime?: string
@@ -31,6 +33,11 @@ export interface AgentCost {
   kind: PriceResult['kind']
   /** Any result could not be priced. */
   unpriced: boolean
+  /**
+   * Local models: kWh and electricity cost of the stored busy time under the current energy profile and tariff.
+   * null for every other agent, and for a local agent whose model has no (defined) energy profile.
+   */
+  energy: EnergyResult | null
 }
 
 /** A prompt size that falls inside each bucket (tier selection only looks at which side of a boundary it is on). */
@@ -63,5 +70,7 @@ export function priceAgent(config: ResolvedConfig, agent: AgentSpendInput): Agen
     if (r.kind === 'unpriced') unpriced = true
     if (!r.hidden) amount += r.amount
   }
-  return { amount, estimate, results, kind: results[0].kind, unpriced }
+  const pricing = results[0].pricing
+  const energy = pricing.billing === 'local' ? computeEnergy(config, pricing.energyProfile, agent.spend?.energy) : null
+  return { amount, estimate, results, kind: results[0].kind, unpriced, energy }
 }
