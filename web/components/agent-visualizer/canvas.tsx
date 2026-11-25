@@ -21,9 +21,11 @@ import {
   detectStateChanges as detectStateChangesPure,
 } from './canvas/index'
 import { useCanvasCamera } from '@/hooks/use-canvas-camera'
-import { useCanvasInteraction } from '@/hooks/use-canvas-interaction'
+import { useCanvasInteraction, type CostPillHit } from '@/hooks/use-canvas-interaction'
 import { SHOT_MODE, registerShotHook, type ShotRect } from '@/lib/shot-mode'
-import { costPillRect } from './canvas/draw-cost'
+import { costPillRect, agentCostOf } from './canvas/draw-cost'
+import { CostTooltip } from './cost-tooltip'
+import { setCostPillRects } from '@/lib/cost-overlay-store'
 
 function unregisterAll(...fns: Array<() => void>): () => void {
   return () => { for (const f of fns) f() }
@@ -57,6 +59,17 @@ export function AgentCanvas({
   const containerRef = useRef<HTMLDivElement>(null)
   const mainCanvasRef = useRef<HTMLCanvasElement>(null)
   const [dimensions, setDimensions] = useState({ width: 800, height: 600 })
+  // Cost pill tooltip: hover shows it, a click or tap pins it (touch)
+  const [pillHover, setPillHover] = useState<CostPillHit | null>(null)
+  const [pillPinned, setPillPinned] = useState<CostPillHit | null>(null)
+  const onCostPill = useCallback((hit: CostPillHit | null, how: 'hover' | 'tap') => {
+    if (how === 'hover') setPillHover(hit)
+    else setPillPinned(prev => (hit === null || prev?.agentId === hit.agentId ? null : hit))
+  }, [])
+  useEffect(() => {
+    if (showCostOverlay) return
+    setPillHover(null); setPillPinned(null); setCostPillRects([])
+  }, [showCostOverlay])
   const animationRef = useRef<number>(0)
   const timeRef = useRef(0)
   const simTimeRef = useRef(0)
@@ -102,7 +115,7 @@ export function AgentCanvas({
     showCostOverlay, selectedToolCallId, selectedDiscoveryId,
     simTime: sim.currentTime, pauseAutoFit, dimensions,
     onAgentDrag, onAgentClick, onAgentHover, onContextMenu,
-    onToolCallClick, onDiscoveryClick,
+    onToolCallClick, onDiscoveryClick, onCostPill,
     isDragging: prev?.isDragging ?? false,
   })
   const drawPropsRef = useRef(makeDrawProps())
@@ -400,6 +413,12 @@ export function AgentCanvas({
         {...handlers}
         className="w-full h-full"
       />
+      {showCostOverlay && (() => {
+        const shown = pillPinned ?? pillHover
+        const agent = shown ? simulationRef.current.agents.get(shown.agentId) : undefined
+        if (!shown || !agent) return null
+        return <CostTooltip cost={agentCostOf(agent)} anchor={shown} pinned={pillPinned !== null} onClose={() => setPillPinned(null)} />
+      })()}
     </div>
   )
 }

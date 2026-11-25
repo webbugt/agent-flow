@@ -1,12 +1,16 @@
 "use client"
 
-import { useState, useCallback, useMemo, useEffect, useLayoutEffect, useRef } from "react"
+import { useState, useCallback, useMemo, useEffect, useLayoutEffect, useRef, useSyncExternalStore } from "react"
 import { useAgentSimulation } from "@/hooks/use-agent-simulation"
 import { useVSCodeBridge } from "@/hooks/use-vscode-bridge"
 import { useSelectionState } from "@/hooks/use-selection-state"
 import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts"
 import { AgentCanvas } from "./canvas"
-import { agentSpend } from "./canvas/draw-cost"
+import { agentCostOf } from "./canvas/draw-cost"
+import { effectiveCosts } from "@/lib/costs/active"
+import { buildTopBarCost, describeSources } from "@/lib/costs/overlay"
+import { getOverlayUnit, overlayUnitVersion, subscribeOverlayUnit } from "@/lib/cost-overlay-store"
+import { CostsSettingsDrawer } from "./costs-settings-drawer"
 import { ControlBar } from "./control-bar"
 import { AgentDetailCard } from "./agent-detail-card"
 import { GlassContextMenu } from "./glass-context-menu"
@@ -310,13 +314,20 @@ export function AgentVisualizer() {
   }, [agents])
 
   const costsStatus = useCostsConfig()
-  // Display-currency total; the dependency makes it follow a config change.
-  const totalCostUsd = useMemo(() => {
-    let sum = 0
-    for (const a of agents.values()) sum += agentSpend(a).amount
-    return sum
+  const [showCostSettings, setShowCostSettings] = useState(false)
+  const costUnit = useSyncExternalStore(subscribeOverlayUnit, overlayUnitVersion, overlayUnitVersion)
+  // Top bar cost: split by billing kind (billed / list-equiv / estimated), in the unit in effect. Follows a config change.
+  const costText = useMemo(() => {
+    const items = Array.from(agents.values()).filter(a => a.tokensUsed > 0 || a.spend).map(a => ({ name: a.name, cost: agentCostOf(a), tokens: a.tokensUsed }))
+    return buildTopBarCost(items, getOverlayUnit(), effectiveCosts())
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [agents, costsStatus.resolution])
+  }, [agents, costsStatus.resolution, costUnit])
+  const costSources = useMemo(() => describeSources(costsStatus.sources), [costsStatus.sources])
+  const seenProviders = useMemo(() => {
+    const out = new Set<string>()
+    for (const a of agents.values()) if (a.spend?.provider) out.add(a.spend.provider)
+    return Array.from(out)
+  }, [agents])
 
   const selectedAgent = selection.selectedAgentId ? agents.get(selection.selectedAgentId) : null
   const selectedConversation = selection.selectedAgentId ? (conversations.get(selection.selectedAgentId) || []) : []
@@ -601,7 +612,10 @@ export function AgentVisualizer() {
         connectionStatus={bridge.connectionStatus}
         agentCount={agents.size}
         totalTokens={totalTokens}
-        totalCostUsd={totalCostUsd}
+        costText={costText}
+        projectOverride={costSources.projectOverrides}
+        projectOverrideTitle={costSources.text}
+        onOpenCostSettings={() => setShowCostSettings(true)}
         showFileAttention={showFileAttention}
         showTranscript={showTranscript}
         showCostOverlay={showCostOverlay}
@@ -617,6 +631,16 @@ export function AgentVisualizer() {
 
       {/* Costs config error banner (invalid ~/.agent-flow/costs.json etc.) */}
       <CostsConfigBanner status={costsStatus} />
+
+      {/* Cost settings drawer: prices per provider/model, currency and FX (writes the user costs.json) */}
+      {showCostSettings && (
+        <CostsSettingsDrawer
+          key={costsStatus.resolution.seq === 0 ? 'initial' : 'open'}
+          status={costsStatus}
+          seenProviders={seenProviders}
+          onClose={() => setShowCostSettings(false)}
+        />
+      )}
     </div>
     </OpenFileProvider>
   )

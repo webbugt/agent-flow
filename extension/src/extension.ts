@@ -264,6 +264,21 @@ function wirePanel(panel: VisualizerPanel): void {
         if (costsLoader) void openCostsConfig(costsLoader)
         break
 
+      case 'write-costs-config': {
+        const requestId = typeof message.requestId === 'string' ? message.requestId.slice(0, 64) : ''
+        const reply = (ok: boolean, error?: string) =>
+          panel.postMessage({ type: 'costs-config-write-result', requestId, ok, ...(error ? { error } : {}) })
+        if (!costsLoader) { reply(false, 'costs config is not available'); break }
+        if (message.layer !== 'user' && message.layer !== 'project') { reply(false, 'unknown layer'); break }
+        try {
+          costsLoader.writeConfig(message.layer, message.doc)
+          reply(true)
+        } catch (err) {
+          reply(false, err instanceof Error ? err.message : 'write failed')
+        }
+        break
+      }
+
       case 'log': {
         const webviewLog = createLogger('Webview')
         const logFn = message.level === 'error' ? webviewLog.error

@@ -1,10 +1,13 @@
 "use client"
 
-import { memo } from "react"
+import { memo, useSyncExternalStore } from "react"
 import { Z } from "@/lib/agent-types"
 import { COLORS } from "@/lib/colors"
 import { formatTokens } from "@/lib/utils"
-import { formatDisplayMoney } from "@/lib/costs/active"
+import { effectiveCosts } from "@/lib/costs/active"
+import { costToggleLabel, unitName } from "@/lib/costs/overlay"
+import { cycleOverlayUnit, getOverlayUnit, overlayUnitVersion, subscribeOverlayUnit } from "@/lib/cost-overlay-store"
+import { useActiveCostsVersion } from "@/hooks/use-costs-config"
 import { SessionTabs } from "./session-tabs"
 import type { SessionInfo, ConnectionStatus } from "@/lib/bridge-types"
 
@@ -91,8 +94,12 @@ export interface TopBarProps {
   // Stats
   agentCount: number
   totalTokens: number
-  /** Sum of per-agent cost (billed spend where reported) */
-  totalCostUsd: number
+  /** Cost totals split by billing kind, in the unit in effect (`buildTopBarCost`); '' = nothing to show. */
+  costText: string
+  /** A project .agent-flow/costs.json is in use on top of the user file. */
+  projectOverride: boolean
+  projectOverrideTitle: string
+  onOpenCostSettings: () => void
   // Panel toggles
   showFileAttention: boolean
   showTranscript: boolean
@@ -111,10 +118,15 @@ export const TopBar = memo(function TopBar({
   sessions, selectedSessionId, sessionsWithActivity,
   onSelectSession, onCloseSession,
   isVSCode, connectionStatus,
-  agentCount, totalTokens, totalCostUsd,
+  agentCount, totalTokens, costText, projectOverride, projectOverrideTitle, onOpenCostSettings,
   showFileAttention, showTranscript, showCostOverlay, showSessionDetail, showTimeline, showFleet, isMuted,
   onTogglePanel, onToggleTimeline, onToggleFleet, onToggleMute,
 }: TopBarProps) {
+  // Re-render when the unit toggle or the loaded config (currency symbol) changes
+  useSyncExternalStore(subscribeOverlayUnit, overlayUnitVersion, overlayUnitVersion)
+  useActiveCostsVersion()
+  const cfg = effectiveCosts()
+  const unit = getOverlayUnit()
   return (
     // flex-wrap: on a narrow screen (phone, 390px) the controls drop to a second row instead
     // of running off the right edge, so Timeline / Fleet / mute stay reachable.
@@ -142,9 +154,9 @@ export const TopBar = memo(function TopBar({
         <span>{agentCount} agents</span>
         <span>
           {formatTokens(totalTokens)} tokens
-          <span style={{ color: COLORS.complete + '65', marginLeft: 4 }}>
-            ~{formatDisplayMoney(totalCostUsd, false, 2).replace(/^~/, '')}
-          </span>
+          {costText && (
+            <span data-testid="top-bar-cost" style={{ color: COLORS.complete + 'a5', marginLeft: 4 }}>{costText}</span>
+          )}
         </span>
 
         {/* Mutually exclusive panel group */}
@@ -162,8 +174,28 @@ export const TopBar = memo(function TopBar({
             style={{ background: showCostOverlay ? undefined : 'transparent', border: 'none' }}
             testId="cost-toggle"
           >
-            $Cost
+            {costToggleLabel(unit, cfg)}
           </ToggleButton>
+          {showCostOverlay && (
+            <>
+              <ToggleButton
+                active={false}
+                onClick={cycleOverlayUnit}
+                style={{ background: 'transparent', border: 'none', color: COLORS.complete }}
+                testId="cost-unit-toggle"
+              >
+                <span title="Switch the cost unit: money, kWh, tokens">unit: {unitName(unit)}</span>
+              </ToggleButton>
+              <ToggleButton active={false} onClick={onOpenCostSettings} style={{ background: 'transparent', border: 'none' }} testId="cost-settings-open">
+                <span title="Cost settings: prices, currency, exchange rate">⚙ prices</span>
+              </ToggleButton>
+              {projectOverride && (
+                <span data-testid="cost-project-badge" title={projectOverrideTitle} style={{ color: '#ffcc66', border: '1px solid #ffcc6666', borderRadius: 4, padding: '0 4px', fontSize: 9 }}>
+                  project
+                </span>
+              )}
+            </>
+          )}
         </div>
 
         {/* Independent toggles */}

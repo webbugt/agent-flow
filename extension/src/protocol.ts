@@ -55,6 +55,7 @@ export type ExtensionToWebviewMessage =
   | { type: 'session-ended'; sessionId: string }
   | { type: 'session-updated'; sessionId: string; label: string }
   | { type: 'costs-config'; costs: CostsConfigPayload }
+  | { type: 'costs-config-write-result'; requestId: string; ok: boolean; error?: string }
 
 // ─── Costs config (the host reads files, the webview validates; see web/lib/costs/layers.ts) ───
 
@@ -102,6 +103,8 @@ export type WebviewToExtensionMessage =
   | { type: 'request-disconnect' }
   | { type: 'open-file'; filePath: string; line?: number }
   | { type: 'open-costs-config' }
+  /** Settings drawer save: the host validates the shape, writes the file atomically (0600) and reloads. */
+  | { type: 'write-costs-config'; requestId: string; layer: 'user' | 'project'; doc: unknown }
   | { type: 'log'; level: 'info' | 'warn' | 'error'; message: string }
 
 // ─── Transcript Types (from Claude Code JSONL files) ─────────────────────────

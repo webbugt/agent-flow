@@ -9,18 +9,22 @@
  */
 import { emptyResolution, resolveCostsLayers } from './costs/layers'
 import type { CostsConfigPayload, CostsResolution } from './costs/layers'
+import type { SourceInfo } from './costs/overlay'
 import { setActiveCosts } from './costs/active'
 
 let resolution: CostsResolution = emptyResolution()
 let dismissedKey = ''
 let configKey = ''
 let snapshotCache: CostsStatus | null = null
+let sources: SourceInfo[] = []
 const listeners = new Set<() => void>()
 
 export interface CostsStatus {
   resolution: CostsResolution
   /** The banner was dismissed for the current set of errors. */
   dismissed: boolean
+  /** The config files the host reported (path, status, whether their content is in use): drawer and override indicator. */
+  sources: SourceInfo[]
 }
 
 function errorKey(r: CostsResolution): string {
@@ -43,6 +47,7 @@ export function applyCostsPayload(payload: CostsConfigPayload): void {
     resolution = next
     // A new set of errors un-dismisses the banner; the same errors stay dismissed.
     if (next.errors.length === 0) dismissedKey = ''
+    sources = payload.layers.map(l => ({ id: l.id, path: l.path, status: l.status, inUse: l.status === 'ok' || (l.status === 'error' && l.stale === true) }))
     setActiveCosts(next.config)
   } catch {
     // resolveCostsLayers does not throw by design; if it ever does, keep what we had.
@@ -52,7 +57,7 @@ export function applyCostsPayload(payload: CostsConfigPayload): void {
 }
 
 export function getCostsStatus(): CostsStatus {
-  if (!snapshotCache) snapshotCache = { resolution, dismissed: resolution.errors.length > 0 && errorKey(resolution) === dismissedKey }
+  if (!snapshotCache) snapshotCache = { resolution, dismissed: resolution.errors.length > 0 && errorKey(resolution) === dismissedKey, sources }
   return snapshotCache
 }
 
@@ -71,6 +76,7 @@ export function resetCostsRuntime(): void {
   resolution = emptyResolution()
   dismissedKey = ''
   configKey = ''
+  sources = []
   setActiveCosts(null)
   notify()
 }

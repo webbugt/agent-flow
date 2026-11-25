@@ -7,7 +7,18 @@ import {
   findBubbleAgentAt as findBubbleAgentAtPure,
   findDiscoveryAt as findDiscoveryAtPure,
 } from '@/components/agent-visualizer/canvas/index'
+import { findCostPillAt } from '@/lib/costs/overlay'
+import { getCostPillRects } from '@/lib/cost-overlay-store'
 import type { Transform } from './use-canvas-camera'
+
+/** A cost pill under the pointer: the agent and the pill's rectangle in viewport (client) coordinates. */
+export interface CostPillHit {
+  agentId: string
+  left: number
+  top: number
+  width: number
+  height: number
+}
 
 interface InteractionCallbacks {
   onAgentClick: (agentId: string | null) => void
@@ -16,6 +27,8 @@ interface InteractionCallbacks {
   onContextMenu: (e: React.MouseEvent, type: 'agent' | 'edge' | 'canvas', id?: string) => void
   onToolCallClick?: (toolCallId: string | null) => void
   onDiscoveryClick?: (discoveryId: string | null) => void
+  /** Pointer over a cost pill (`hover`) or a click / tap on one (`tap`); null = left the pill / tapped elsewhere. */
+  onCostPill?: (hit: CostPillHit | null, how: 'hover' | 'tap') => void
 }
 
 interface InteractionOptions {
@@ -54,6 +67,7 @@ export function useCanvasInteraction({
   // Pan tracking
   const lastPanPosRef = useRef({ x: 0, y: 0, time: 0 })
   const lastHoveredIdRef = useRef<string | null>(null)
+  const lastCostPillRef = useRef<string | null>(null)
 
   // ─── Hit detection wrappers ─────────────────────────────────────────────
 
@@ -72,6 +86,19 @@ export function useCanvasInteraction({
   const findDiscoveryAt = useCallback((x: number, y: number): string | null => {
     return findDiscoveryAtPure(x, y, drawPropsRef.current.discoveries)
   }, [drawPropsRef])
+
+  /** The cost pill at a canvas point, with its viewport rectangle (pill rects are registered per frame by drawCostLabels). */
+  const costPillAt = useCallback((x: number, y: number): CostPillHit | null => {
+    const rects = getCostPillRects()
+    if (rects.length === 0) return null
+    const id = findCostPillAt(x, y, rects)
+    if (!id) return null
+    const r = rects.find(q => q.id === id)
+    const o = mainCanvasRef.current?.getBoundingClientRect()
+    if (!r || !o) return null
+    const t = transformRef.current
+    return { agentId: id, left: o.left + t.x + r.x * t.scale, top: o.top + t.y + r.y * t.scale, width: r.w * t.scale, height: r.h * t.scale }
+  }, [mainCanvasRef, transformRef])
 
   // ─── Mouse Handlers ─────────────────────────────────────────────────────
 
@@ -92,6 +119,11 @@ export function useCanvasInteraction({
 
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
     const pos = screenToCanvas(e.clientX, e.clientY)
+    const pill = costPillAt(pos.x, pos.y)
+    if ((pill?.agentId ?? null) !== lastCostPillRef.current) {
+      lastCostPillRef.current = pill?.agentId ?? null
+      drawPropsRef.current.onCostPill?.(pill, 'hover')
+    }
     const hoveredId = findAgentAt(pos.x, pos.y)
     if (hoveredId !== lastHoveredIdRef.current) {
       lastHoveredIdRef.current = hoveredId
@@ -122,7 +154,7 @@ export function useCanvasInteraction({
         }
       }
     }
-  }, [screenToCanvas, findAgentAt, drawPropsRef, userHasNavigatedRef, transformRef, panVelocityRef])
+  }, [screenToCanvas, findAgentAt, costPillAt, drawPropsRef, userHasNavigatedRef, transformRef, panVelocityRef])
 
   const handleMouseUp = useCallback((e: React.MouseEvent) => {
     if (e.button === 2) {
@@ -144,7 +176,12 @@ export function useCanvasInteraction({
       const pos = screenToCanvas(e.clientX, e.clientY)
       const agentId = findAgentAt(pos.x, pos.y)
       const p = drawPropsRef.current
-      if (agentId) {
+      const pill = costPillAt(pos.x, pos.y)
+      if (pill) {
+        // A click or tap on a cost pill pins its tooltip (the touch way to read it); it does not select the agent.
+        p.onCostPill?.(pill, 'tap')
+      } else if (agentId) {
+        p.onCostPill?.(null, 'tap')
         p.onAgentClick(agentId)
       } else {
         const bubbleAgentId = findBubbleAgentAt(pos.x, pos.y)
@@ -159,6 +196,7 @@ export function useCanvasInteraction({
             if (discId) {
               p.onDiscoveryClick?.(discId)
             } else {
+              p.onCostPill?.(null, 'tap')
               p.onAgentClick(null)
               p.onToolCallClick?.(null)
               p.onDiscoveryClick?.(null)
@@ -173,7 +211,7 @@ export function useCanvasInteraction({
     }
     setIsDragging(false)
     dragTargetRef.current = null
-  }, [screenToCanvas, findAgentAt, findBubbleAgentAt, findToolCallAt, findDiscoveryAt, drawPropsRef, panVelocityRef])
+  }, [screenToCanvas, findAgentAt, costPillAt, findBubbleAgentAt, findToolCallAt, findDiscoveryAt, drawPropsRef, panVelocityRef])
 
   // Wheel handler attached as native event (passive: false) to allow preventDefault
   const handleWheelRef = useRef<(e: WheelEvent) => void>(() => {})
@@ -217,6 +255,10 @@ export function useCanvasInteraction({
     setIsDragging(false)
     dragTargetRef.current = null
     dragLerpRef.current = null
+    if (lastCostPillRef.current !== null) {
+      lastCostPillRef.current = null
+      drawPropsRef.current.onCostPill?.(null, 'hover')
+    }
     if (lastHoveredIdRef.current !== null) {
       lastHoveredIdRef.current = null
       drawPropsRef.current.onAgentHover(null)

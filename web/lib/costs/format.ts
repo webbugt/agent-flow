@@ -39,6 +39,14 @@ export function formatMoney(amount: number, currency = 'USD', opts: MoneyFormatO
   return `${opts.estimate ? '~' : ''}${money(amount, currency, d, d)}`
 }
 
+/** The short symbol of a currency (`$`, `€`, `£`), or its ISO code when it has none (`CHF`). */
+export function currencySymbol(currency: string): string {
+  try {
+    const parts = new Intl.NumberFormat(LOCALE, { style: 'currency', currency, currencyDisplay: 'narrowSymbol' }).formatToParts(0)
+    return parts.find(p => p.type === 'currency')?.value ?? currency
+  } catch { return currency }
+}
+
 /** Money with up to 6 decimals and no trailing noise: `$0.001675`, `$1.50`. For formulas and tooltips. */
 export function formatMoneyExact(amount: number, currency = 'USD'): string {
   if (!Number.isFinite(amount)) return '?'
@@ -58,6 +66,15 @@ export function formatRate(n: number): string {
 export function formatTokensExact(n: number): string {
   if (!Number.isFinite(n)) return '?'
   return Math.round(n).toLocaleString(LOCALE)
+}
+
+/** Short token count for pills: `842`, `5.3k`, `128k`, `1.2M`. */
+export function formatTokensCompact(n: number): string {
+  if (!Number.isFinite(n) || n < 0) return '?'
+  if (n < 1000) return String(Math.round(n))
+  if (n < 10_000) return `${(n / 1000).toFixed(1)}k`
+  if (n < 1_000_000) return `${Math.round(n / 1000)}k`
+  return `${(n / 1_000_000).toFixed(1)}M`
 }
 
 /**

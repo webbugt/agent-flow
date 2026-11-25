@@ -5,6 +5,7 @@
  */
 import * as http from 'http'
 import { createRelay } from './relay'
+import { handleCostsWrite, isCostsPath } from '../app/src/costs-route'
 import { DEFAULT_RELAY_PORT, DEV_WEB_ORIGIN_PATTERN } from '../extension/src/constants'
 import { isLoopbackHost } from '../extension/src/request-guard'
 
@@ -31,7 +32,7 @@ async function main() {
       res.setHeader('Access-Control-Allow-Origin', origin)
       res.setHeader('Vary', 'Origin')
     }
-    res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS')
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
 
     if (req.method === 'OPTIONS') {
@@ -42,6 +43,15 @@ async function main() {
 
     if (req.url === '/events') {
       return relay.handleSSE(req, res)
+    }
+
+    // Settings drawer save (dev: the page is on another local port, so its origin is checked against the dev pattern)
+    if (isCostsPath(req.url)) {
+      void handleCostsWrite(req, res, { writeConfig: (layer, doc) => relay.writeCostsConfig(layer, doc) }, o => DEV_WEB_ORIGIN_PATTERN.test(o)).catch(() => {
+        if (!res.headersSent) res.writeHead(500, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ ok: false, error: 'costs config write failed' }))
+      })
+      return
     }
 
     res.writeHead(200, { 'Content-Type': 'text/plain' })

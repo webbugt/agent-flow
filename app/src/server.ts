@@ -44,6 +44,7 @@ export async function startServer(options: ServerOptions) {
   const server = http.createServer(createRequestListener({
     handleSSE: (req, res) => relay.handleSSE(req, res),
     fleet: { anonymize: relay.anonymize },
+    costs: { writeConfig: (layer, doc) => relay.writeCostsConfig(layer, doc) },
   }))
 
   server.listen(port, '127.0.0.1', () => {

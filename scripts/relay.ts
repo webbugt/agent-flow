@@ -382,6 +382,8 @@ export interface Relay {
   anonymize: AnonymizePolicy
   /** Handle an incoming SSE connection */
   handleSSE: (req: http.IncomingMessage, res: http.ServerResponse) => void
+  /** Write the user or project costs.json (settings drawer); the watcher then publishes it. Throws on refusal. */
+  writeCostsConfig: (layer: 'user' | 'project', doc: unknown) => { path: string }
   /** Clean up all resources */
   dispose: () => void
 }
@@ -542,6 +544,7 @@ export async function createRelay(options: RelayOptions): Promise<Relay> {
 
   return {
     anonymize,
+    writeCostsConfig: (layer, doc) => costsLoader.writeConfig(layer, doc),
     handleSSE(req: http.IncomingMessage, res: http.ServerResponse) {
       res.writeHead(200, {
         'Content-Type': 'text/event-stream',

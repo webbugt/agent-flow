@@ -30,6 +30,8 @@ class VSCodeBridge {
   private costsListeners: CostsCallback[] = []
   /** Latest `costs-config` message; a late subscriber gets it at once. */
   private lastCosts: CostsConfigPayload | null = null
+  private writeSeq = 0
+  private pendingWrites = new Map<string, (r: { ok: true } | { ok: false; error: string }) => void>()
 
   constructor() {
     if (typeof window !== 'undefined') {
@@ -86,6 +88,15 @@ class VSCodeBridge {
         if (!c || c.version !== 1 || !Array.isArray(c.layers) || typeof c.seq !== 'number') break
         this.lastCosts = c as CostsConfigPayload
         for (const cb of [...this.costsListeners]) cb(this.lastCosts)
+        break
+      }
+
+      case 'costs-config-write-result': {
+        const pending = this.pendingWrites.get(String(data.requestId))
+        if (pending) {
+          this.pendingWrites.delete(String(data.requestId))
+          pending(data.ok === true ? { ok: true } : { ok: false, error: typeof data.error === 'string' ? data.error : 'write failed' })
+        }
         break
       }
 
@@ -176,6 +187,21 @@ class VSCodeBridge {
   /** Ask the host to open the costs file in an editor (no-op outside VS Code). */
   openCostsConfig(): void {
     this.postToExtension({ type: 'open-costs-config' })
+  }
+
+  /**
+   * Save the costs document through the extension host (the settings drawer). Resolves when the host answers;
+   * the new config then arrives as a normal `costs-config` message. Rejects nothing: failures come back as `{ ok: false, error }`.
+   */
+  writeCostsConfig(layer: 'user' | 'project', doc: unknown, timeoutMs = 10_000): Promise<{ ok: true } | { ok: false; error: string }> {
+    return new Promise(resolve => {
+      const requestId = `w${++this.writeSeq}-${Date.now().toString(36)}`
+      const timer = setTimeout(() => {
+        if (this.pendingWrites.delete(requestId)) resolve({ ok: false, error: 'the extension did not answer' })
+      }, timeoutMs)
+      this.pendingWrites.set(requestId, r => { clearTimeout(timer); resolve(r) })
+      this.postToExtension({ type: 'write-costs-config', requestId, layer, doc })
+    })
   }
 
   private postToExtension(message: Record<string, unknown>): void {
