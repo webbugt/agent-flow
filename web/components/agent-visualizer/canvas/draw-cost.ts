@@ -216,10 +216,24 @@ export function drawCostSummaryPanel(
   const canvasH = ctx.canvas.height / dpr
   const compact = canvasW < NARROW_CANVAS_PX
   const maxRows = compact ? 3 : COST_PANEL.maxRows
-  const panelW = COST_PANEL.width
   const lineH = COST_PANEL.lineHeight
   const pad = COST_PANEL.contentPadding
   const agentRows = Math.min(summary.rows.length, maxRows)
+  // A local model's line ("0.0039 kWh · ~$0.0007  local (est.)") and its row value are longer than a money figure: widen the
+  // panel to fit them (never past the canvas) instead of letting the text run out of the box or over the agent name.
+  const widest = (() => {
+    let w = 0
+    summary.lines.forEach((l, i) => {
+      ctx.font = i === 0 ? 'bold 11px monospace' : 'bold 10px monospace'
+      const tw = ctx.measureText(l.text).width
+      ctx.font = '8px monospace'
+      w = Math.max(w, tw + 8 + ctx.measureText(l.label).width)
+    })
+    ctx.font = '8px monospace'
+    for (let i = 0; i < agentRows; i++) w = Math.max(w, ctx.measureText(summary.rows[i].text).width + 70)
+    return w + pad * 2 + 2
+  })()
+  const panelW = Math.min(Math.max(COST_PANEL.width, Math.ceil(widest)), canvasW - COST_PANEL.xMargin * 2)
   const toolRows = Math.min(toolList.length, maxRows)
   const noteLines = summary.notes.length
 
@@ -292,7 +306,8 @@ export function drawCostSummaryPanel(
     ctx.font = '8px monospace'
     ctx.fillStyle = COLORS.textPrimary
     ctx.textAlign = 'left'
-    ctx.fillText(truncateText(ctx, a.name, barW - 58), panelX + pad + COST_PANEL.barInset, y + 3)
+    const valueW = ctx.measureText(a.text).width
+    ctx.fillText(truncateText(ctx, a.name, Math.max(24, barW - valueW - COST_PANEL.barInset * 2 - 6)), panelX + pad + COST_PANEL.barInset, y + 3)
 
     ctx.textAlign = 'right'
     ctx.fillStyle = FLAVOR_COLOR[a.flavor]

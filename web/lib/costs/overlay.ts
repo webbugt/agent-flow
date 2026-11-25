@@ -274,7 +274,7 @@ export function buildCostSummary(items: readonly SummaryItem[], unit: OverlayUni
     if (present.billed) lines.push({ flavor: 'billed', text: moneyText(cfg, money.billed, false), label: FLAVOR_WORD.billed })
     if (present['list-equivalent']) lines.push({ flavor: 'list-equivalent', text: `${moneyText(cfg, money['list-equivalent'], false)} sub`, label: FLAVOR_WORD['list-equivalent'] })
     if (present.estimated) lines.push({ flavor: 'estimated', text: moneyText(cfg, money.estimated, true), label: FLAVOR_WORD.estimated })
-    if (count('local') > 0) lines.push({ flavor: 'local', text: localTotal(items, flavors, 'kwh', cfg, notes), label: FLAVOR_WORD.local })
+    if (count('local') > 0) lines.push({ flavor: 'local', text: localTotal(items, flavors, unit, cfg, notes), label: FLAVOR_WORD.local })
   }
 
   const hidden = count('hidden')

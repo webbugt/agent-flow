@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { FIELD, applyDraft, checkDoc, draftFromDoc, issuesAt, newRule, otherIssues, providerIds } from './settings-edit'
+import { FIELD, applyDraft, checkDoc, draftFromDoc, draftIssues, issuesAt, newProfile, newRule, newWindow, otherIssues, providerIds } from './settings-edit'
 
 type Obj = Record<string, unknown>
 
@@ -146,4 +146,42 @@ test('JSON pointer segments are escaped: a currency or provider with / or ~ cann
   assert.equal(FIELD.provider('a/b', 'billing'), '/pricing/providers/a~1b/billing')
   assert.equal(FIELD.provider('a~b', 'billing'), '/pricing/providers/a~0b/billing')
   assert.equal(FIELD.ruleField(2, 'cacheWrite'), '/pricing/models/2/rate/cacheWrite5m')
+})
+
+test('energy profiles and the tariff round-trip through the draft; keys the drawer does not show survive', () => {
+  const doc = {
+    schemaVersion: 1,
+    pricing: { providers: { ollama: { billing: 'local', energyProfile: 'box' } } },
+    energy: {
+      profiles: { box: { powerW: { idle: 40, load: 220 }, throughput: { genTokPerSec: 40, prefillTokPerSec: 800 }, measured: { note: 'kept' } } },
+      tariff: { currency: 'USD', flatPerKWh: 0.18, tz: 'UTC', timeOfDay: [{ days: ['mon', 'tue'], from: '22:00', to: '06:00', perKWh: 0.06 }] },
+    },
+  }
+  const d = draftFromDoc(doc)
+  assert.equal(d.profiles[0].idle, '40')
+  assert.equal(d.tariff.enabled, true)
+  assert.equal(d.tariff.windows[0].perKWh, '0.06')
+  assert.deepEqual(applyDraft(doc, d), doc)
+
+  const edited = { ...d, profiles: [{ ...d.profiles[0], load: '300', pue: '1.2' }], tariff: { ...d.tariff, windows: [{ ...d.tariff.windows[0], days: [...d.tariff.windows[0].days, 'wed' as const] }] } }
+  const out = applyDraft(doc, edited) as any
+  assert.deepEqual(out.energy.profiles.box.powerW, { idle: 40, load: 300 })
+  assert.equal(out.energy.profiles.box.pue, 1.2)
+  assert.deepEqual(out.energy.profiles.box.measured, { note: 'kept' })
+  assert.deepEqual(out.energy.tariff.timeOfDay[0].days, ['mon', 'tue', 'wed'])
+  assert.deepEqual(checkDoc(out).errors, [])
+})
+
+test('turning the tariff off drops it; a tariff in another currency stores its manual rate; draft-level name problems are reported', () => {
+  const d0 = draftFromDoc({ schemaVersion: 1 })
+  const on = { ...d0, profiles: [{ ...newProfile('a'), idle: '10', load: '100' }], tariff: { ...d0.tariff, enabled: true, currency: 'eur', flat: '0.2', fx: '0.92' } }
+  const doc = applyDraft({ schemaVersion: 1 }, on) as any
+  assert.equal(doc.energy.tariff.currency, 'EUR')
+  assert.equal(doc.currency.fx.EUR, 0.92)
+  assert.equal(checkDoc(doc).errors.length, 0)
+  const off = applyDraft(doc, { ...draftFromDoc(doc), tariff: { ...draftFromDoc(doc).tariff, enabled: false } }) as any
+  assert.equal(off.energy.tariff, undefined)
+  const dup = { ...on, profiles: [newProfile('a'), newProfile('a'), newProfile('')] }
+  assert.equal(draftIssues(dup).length, 2)
+  assert.equal(newWindow().days.length, 7)
 })

@@ -349,7 +349,7 @@ test('tooltip: provider, formula, inputs and the tariff window of a local agent'
   assert.match(row('busy-time'), /20\.00 s modelled from configured throughput \(1 call without latency/)
   assert.match(row('attribution'), /marginal · pue 1\.20 · charged 160 W \(load - idle\)/)
   assert.match(row('kwh-formula'), /160 W \(200 - 40\) x 620\.00 s x pue 1\.20 \/ 3\.6e6 = 0\.033 kWh/)
-  assert.match(row('tariff'), /22:00-06:00 mon,tue,wed,thu,fri,sat,sun @ 0\.10 EUR\/kWh: 0\.033 kWh = €0\.003307/)
+  assert.match(row('tariff'), /22:00-06:00 daily \(UTC\) @ 0\.10 EUR\/kWh: 0\.033 kWh = €0\.003307/)
   assert.equal(row('result'), '0.033 kWh · €0.003307')
   assert.ok(!tooltipPlainText(t).includes('P5'), 'no placeholder text left')
 })
@@ -358,4 +358,11 @@ test('tooltip: a profile that is not defined says so', () => {
   const c = cfg({ pricing: { providers: { ollama: { billing: 'local', energyProfile: 'ghost' } } } })
   const t = buildAgentTooltip(priceAgent(c, OLL()), c)
   assert.match(t.rows.find(r => r.id === 'busy-time')!.value, /energy profile "ghost" is not defined/)
+})
+
+test('overlay: in the money unit the local header is the electricity cost alone; kWh stays in the kWh unit', () => {
+  const c = LOCAL_CFG()
+  const a = priceAgent(c, OLL(hours({ 100: { busySec: 3600, calls: 1 } })))
+  const s = buildCostSummary([{ name: 'a', cost: a, tokens: 1 }], 'money', c)
+  assert.deepEqual(s.lines, [{ flavor: 'local', text: '~€0.040', label: 'local (est.)' }])
 })

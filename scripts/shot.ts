@@ -39,7 +39,7 @@ Usage: pnpm shot --task-id <id> [options]
                         scenario's first session (Claude: "Fixture F-A", else the first Hermes title).
                         Without this the page shows whichever session's events arrived last = not stable
   --limits <L-n>        seed ~/.agent-flow/limits/claude.json from fixture L-1..L-4
-  --config <C-name>     seed ~/.agent-flow/costs.json from C-default|C-eur|C-invalid|C-custom-price|C-project-override|C-local-energy
+  --config <C-name>     seed ~/.agent-flow/costs.json from C-default|C-eur|C-invalid|C-custom-price|C-project-override|C-local-energy|C-local-energy-tou
   --out <dir>           base folder (default docs/screenshots)
   --start-index <n>     first NN in file names (default 1)
   --no-build            do not rebuild app/dist when it exists

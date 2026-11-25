@@ -368,7 +368,7 @@ const cache = new WeakMap<EnergyUsage, WeakMap<ResolvedConfig, Map<string, Energ
 function sliceLabel(tariff: Tariff, window: number): string {
   if (window < 0) return 'flat'
   const w = tariff.timeOfDay[window]
-  return `${w.from}-${w.to} ${w.days.join(',')}`
+  return `${w.from}-${w.to} ${w.days.length === 7 ? 'daily' : w.days.join(',')} (${tariff.tz ?? 'device time zone'})`
 }
 
 /**

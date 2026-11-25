@@ -392,8 +392,8 @@ function ProfileEditor({ i, pr, errors, onChange, onRemove }: {
         {num('PUE', 'pue', FIELD.profileField(name, 'pue'), '1')}
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 6, marginTop: 6 }}>
-        {num('Generate tok/s', 'gen', FIELD.throughput(name), 'optional')}
-        {num('Prompt tok/s', 'prefill', FIELD.throughput(name), 'optional')}
+        {num('Generate tok/s', 'gen', FIELD.throughput(name), 'with prompt')}
+        {num('Prompt tok/s', 'prefill', FIELD.throughput(name), 'with generate')}
       </div>
       <label style={{ display: 'block', marginTop: 6, fontSize: 9 }}>Attribution
         <select aria-label={`Profile ${i + 1} attribution`} data-testid={`profile-${i}-attribution`} value={pr.attribution}

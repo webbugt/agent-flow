@@ -112,7 +112,7 @@ test('fixture ids F-A..F-H, L-1..L-4 and C-* all exist', () => {
     assert.ok(FIXTURE_IDS.includes(id), `missing fixture ${id}`)
   }
   assert.deepEqual(Object.keys(LIMITS_FIXTURES), ['L-1', 'L-2', 'L-3', 'L-4'])
-  assert.deepEqual(Object.keys(CONFIG_FIXTURES), ['C-default', 'C-eur', 'C-invalid', 'C-custom-price', 'C-hide-subscription', 'C-project-override', 'C-broken-json', 'C-one-bad-rule', 'C-hand-edit', 'C-local-energy'])
+  assert.deepEqual(Object.keys(CONFIG_FIXTURES), ['C-default', 'C-eur', 'C-invalid', 'C-custom-price', 'C-hide-subscription', 'C-project-override', 'C-broken-json', 'C-one-bad-rule', 'C-hand-edit', 'C-local-energy', 'C-local-energy-tou'])
 })
 
 test('every config fixture except C-invalid passes the real validator (a fixture that silently fails shows the error banner, not its feature)', async () => {

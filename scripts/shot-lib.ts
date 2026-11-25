@@ -246,6 +246,11 @@ function TOGGLE_TO(unit: 'money' | 'kwh' | 'tokens'): string {
   })()`
 }
 
+/** P5 shots: select the local demo session and turn the cost overlay on. */
+const LOCAL: Step[] = [{ click: 'text:Local Demo' }, { wait: 800 }, { key: '$' }, { wait: 300 }]
+const OPEN_DRAWER: Step[] = [{ click: '[data-testid="cost-settings-open"]' }, { waitFor: '[data-testid="costs-settings-drawer"]' }, { wait: 300 }]
+function SCROLL_TO(testid: string): string { return `document.querySelector('[data-testid="${testid}"]').scrollIntoView({ block: 'start' })` }
+
 /** Built-in plans. `h0` is the harness self-test of task H0; `overlay` is what `pnpm shot:smoke` runs. */
 export const BUILTIN_PLANS: Record<string, ShotPlan> = {
   // Costs P3 hot-reload pair. Run with `--config C-default --start-index 3`. The second shot opens the page with the
@@ -322,6 +327,27 @@ export const BUILTIN_PLANS: Record<string, ShotPlan> = {
       { name: 'drawer-broken-file', viewports: ['desktop', 'phone'], steps: [{ key: '$' }, { config: 'C-broken-json' }, { wait: 7000 }, { click: '[data-testid="cost-settings-open"]' }, { waitFor: '[data-testid="costs-settings-drawer"]' }, { wait: 400 }] },
       { name: 'drawer-last-good', viewports: ['desktop', 'phone'], steps: [{ key: '$' }, { config: 'C-custom-price' }, { wait: 3000 }, { config: 'C-one-bad-rule' }, { wait: 3000 }, { click: '[data-testid="cost-settings-open"]' }, { waitFor: '[data-testid="costs-settings-drawer"]' }, { wait: 400 }] },
       { name: 'drawer-file-changed', viewports: ['desktop', 'phone'], steps: [{ key: '$' }, { config: 'C-custom-price' }, { wait: 3000 }, { click: '[data-testid="cost-settings-open"]' }, { waitFor: '[data-testid="costs-settings-drawer"]' }, { wait: 400 }, { config: 'C-hand-edit' }, { wait: 3000 }] },
+    ],
+  },
+  // Costs P5: local-model energy. Run with `--config C-local-energy --start-index <next number>`. The first shots use the flat price; then the
+  // config is rewritten to the time-of-day tariff (the live reload is the thing being shown: same busy time, new price).
+  p5: {
+    shots: [
+      // every shot is a fresh page: each one selects the local session, turns the overlay on and sets the unit itself
+      { name: 'local-kwh-and-cost', viewports: ['desktop', 'phone'], steps: [...LOCAL, { eval: TOGGLE_TO('kwh') }, { wait: 500 }] },
+      { name: 'local-money-unit', viewports: ['desktop'], steps: [...LOCAL, { eval: TOGGLE_TO('money') }, { wait: 500 }] },
+      { name: 'tooltip-energy-formula', viewports: ['desktop'], steps: [...LOCAL, { eval: TOGGLE_TO('kwh') }, { wait: 300 }, { hover: 'pill:first' }, { wait: 400 }] },
+      { name: 'tooltip-energy-formula-tap', viewports: ['phone'], steps: [...LOCAL, { eval: TOGGLE_TO('kwh') }, { wait: 300 }, { tap: 'pill:first' }, { wait: 400 }] },
+      { name: 'energy-profile-editor', viewports: ['desktop', 'phone'], steps: [...LOCAL, ...OPEN_DRAWER, { eval: SCROLL_TO('profile-0') }, { wait: 400 }] },
+    ],
+  },
+  // Costs P5, tariff effect. Run with `--config C-local-energy-tou --start-index 8`: the same fixture and busy time as p5, priced by a
+  // peak window of the current hour instead of the flat price, so the tooltip's tariff row and the result differ from p5's.
+  p5tou: {
+    shots: [
+      { name: 'tariff-tou-tooltip', viewports: ['desktop'], steps: [...LOCAL, { eval: TOGGLE_TO('kwh') }, { wait: 300 }, { hover: 'pill:first' }, { wait: 400 }] },
+      { name: 'tariff-tou-tooltip-tap', viewports: ['phone'], steps: [...LOCAL, { eval: TOGGLE_TO('kwh') }, { wait: 300 }, { tap: 'pill:first' }, { wait: 400 }] },
+      { name: 'tariff-tou-editor', viewports: ['desktop', 'phone'], steps: [...LOCAL, ...OPEN_DRAWER, { eval: SCROLL_TO('tariff-editor') }, { wait: 400 }] },
     ],
   },
   h0: {

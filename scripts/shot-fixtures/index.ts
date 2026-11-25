@@ -19,7 +19,7 @@
  *   F-G  Hermes, unknown model acme-xyz-9
  *   F-H  Claude Code transcript with no usage reported (context-size estimate path)
  *   L-1..L-4  limits file variants (not read by the app until the limits tasks land)
- *   C-default / C-eur / C-invalid / C-custom-price / C-local-energy  cost config variants (same note)
+ *   C-default / C-eur / C-invalid / C-custom-price / C-local-energy / C-local-energy-tou  cost config variants (same note)
  *
  * Hermes watcher behaviour (H0-A7, verified in scripts/hermes-logs.ts `discover`):
  * a profile's agent.log is read from its END at the moment the watcher first sees
@@ -245,6 +245,16 @@ export const CONFIG_FIXTURES: Record<string, unknown> = {
   ] } },
   // Local box: 40 W idle / 220 W under load, marginal attribution, 0.18 per kWh (schema as in web/lib/costs/validate.ts)
   'C-local-energy': { schemaVersion: 1, pricing: { providers: { ollama: { billing: 'local', energyProfile: 'box' } } }, energy: { profiles: { box: { powerW: { idle: 40, load: 220 }, throughput: { genTokPerSec: 40, prefillTokPerSec: 800 } } }, tariff: { currency: 'USD', flatPerKWh: 0.18 } } },
+  // The same box with a time-of-day tariff, built when it is READ so the capture is deterministic whatever the hour: a PEAK window of the
+  // current UTC hour (0.35 per kWh) over the flat 0.18, so the busy minutes that just ended are priced at the peak window. The tooltip names
+  // the window and the minutes in it; the editor shows it. (P5 tariff-effect shots)
+  get 'C-local-energy-tou'(): unknown {
+    const h = new Date().getUTCHours()
+    const clock = (n: number) => `${String(n).padStart(2, '0')}:00`
+    return { schemaVersion: 1, pricing: { providers: { ollama: { billing: 'local', energyProfile: 'box' } } }, energy: { profiles: { box: { powerW: { idle: 40, load: 220 }, throughput: { genTokPerSec: 40, prefillTokPerSec: 800 } } }, tariff: { currency: 'USD', flatPerKWh: 0.18, tz: 'UTC', timeOfDay: [
+      { days: ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'], from: clock(h), to: clock(h + 1), perKWh: 0.35 },
+    ] } } }
+  },
 }
 
 /** The bytes a config fixture is written as: a string as is (a broken file on purpose), anything else as JSON. */
@@ -372,6 +382,20 @@ export function hermesToolLine(sid: string, tool: string, now: number): string {
 /** The lines a Hermes fixture appends to its agent.log once the relay is watching it. */
 export function hermesLiveLines(f: HermesSessionFixture, now: number): string[] {
   const out: string[] = []
+  if (f.billing === 'local') {
+    // A local model's calls are one after the other (a call starts when the previous tool finished): the log line of a call is
+    // written when it ENDS, `latency` seconds after it began, and the watcher reads that as its busy interval (P5). Lines that
+    // all carried "now" would claim the calls ran at the same time and halve the busy time; so these end in the past, 3 s of tool time apart.
+    const total = f.calls.reduce((s, c) => s + (c.latencySec ?? 0) * 1000 + 3000, 0)
+    let t = now - total - 1000
+    f.calls.forEach((c, i) => {
+      t += (c.latencySec ?? 0) * 1000
+      out.push(hermesLogLine(f.sid, i + 1, c, t))
+      t += 3000
+      out.push(hermesToolLine(f.sid, f.tools[i % f.tools.length], t - 2800))
+    })
+    return out
+  }
   f.calls.forEach((c, i) => {
     const tool = f.tools[i % f.tools.length]
     out.push(hermesToolLine(f.sid, tool, now + i * 1000))
