@@ -61,6 +61,8 @@ export interface ClaudeSessionFixture {
   prompt: string
   billing: 'api' | 'subscription' | 'unknown'
   calls: ClaudeCall[]
+  /** Sub-agent transcripts written under <session>/subagents/agent-<id>.jsonl (F-I: one agent with billed usage, one without) */
+  subagents?: Array<{ id: string; description: string; calls: ClaudeCall[] }>
 }
 
 export interface HermesCall {
@@ -120,6 +122,24 @@ export const CLAUDE_SESSIONS: ClaudeSessionFixture[] = [
     calls: [
       { model: 'claude-fable-5-2', input: 6_000, output: 2_200, cacheRead: 0, cacheWrite5m: 30_000 },
       { model: 'claude-fable-5-2', input: 2_000, output: 3_100, cacheRead: 30_000, cacheWrite5m: 4_000, tool: { name: 'Grep', input: { pattern: 'TODO' }, result: '3 matches' } },
+    ],
+  },
+  {
+    // Mixes billing kinds in ONE session: the main agent reports usage (billed, API), its sub-agent's log reports none
+    // (priced from the context size: estimated). The summary then needs a line per kind (plan shot 12, P4 review).
+    id: 'F-I',
+    sessionId: '0a1b2c3d-0009-4000-8000-00000000f0e9',
+    prompt: 'Fixture F-I: split the demo work between two agents',
+    billing: 'api',
+    calls: [
+      { model: 'claude-sonnet-5-5', input: 3_000, output: 700, cacheRead: 0, cacheWrite5m: 12_000, tool: { name: 'Read', input: { file_path: 'src/index.ts' }, result: 'export {}' } },
+      { model: 'claude-sonnet-5-5', input: 900, output: 1_100, cacheRead: 12_000, cacheWrite5m: 1_800 },
+    ],
+    subagents: [
+      { id: 'a1f1e2d3c4b5a697', description: 'Scan the demo logs', calls: [
+        { model: 'claude-sonnet-5-5', input: 0, output: 0, noUsage: true, tool: { name: 'Grep', input: { pattern: 'ERROR' }, result: '0 matches' } },
+        { model: 'claude-sonnet-5-5', input: 0, output: 0, noUsage: true },
+      ] },
     ],
   },
   {
@@ -211,8 +231,25 @@ export const CONFIG_FIXTURES: Record<string, unknown> = {
   // A PROJECT override (written to <workspace>/.agent-flow/costs.json, not ~/.agent-flow): Sonnet at 3x the list in/out price (6/30 vs 2/10).
   // Names starting with `C-project` go to the workspace; the overlay then shows the "project" badge (R1 info finding).
   'C-project-override': { schemaVersion: 1, pricing: { models: [{ match: { provider: 'anthropic', model: 'claude-sonnet-*' }, rate: { input: 6, output: 30, cacheRead: 0.6, cacheWrite5m: 7.5, cacheWrite1h: 12 } }] } },
+  // A string is written as is (not JSON-encoded): a file that does not parse. The settings drawer must refuse to save over it (P4 review).
+  'C-broken-json': '{\n  "schemaVersion": 1,\n  "pricing": { "models": [ { "match": { "model": "claude-sonnet-*" }, "rate": { "input": 12, \n',
+  // Valid JSON, but one rule fails validation: the overlay keeps the last good copy and the drawer must not edit from it.
+  'C-one-bad-rule': { schemaVersion: 1, pricing: { models: [
+    { match: { provider: 'anthropic', model: 'claude-sonnet-*' }, rate: { input: 12, output: 60, cacheRead: 1.2, cacheWrite5m: 15, cacheWrite1h: 24 } },
+    { match: { provider: 'anthropic', model: 'claude-haiku-*' }, rate: { input: -3, output: 4 } },
+  ] } },
+  // A hand edit made while the drawer is open (adds a rule): the drawer must notice and refuse to roll it back.
+  'C-hand-edit': { schemaVersion: 1, pricing: { models: [
+    { match: { provider: 'anthropic', model: 'claude-sonnet-*' }, rate: { input: 12, output: 60, cacheRead: 1.2, cacheWrite5m: 15, cacheWrite1h: 24 } },
+    { match: { provider: 'anthropic', model: 'claude-haiku-*' }, rate: { input: 2, output: 8 } },
+  ] } },
   // Local box: 40 W idle / 220 W under load, marginal attribution, 0.18 per kWh (schema as in web/lib/costs/validate.ts)
   'C-local-energy': { schemaVersion: 1, pricing: { providers: { ollama: { billing: 'local', energyProfile: 'box' } } }, energy: { profiles: { box: { powerW: { idle: 40, load: 220 }, throughput: { genTokPerSec: 40, prefillTokPerSec: 800 } } }, tariff: { currency: 'USD', flatPerKWh: 0.18 } } },
+}
+
+/** The bytes a config fixture is written as: a string as is (a broken file on purpose), anything else as JSON. */
+export function configFixtureText(doc: unknown): string {
+  return typeof doc === 'string' ? doc : JSON.stringify(doc, null, 2) + '\n'
 }
 
 export const FIXTURE_IDS = [
@@ -308,6 +345,12 @@ export function claudeTranscriptLines(f: ClaudeSessionFixture, workspace: string
   return lines
 }
 
+/** A sub-agent's transcript: the same line shapes as the main one, flagged as a side chain of the parent session. */
+export function subagentTranscriptLines(f: ClaudeSessionFixture, sub: NonNullable<ClaudeSessionFixture['subagents']>[number], workspace: string, now: number): string[] {
+  const inner: ClaudeSessionFixture = { ...f, id: `${f.id}-${sub.id.slice(0, 4)}`, prompt: sub.description, calls: sub.calls, subagents: undefined }
+  return claudeTranscriptLines(inner, workspace, now).map(l => JSON.stringify({ ...JSON.parse(l), isSidechain: true, agentId: sub.id }))
+}
+
 export function hermesLogLine(sid: string, n: number, c: HermesCall, now: number): string {
   const d = new Date(now)
   const pad = (v: number, w = 2) => String(v).padStart(w, '0')
@@ -376,6 +419,13 @@ export function materializeFixtures(opts: {
     const file = path.join(projectDir, `${f.sessionId}.jsonl`)
     fs.writeFileSync(file, claudeTranscriptLines(f, opts.workspace, now).join('\n') + '\n')
     claudeFiles.push(file)
+    for (const sub of f.subagents ?? []) {
+      const dir = path.join(projectDir, f.sessionId, 'subagents')
+      fs.mkdirSync(dir, { recursive: true })
+      fs.writeFileSync(path.join(dir, `agent-${sub.id}.meta.json`), JSON.stringify({ agentType: 'general-purpose', description: sub.description }))
+      fs.writeFileSync(path.join(dir, `agent-${sub.id}.jsonl`), subagentTranscriptLines(f, sub, opts.workspace, now).join('\n') + '\n')
+      claudeFiles.push(path.join(dir, `agent-${sub.id}.jsonl`))
+    }
   }
 
   const hermesRoot = path.join(opts.home, '.hermes')
@@ -412,7 +462,7 @@ export function materializeFixtures(opts: {
   if (opts.config && CONFIG_FIXTURES[opts.config] !== null) {
     if (!(opts.config in CONFIG_FIXTURES)) throw new Error(`unknown config fixture ${opts.config}`)
     fs.mkdirSync(af, { recursive: true })
-    fs.writeFileSync(path.join(af, 'costs.json'), JSON.stringify(CONFIG_FIXTURES[opts.config], null, 2))
+    fs.writeFileSync(path.join(af, 'costs.json'), configFixtureText(CONFIG_FIXTURES[opts.config]))
   } else if (opts.config && !(opts.config in CONFIG_FIXTURES)) {
     throw new Error(`unknown config fixture ${opts.config}`)
   }
@@ -434,7 +484,7 @@ export function rewriteConfigFixture(home: string, name: string, workspace?: str
   if (doc === null) { fs.rmSync(file, { force: true }); return }
   fs.mkdirSync(af, { recursive: true })
   const tmp = path.join(af, `.costs.json.${process.pid}.tmp`)
-  fs.writeFileSync(tmp, JSON.stringify(doc, null, 2) + '\n', { mode: 0o600 })
+  fs.writeFileSync(tmp, configFixtureText(doc), { mode: 0o600 })
   fs.renameSync(tmp, file)
 }
 
@@ -475,6 +525,48 @@ export function appendClaudeLiveLines(m: Materialized, scenario: string, now = D
     })
     fs.appendFileSync(file, line + '\n')
     n++
+  }
+  n += appendSubagentLiveLines(m, claude, now)
+  return n
+}
+
+/**
+ * F-I (billed main agent + estimated sub-agent). Once the watcher is attached: the main agent writes one assistant turn WITH usage
+ * (billed) that also calls the Task tool, and the sub-agent's own transcript gets a turn with a tool call that has no result yet
+ * (the watcher only follows a sub-agent that is still working) and no usage (priced from its context size: an estimate).
+ */
+function appendSubagentLiveLines(m: Materialized, claude: ClaudeSessionFixture[], now: number): number {
+  let n = 0
+  for (const f of claude) {
+    const sub = f.subagents?.[0]
+    if (!sub) continue
+    const file = m.claudeFiles.find(p => p.endsWith(`${f.sessionId}.jsonl`))
+    const subFile = m.claudeFiles.find(p => p.endsWith(`agent-${sub.id}.jsonl`))
+    if (!file || !subFile) continue
+    const base = { cwd: m.workspace, version: 'fixture', gitBranch: 'main' }
+    const taskId = `toolu_${f.id.replace('-', '')}_task`
+    fs.appendFileSync(file, JSON.stringify({
+      ...base, sessionId: f.sessionId, type: 'assistant', uuid: `${f.sessionId}-live-task`, timestamp: new Date(now).toISOString(),
+      message: {
+        id: `msg_${f.id.replace('-', '')}_live`, role: 'assistant', model: 'claude-sonnet-5-5',
+        content: [
+          { type: 'text', text: `Synthetic live turn for ${f.id}.` },
+          { type: 'tool_use', id: taskId, name: 'Task', input: { description: sub.description, subagent_type: 'general-purpose', prompt: 'Scan the demo logs for errors.' } },
+        ],
+        usage: { input_tokens: 2_500, output_tokens: 600, cache_read_input_tokens: 13_800, cache_creation_input_tokens: 1_000, cache_creation: { ephemeral_5m_input_tokens: 1_000, ephemeral_1h_input_tokens: 0 } },
+      },
+    }) + '\n')
+    fs.appendFileSync(subFile, JSON.stringify({
+      ...base, sessionId: f.sessionId, isSidechain: true, agentId: sub.id, type: 'assistant', uuid: `${f.sessionId}-sub-live`, timestamp: new Date(now + 500).toISOString(),
+      message: {
+        id: `msg_${f.id.replace('-', '')}_sublive`, role: 'assistant', model: 'claude-sonnet-5-5',
+        content: [
+          { type: 'text', text: 'Synthetic sub-agent turn: scanning the demo logs for errors in every file of the demo project, one file after another.' },
+          { type: 'tool_use', id: `toolu_${f.id.replace('-', '')}_sublive`, name: 'Grep', input: { pattern: 'ERROR' } },
+        ],
+      },
+    }) + '\n')
+    n += 2
   }
   return n
 }

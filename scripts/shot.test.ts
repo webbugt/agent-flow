@@ -112,14 +112,15 @@ test('fixture ids F-A..F-H, L-1..L-4 and C-* all exist', () => {
     assert.ok(FIXTURE_IDS.includes(id), `missing fixture ${id}`)
   }
   assert.deepEqual(Object.keys(LIMITS_FIXTURES), ['L-1', 'L-2', 'L-3', 'L-4'])
-  assert.deepEqual(Object.keys(CONFIG_FIXTURES), ['C-default', 'C-eur', 'C-invalid', 'C-custom-price', 'C-hide-subscription', 'C-project-override', 'C-local-energy'])
+  assert.deepEqual(Object.keys(CONFIG_FIXTURES), ['C-default', 'C-eur', 'C-invalid', 'C-custom-price', 'C-hide-subscription', 'C-project-override', 'C-broken-json', 'C-one-bad-rule', 'C-hand-edit', 'C-local-energy'])
 })
 
 test('every config fixture except C-invalid passes the real validator (a fixture that silently fails shows the error banner, not its feature)', async () => {
   const { validateConfig } = await import('../web/lib/costs/validate')
   for (const [id, doc] of Object.entries(CONFIG_FIXTURES)) {
     const r = validateConfig(doc)
-    if (id === 'C-invalid') assert.equal(r.ok, false, 'C-invalid must stay invalid')
+    if (typeof doc === 'string') assert.throws(() => JSON.parse(doc), `${id} must stay a file that does not parse`)
+    else if (id === 'C-invalid' || id === 'C-one-bad-rule') assert.equal(r.ok, false, `${id} must stay invalid`)
     else assert.deepEqual(r.errors, [], `${id} has validation errors`)
   }
 })
@@ -239,4 +240,17 @@ test('C-project* fixtures are written to the workspace (project layer), never to
     assert.ok(JSON.parse(fs.readFileSync(file, 'utf8')).pricing)
     assert.equal(fs.existsSync(path.join(home, '.agent-flow', 'costs.json')), false)
   } finally { fs.rmSync(home, { recursive: true, force: true }); fs.rmSync(ws, { recursive: true, force: true }) }
+})
+
+test('F-I mixes billing kinds in one session: the main agent reports usage, the sub-agent transcript does not', async () => {
+  const { claudeTranscriptLines, subagentTranscriptLines, configFixtureText } = await import('./shot-fixtures')
+  const f = CLAUDE_SESSIONS.find(s => s.id === 'F-I')!
+  assert.equal(f.subagents?.length, 1)
+  const main = claudeTranscriptLines(f, '/tmp/ws', 1_700_000_000_000).map(l => JSON.parse(l))
+  assert.ok(main.some(l => l.type === 'assistant' && l.message.usage), 'main agent has usage')
+  const sub = subagentTranscriptLines(f, f.subagents![0], '/tmp/ws', 1_700_000_000_000).map(l => JSON.parse(l))
+  assert.ok(sub.length > 0 && sub.every(l => l.isSidechain === true && l.agentId === f.subagents![0].id && l.sessionId === f.sessionId))
+  assert.ok(sub.filter(l => l.type === 'assistant').every(l => !l.message.usage), 'sub-agent reports no usage')
+  assert.equal(configFixtureText('raw {'), 'raw {', 'a string fixture is written as is')
+  assert.equal(configFixtureText({ a: 1 }), '{\n  "a": 1\n}\n')
 })

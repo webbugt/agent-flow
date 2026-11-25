@@ -237,7 +237,7 @@ export function validatePlan(raw: unknown): ShotPlan {
 function TOGGLE_TO(unit: 'money' | 'kwh' | 'tokens'): string {
   return `(async () => {
     for (let i = 0; i < 4; i++) {
-      const cur = localStorage.getItem('agentFlow.costUnit') || 'money'
+      const cur = (() => { try { return JSON.parse(localStorage.getItem('agentFlow.costUnit') || 'null').unit } catch { return null } })() || 'money'
       if (cur === ${JSON.stringify(unit)}) return cur
       document.querySelector('[data-testid="cost-unit-toggle"]').click()
       await new Promise(r => setTimeout(r, 120))
@@ -310,6 +310,18 @@ export const BUILTIN_PLANS: Record<string, ShotPlan> = {
       { name: 'tooltip-haiku-tier-high', viewports: ['desktop'], steps: [{ click: 'text:Fixture F-C' }, { wait: 500 }, { key: '$' }, { hover: 'pill:first' }, { wait: 300 }] },
       { name: 'tooltip-unknown-fallback', viewports: ['desktop'], steps: [{ click: 'text:Unknown Demo' }, { wait: 500 }, { key: '$' }, { hover: 'pill:first' }, { wait: 300 }] },
       { name: 'tooltip-estimate-no-usage', viewports: ['desktop'], steps: [{ click: 'text:Fixture F-H' }, { wait: 500 }, { key: '$' }, { hover: 'pill:first' }, { wait: 300 }] },
+    ],
+  },
+  // Costs P4 review round 1. Run with `--scenario all --start-index <next number>`. Shot 12 of the plan (a session that mixes billing
+  // kinds: F-I has a billed main agent and an estimated sub-agent) and the settings drawer in the three states in which it must not
+  // offer Save (broken file, invalid file with a last-good copy, file changed on disk after the drawer opened). The config steps
+  // keep the file in place for the next shot, so the order matters: broken -> repaired and one bad rule -> hand edit.
+  p4c: {
+    shots: [
+      { name: 'summary-split-by-kind', viewports: ['desktop', 'phone'], steps: [{ click: 'text:Fixture F-I' }, { wait: 1500 }, { key: '$' }, { eval: TOGGLE_TO('money') }, { wait: 600 }] },
+      { name: 'drawer-broken-file', viewports: ['desktop', 'phone'], steps: [{ key: '$' }, { config: 'C-broken-json' }, { wait: 7000 }, { click: '[data-testid="cost-settings-open"]' }, { waitFor: '[data-testid="costs-settings-drawer"]' }, { wait: 400 }] },
+      { name: 'drawer-last-good', viewports: ['desktop', 'phone'], steps: [{ key: '$' }, { config: 'C-custom-price' }, { wait: 3000 }, { config: 'C-one-bad-rule' }, { wait: 3000 }, { click: '[data-testid="cost-settings-open"]' }, { waitFor: '[data-testid="costs-settings-drawer"]' }, { wait: 400 }] },
+      { name: 'drawer-file-changed', viewports: ['desktop', 'phone'], steps: [{ key: '$' }, { config: 'C-custom-price' }, { wait: 3000 }, { click: '[data-testid="cost-settings-open"]' }, { waitFor: '[data-testid="costs-settings-drawer"]' }, { wait: 400 }, { config: 'C-hand-edit' }, { wait: 3000 }] },
     ],
   },
   h0: {
