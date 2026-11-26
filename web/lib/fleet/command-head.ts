@@ -51,6 +51,9 @@ export interface Word {
   text: string
   /** An unquoted `&&`, `||`, `;`, `|` or `&`. */
   op: boolean
+  /** Offsets of the word in the line it was split from (`line.slice(start, end)` is the word as typed, quotes included). */
+  start: number
+  end: number
 }
 
 /** Split a command line into words and operators; quotes group, a backslash escapes. Not a shell parser. */
@@ -58,11 +61,16 @@ export function words(line: string): Word[] {
   const out: Word[] = []
   let cur = ''
   let has = false
+  let start = 0
   let quote: '"' | "'" | null = null
-  const push = () => {
-    if (has) out.push({ text: cur, op: false })
+  const push = (end: number) => {
+    if (has) out.push({ text: cur, op: false, start, end })
     cur = ''
     has = false
+  }
+  const begin = (i: number) => {
+    if (!has) start = i
+    has = true
   }
   for (let i = 0; i < line.length && out.length < MAX_WORDS; i++) {
     const c = line[i]
@@ -72,19 +80,19 @@ export function words(line: string): Word[] {
       else cur += c
       continue
     }
-    if (c === '"' || c === "'") { quote = c; has = true; continue }
-    if (c === '\\' && i + 1 < line.length) { cur += line[++i]; has = true; continue }
-    if (c === ' ' || c === '\t') { push(); continue }
+    if (c === '"' || c === "'") { quote = c; begin(i); continue }
+    if (c === '\\' && i + 1 < line.length) { begin(i); cur += line[++i]; continue }
+    if (c === ' ' || c === '\t') { push(i); continue }
     if (c === ';' || c === '|' || c === '&') {
-      push()
+      push(i)
       const two = line.slice(i, i + 2)
-      if (two === '&&' || two === '||') { out.push({ text: two, op: true }); i++ } else out.push({ text: c, op: true })
+      if (two === '&&' || two === '||') { out.push({ text: two, op: true, start: i, end: i + 2 }); i++ } else out.push({ text: c, op: true, start: i, end: i + 1 })
       continue
     }
+    begin(i)
     cur += c
-    has = true
   }
-  push()
+  push(line.length)
   return out
 }
 
@@ -153,6 +161,25 @@ export function bashCommandOf(payload: Record<string, unknown>): string | null {
     : null
   const text = fromInput !== null && fromInput.trim() !== '' ? fromInput : typeof payload.args === 'string' ? payload.args : null
   return text !== null && text.trim() !== '' ? text : null
+}
+
+/**
+ * The length at which the Claude hook path cuts a Bash command (`ARGS_MAX` in extension/src/constants.ts; the extension is
+ * not importable from the web app, so it is copied here). The transcript path and Hermes deliver the full command.
+ */
+export const HOOK_ARGS_MAX = 80
+
+/**
+ * True when the command text of this payload may be the cut hook text: there is no full command (`inputData.command`) and the
+ * `args` text is as long as the hook cut leaves it. Such a text can end in the middle of a word (`request-review` as
+ * `request_re`, a `--board` not yet seen), so nothing may be decided on its last word, and the full delivery of the same
+ * call replaces whatever it produced.
+ */
+export function bashCommandCut(payload: Record<string, unknown>): boolean {
+  const input = payload.inputData
+  const command = input && typeof input === 'object' && !Array.isArray(input) ? (input as Record<string, unknown>).command : undefined
+  if (typeof command === 'string' && command.trim() !== '') return false
+  return typeof payload.args === 'string' && payload.args.length >= HOOK_ARGS_MAX
 }
 
 /** The program a shell command runs, or `command` when there is no plain program name to show. */

@@ -27,7 +27,7 @@ import { MAX_FADE_SECONDS, MAX_LINGER_SECONDS, type ResourceKind } from './optio
 import { blockId, type BlockStore, type ResourceBlock } from './resource-block'
 import { isPersonalTag } from './memory-blocks'
 import { identityFromLabel } from './fleet-model'
-import { ASSIGN_RE, SCAN_CHARS, SHELLS, WRAPPERS, bashCommandOf, commandHead, words } from './command-head'
+import { ASSIGN_RE, SCAN_CHARS, SHELLS, WRAPPERS, bashCommandCut, bashCommandOf, commandHead, words, type Word } from './command-head'
 import { maskSecrets } from './secret-mask'
 
 export type UseKind = Extract<ResourceKind, 'memory' | 'subsystem' | 'kanban'>
@@ -52,8 +52,6 @@ const MAX_AGE_MS = (MAX_LINGER_SECONDS + MAX_FADE_SECONDS) * 1000
 const TAG_RE = /^[a-z0-9_.:]{1,80}$/
 export const BOARD_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/i
 export const VERB_RE = /^[a-z_]{1,24}$/
-/** The board of a `hermes kanban` call without `--board`: the legacy default board (`DEFAULT_BOARD_SLUG` in kanban-source.ts, server-only, so copied here and pinned by a test). */
-export const DEFAULT_KANBAN_BOARD = 'default'
 
 /** One use of a block by one session, as the tracker keeps it. No content. */
 export interface EventUse {
@@ -187,23 +185,62 @@ export function usesOfCall(call: { name: string; input: Record<string, unknown> 
  *   - Global options before `kanban` are skipped; a known value option (`-p taxis`, `--profile taxis`, `-m x`, ...) takes the next word.
  *   - `--board <slug>` / `--board=<slug>` counts before or after the verb (hermes wants it before). The verb is the first word
  *     after `kanban` that is not an option; `request-review` is recorded as `request_review` (the tool-name spelling).
- *   - No `--board`: the default board (DEFAULT_KANBAN_BOARD). A `--board` whose value is no plain slug (`$B`, a quote, a secret) or
- *     a verb that is not a verb: not classified at all, the command stays a bash command.
+ *   - No `--board`: NOT a use. The CLI takes the board from HERMES_KANBAN_BOARD, then the `current` symlink, then `default`, and
+ *     none of that is visible in the command, so the call is attributed to no board (it stays a bash command, with its task
+ *     text cut by `redactKanbanCommand`). The same for a `--board` whose value is no plain slug (`$B`, a quote, a secret) and for a
+ *     verb that is not a verb.
+ *   - `cut`: the text may be the hook text cut at HOOK_ARGS_MAX (`bashCommandCut`). Its last word may be incomplete, so it is
+ *     dropped before anything is read (`request-review` as `request_re` is not a verb, a `--board` value cut short is no board).
  *   - `leading`: the kanban call is the command's own head (the first `hermes` segment, and `commandHead` says `hermes`). Only a
  *     leading call replaces the bash block; `git pull && hermes kanban list` keeps its `git` block and adds the Kanban use.
  * Non-kanban `hermes` commands (`hermes status`, `hermes chat`) return null.
  */
-export function kanbanCliUse(command: string): { key: string; action: string; leading: boolean } | null {
+export function kanbanCliUse(command: string, opts: { cut?: boolean } = {}): { key: string; action: string; leading: boolean } | null {
+  const text = textToScan(command, opts.cut === true)
+  if (text === null) return null
+  const found = scanForKanban(text, 0)
+  const call = found.call
+  if (call === null || call.board === null || call.verb === null) return null
+  return { key: call.board, action: call.verb.replace(/-/g, '_'), leading: found.firstHermes === 'kanban' && commandHead(text) === 'hermes' }
+}
+
+/**
+ * A command that contains a `hermes kanban` call, with that call cut down to `hermes kanban [--board <slug>] <verb>` and
+ * everything after it dropped (` …`); the text before the call stays. Null when the command has no such call. This is what the
+ * bash inspection may show of a kanban call that is not (or not only) a Kanban use: a task title, body, comment or id given to
+ * the CLI never reaches the page. Works on calls that kanbanCliUse does not classify (no `--board`, `--board "$B"`).
+ */
+export function redactKanbanCommand(command: string, opts: { cut?: boolean } = {}): string | null {
+  const text = textToScan(command, opts.cut === true)
+  if (text === null) return null
+  const found = scanForKanban(text, 0)
+  const call = found.call
+  if (call === null || found.segmentStart === null) return null
+  const shown = `hermes kanban${call.board !== null ? ` --board ${call.board}` : ''}${call.verb !== null ? ` ${call.verb}` : ''}`
+  const rest = text.slice(found.segmentStart).trim()
+  return `${text.slice(0, found.segmentStart)}${shown}${rest === shown ? '' : ' …'}`
+}
+
+/** The text to scan: null when it cannot hold a kanban call; the cut hook text loses its last (possibly incomplete) word. */
+function textToScan(command: string, cut: boolean): string | null {
   if (typeof command !== 'string' || !/kanban/.test(command)) return null
-  const found = scanForKanban(command, 0)
-  if (found.use === null) return null
-  return { ...found.use, leading: found.firstHermes === 'kanban' && commandHead(command) === 'hermes' }
+  return cut ? command.replace(/\S+$/, '') : command
+}
+
+interface KanbanCall {
+  /** The `--board` value when it is a plain slug, else null (not given, `$B`, a secret). */
+  board: string | null
+  /** The verb as typed (`request-review`) when it is a plain verb, else null. */
+  verb: string | null
 }
 
 interface KanbanScan {
   /** The first `hermes` segment seen: a kanban call, another command, or none. */
   firstHermes: 'kanban' | 'other' | null
-  use: { key: string; action: string } | null
+  /** The first kanban call. */
+  call: KanbanCall | null
+  /** Offset in the scanned text where the (top-level) segment of that call starts. */
+  segmentStart: number | null
 }
 
 /** Hermes global options that take a value as the next word. */
@@ -213,18 +250,26 @@ const HERMES_VALUE_OPTIONS: ReadonlySet<string> = new Set([
 ])
 
 function scanForKanban(text: string, depth: number): KanbanScan {
-  const out: KanbanScan = { firstHermes: null, use: null }
+  const out: KanbanScan = { firstHermes: null, call: null, segmentStart: null }
+  let lineStart = 0
   for (const raw of text.slice(0, SCAN_CHARS).split('\n')) {
+    const offset = lineStart + (raw.length - raw.trimStart().length)
+    lineStart += raw.length + 1
     const line = raw.trim()
     if (line === '' || line.startsWith('#')) continue
-    let segment: string[] = []
+    let segment: Word[] = []
     const flush = () => {
-      if (segment.length > 0) mergeScan(out, scanSegment(segment, depth))
+      if (segment.length > 0) {
+        const found = scanSegment(segment.map(w => w.text), depth)
+        // The call is cut out from the start of the segment it sits in (a nested `bash -c '...'` counts as that segment).
+        if (out.call === null && found.call !== null) out.segmentStart = offset + segment[0].start
+        mergeScan(out, found)
+      }
       segment = []
     }
     for (const w of words(line)) {
       if (w.op) flush()
-      else segment.push(w.text)
+      else segment.push(w)
     }
     flush()
     if (line.includes('<<')) break
@@ -234,11 +279,11 @@ function scanForKanban(text: string, depth: number): KanbanScan {
 
 function mergeScan(into: KanbanScan, from: KanbanScan): void {
   if (into.firstHermes === null) into.firstHermes = from.firstHermes
-  if (into.use === null) into.use = from.use
+  if (into.call === null) into.call = from.call
 }
 
 function scanSegment(tokens: readonly string[], depth: number): KanbanScan {
-  const none: KanbanScan = { firstHermes: null, use: null }
+  const none: KanbanScan = { firstHermes: null, call: null, segmentStart: null }
   let i = 0
   while (i < tokens.length) {
     const t = tokens[i]
@@ -262,21 +307,20 @@ function scanSegment(tokens: readonly string[], depth: number): KanbanScan {
   if (program !== 'hermes') return none
   let j = i + 1
   while (j < tokens.length && tokens[j].startsWith('-')) j += !tokens[j].includes('=') && HERMES_VALUE_OPTIONS.has(tokens[j]) ? 2 : 1
-  if (tokens[j] !== 'kanban') return { firstHermes: 'other', use: null }
+  if (tokens[j] !== 'kanban') return { firstHermes: 'other', call: null, segmentStart: null }
   let board: string | null = null
-  let boardGiven = false
   let verb: string | null = null
   for (let k = j + 1; k < tokens.length; k++) {
     const t = tokens[k]
-    if (t === '--board') { boardGiven = true; board = tokens[k + 1] ?? null; k++ }
-    else if (t.startsWith('--board=')) { boardGiven = true; board = t.slice('--board='.length) }
+    if (t === '--board') { board = tokens[k + 1] ?? null; k++ }
+    else if (t.startsWith('--board=')) board = t.slice('--board='.length)
     else if (t.startsWith('-')) continue
-    else if (verb === null) verb = t.replace(/-/g, '_')
+    else if (verb === null) verb = t
   }
-  const slug = boardGiven ? board : DEFAULT_KANBAN_BOARD
-  if (slug === null || !BOARD_RE.test(slug) || maskSecrets(slug) !== slug) return { firstHermes: 'kanban', use: null }
-  if (verb === null || !VERB_RE.test(verb)) return { firstHermes: 'kanban', use: null }
-  return { firstHermes: 'kanban', use: { key: slug, action: verb } }
+  // Only plain values are kept; a call without `--board` has no board (the CLI resolves it from the environment).
+  const plainBoard = board !== null && BOARD_RE.test(board) && maskSecrets(board) === board ? board : null
+  const plainVerb = verb !== null && VERB_RE.test(verb.replace(/-/g, '_')) ? verb : null
+  return { firstHermes: 'kanban', call: { board: plainBoard, verb: plainVerb }, segmentStart: null }
 }
 
 /** The subsystem use of a message event (`platform` is the session's source), or null. Reads `role` and `platform` only. */
@@ -303,6 +347,10 @@ export class EventUseTracker {
   private readonly kinds: ReadonlySet<UseKind>
   private readonly sessions = new Map<string, SessionState>()
   private readonly uses = new Map<string, EventUse>()
+  /** Bash calls (`<sid>|<toolUseId>`) delivered in full: a cut hook delivery of the same call is ignored. */
+  private readonly fullCalls = new Set<string>()
+  /** Use keys recorded from a cut hook delivery of a Bash call: the full delivery removes them and decides again. */
+  private readonly cutUses = new Map<string, string[]>()
   private cache: EventUse[] = []
   private dirty = true
   private builtFor = 0
@@ -332,6 +380,8 @@ export class EventUseTracker {
   private forget(sid: string): void {
     this.sessions.delete(sid)
     for (const [key, u] of this.uses) if (u.sid === sid) this.uses.delete(key)
+    for (const key of this.fullCalls) if (key.startsWith(`${sid}|`)) this.fullCalls.delete(key)
+    for (const key of this.cutUses.keys()) if (key.startsWith(`${sid}|`)) this.cutUses.delete(key)
     this.dirty = true
   }
 
@@ -357,13 +407,35 @@ export class EventUseTracker {
       }
       if (e.type !== 'tool_call_start' && e.type !== 'message') continue
       const found: Array<{ kind: UseKind; key: string; action: string }> = []
+      // One Claude/Hermes call can arrive twice (hook, then transcript) with the same toolUseId: it counts once.
+      const callId = e.type === 'tool_call_start' ? str(p.toolUseId) : null
+      let bashCall: string | null = null
+      let cut = false
       if (e.type === 'tool_call_start') {
         found.push(...innerCalls(p).flatMap(usesOfCall))
         // A shell call `hermes kanban --board <slug> <verb> ...` is a Kanban action (board and verb only).
         if (p.tool === 'Bash') {
           const command = bashCommandOf(p)
-          const cli = command !== null ? kanbanCliUse(command) : null
-          if (cli !== null) found.push({ kind: 'kanban', key: cli.key, action: cli.action })
+          if (command !== null) {
+            // The hook delivery is cut at 80 characters and may end in the middle of a word: it is a provisional
+            // reading. The full delivery of the same call replaces it; a cut one that comes after a full one is ignored.
+            cut = bashCommandCut(p)
+            bashCall = callId !== null ? `${session.id}|${callId}` : null
+            if (bashCall !== null) {
+              if (cut && this.fullCalls.has(bashCall)) continue
+              if (!cut) {
+                this.fullCalls.add(bashCall)
+                const provisional = this.cutUses.get(bashCall)
+                if (provisional) {
+                  for (const k of provisional) this.uses.delete(k)
+                  this.cutUses.delete(bashCall)
+                  this.dirty = true
+                }
+              }
+            }
+            const cli = kanbanCliUse(command, { cut })
+            if (cli !== null) found.push({ kind: 'kanban', key: cli.key, action: cli.action })
+          }
         }
       } else {
         const m = usesOfMessage(p)
@@ -379,12 +451,11 @@ export class EventUseTracker {
       else if (e.history !== true) at = nowMs
       else continue
       if (nowMs - at > MAX_AGE_MS) continue
-      // One Claude/Hermes call can arrive twice (hook, then transcript) with the same toolUseId: it counts once.
-      const callId = e.type === 'tool_call_start' ? str(p.toolUseId) : null
       wanted.forEach((f, n) => {
         const key = `${session.id}|${callId ?? `#${i}`}|${n}`
         if (this.uses.has(key)) return
         this.uses.set(key, { sid: session.id, profile, kind: f.kind, key: f.key, action: f.action, at })
+        if (cut && bashCall !== null) this.cutUses.set(bashCall, [...(this.cutUses.get(bashCall) ?? []), key])
         this.dirty = true
       })
     }
@@ -393,6 +464,13 @@ export class EventUseTracker {
       const oldest = this.uses.keys().next().value
       if (oldest === undefined) break
       this.uses.delete(oldest)
+    }
+    for (const bookkeeping of [this.fullCalls, this.cutUses] as Array<Set<string> | Map<string, string[]>>) {
+      while (bookkeeping.size > MAX_USES) {
+        const oldest = bookkeeping.keys().next().value
+        if (oldest === undefined) break
+        bookkeeping.delete(oldest)
+      }
     }
   }
 

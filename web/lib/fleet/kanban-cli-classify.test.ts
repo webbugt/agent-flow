@@ -1,8 +1,8 @@
 import { test } from 'node:test'
 import { strict as assert } from 'node:assert'
 import { BashUseTracker, bashCommandOf, type BashEventLike } from './bash-blocks'
-import { DEFAULT_KANBAN_BOARD, EventUseTracker, kanbanCliUse, type EventUse } from './event-uses'
-import { DEFAULT_BOARD_SLUG } from './kanban-source'
+import { HOOK_ARGS_MAX } from './command-head'
+import { EventUseTracker, kanbanCliUse, redactKanbanCommand, type EventUse } from './event-uses'
 import { SingleSessionTracker, buildSingleBlocks } from './single-blocks'
 import { defaultOptions } from './options-registry'
 
@@ -32,9 +32,10 @@ const TASK_ID = 't_abc123'
 const TITLE = 'Rotate the fake staging widget'
 const BODY = 'Fake body: do the quarterly widget audit'
 
-test('default board decision: the code uses the slug `default` (kanban-source.ts), and this module pins it', () => {
-  assert.equal(DEFAULT_KANBAN_BOARD, DEFAULT_BOARD_SLUG)
-  assert.equal(DEFAULT_KANBAN_BOARD, 'default')
+// The hook path cuts a Bash command at this many characters (ARGS_MAX in extension/src/constants.ts).
+test('the hook cut length is the extension ARGS_MAX', () => {
+  assert.equal(HOOK_ARGS_MAX, 80)
+  assert.equal(bashEvent('x'.repeat(200), 5, 'k').payload.args?.toString().length, HOOK_ARGS_MAX)
 })
 
 test('hermes kanban --board agent-flow show <id>: a kanban use (board, verb), no bash block', () => {
@@ -55,10 +56,11 @@ test('hermes -p taxis kanban --board x list: kanban x, verb list', () => {
   assert.deepEqual(kanbanCliUse('hermes -p=taxis kanban --board x list'), { key: 'x', action: 'list', leading: true })
 })
 
-test('hermes kanban list without --board: the default board (`default`)', () => {
+test('hermes kanban list without --board: no board is guessed (the CLI reads HERMES_KANBAN_BOARD, then the current board)', () => {
   const events = [bashEvent('hermes kanban list', 5, 'u1')]
-  assert.deepEqual(kanbanUses(events).map(u => [u.key, u.action]), [['default', 'list']])
-  assert.deepEqual(bashHeads(events), [])
+  assert.equal(kanbanCliUse('hermes kanban list'), null)
+  assert.deepEqual(kanbanUses(events), [], 'not attributed to `default` or any other board')
+  assert.deepEqual(bashHeads(events), ['hermes'], 'stays a bash command')
 })
 
 test('hermes status and hermes chat stay bash with head hermes, no kanban use', () => {
@@ -177,3 +179,131 @@ test('bashCommandOf is unchanged (full command, else args)', () => {
   assert.equal(bashCommandOf({ args: 'git st' }), 'git st')
   assert.equal(bashCommandOf({ inputData: { command: '  ' }, args: '' }), null)
 })
+
+// --- KCLI-R findings -----------------------------------------------------------------------------------------------
+
+/** A board slug long enough that the text before `tail` is `at` characters of `hermes kanban --board <slug> `. */
+function padBoard(at: number): string {
+  const prefix = 'hermes kanban --board '
+  return 'b'.repeat(at - prefix.length - 1)
+}
+
+test('cut hook delivery, verb cut in the middle: no wrong verb; the full delivery gives the real one (both orders)', () => {
+  const board = padBoard(70)
+  const full = `hermes kanban --board ${board} request-review ${TASK_ID}`
+  assert.equal(full.indexOf('request-review'), 70)
+  const hook = bashEvent(full, 5, 'rr', true)
+  assert.equal(String(hook.payload.args).slice(70), 'request-re', 'the hook text ends inside the verb')
+  const transcript = bashEvent(full, 5, 'rr')
+  // The cut text alone: nothing recorded (the verb is not known), and no `request_re`.
+  assert.deepEqual(kanbanUses([hook]), [])
+  assert.equal(kanbanCliUse(String(hook.payload.args), { cut: true }), null)
+  // Hook, then transcript / transcript, then hook: the one real use.
+  for (const events of [[hook, transcript], [transcript, hook]]) {
+    assert.deepEqual(kanbanUses(events).map(u => [u.key, u.action]), [[board, 'request_review']])
+  }
+  // The same through one tracker that sees the events arrive one by one.
+  const tracker = new EventUseTracker({ kinds: ['kanban'] })
+  const buffer: Ev[] = [hook]
+  assert.deepEqual(tracker.update([session], () => buffer, NOW), [])
+  buffer.push(transcript)
+  assert.deepEqual(tracker.update([session], () => buffer, NOW).map(u => [u.key, u.action]), [[board, 'request_review']])
+})
+
+test('cut hook delivery, --board after the verb past character 80: no `default` board; the full delivery gives the real board', () => {
+  const title = 'T'.repeat(60)
+  const full = `hermes kanban create "${title}" --board agent-flow`
+  assert.ok(full.indexOf('--board') >= HOOK_ARGS_MAX)
+  const hook = bashEvent(full, 5, 'late', true)
+  const transcript = bashEvent(full, 5, 'late')
+  assert.deepEqual(kanbanUses([hook]), [], 'the cut text names no board: not attributed to any board')
+  for (const events of [[hook, transcript], [transcript, hook]]) {
+    assert.deepEqual(kanbanUses(events).map(u => [u.key, u.action]), [['agent-flow', 'create']])
+  }
+})
+
+test('cut hook delivery, board slug cut in the middle: no truncated board; the full delivery replaces a provisional use', () => {
+  const board = 'agent-flow-with-a-long-name'
+  const lead = 'x'.repeat(40)
+  // Provisional use from a cut text that parses (board `lead`, verb list): the full text says the last `--board` wins.
+  const cutText = `hermes kanban --board ${lead} list --assignee someone-with-a-long-name --board ${board}`
+  const hook = bashEvent(cutText, 5, 'prov', true)
+  const transcript = bashEvent(cutText, 5, 'prov')
+  assert.ok(String(hook.payload.args).length >= HOOK_ARGS_MAX)
+  assert.deepEqual(kanbanUses([hook]).map(u => [u.key, u.action]), [[lead, 'list']], 'provisional, read from the complete words only')
+  assert.deepEqual(kanbanUses([hook, transcript]).map(u => [u.key, u.action]), [[board, 'list']], 'the full delivery overwrote it')
+  assert.deepEqual(kanbanUses([transcript, hook]).map(u => [u.key, u.action]), [[board, 'list']])
+})
+
+test('a hook text shorter than the cut length is complete: it classifies as before', () => {
+  const events = [bashEvent('hermes kanban --board x list', 5, 'short', true)]
+  assert.deepEqual(kanbanUses(events).map(u => [u.key, u.action]), [['x', 'list']])
+})
+
+test('a chain whose kanban call is not leading keeps its bash block, cut down to the board and verb (no title, body, id)', () => {
+  const create = `git pull && hermes kanban --board agent-flow create "${TITLE}" --body "${BODY}" --assignee fake-profile`
+  const comment = `git fetch; hermes kanban --board agent-flow comment ${TASK_ID} "${BODY}" | tee /tmp/fake.log`
+  const events = [bashEvent(create, 9, 'a'), bashEvent(comment, 8, 'b'), bashEvent('git status', 7, 'c')]
+  const nodes = new BashUseTracker().update([session], () => events, NOW)
+  assert.deepEqual(nodes.map(n => n.head), ['git'])
+  const commands = nodes[0].recent.map(r => r.command).sort()
+  assert.deepEqual(commands, [
+    'git fetch; hermes kanban --board agent-flow comment …',
+    'git pull && hermes kanban --board agent-flow create …',
+    'git status',
+  ])
+  // And still one kanban use each in the kanban tracker.
+  assert.deepEqual(kanbanUses(events).map(u => u.action).sort(), ['comment', 'create'])
+  // Nothing of the task text anywhere the page can see.
+  const sources = new SingleSessionTracker().update(session, () => events, NOW)
+  const views = buildSingleBlocks({ sources, now: NOW, options: defaultOptions() })
+  const wire = JSON.stringify({ nodes, sources, views })
+  for (const secret of [TASK_ID, TITLE, BODY, 'fake-profile', 'quarterly', 'fake.log']) assert.ok(!wire.includes(secret), `leaked: ${secret}`)
+})
+
+test('a kanban call with no board, an unresolvable board or nested in bash -c is cut down in the bash inspection too', () => {
+  const cases: Array<[string, string]> = [
+    [`hermes kanban create "${TITLE}" --body "${BODY}"`, 'hermes kanban create …'],
+    [`hermes kanban --board "$B" comment ${TASK_ID} "${BODY}"`, 'hermes kanban comment …'],
+    [`bash -c 'git pull && hermes kanban --board x create "${TITLE}"'`, 'hermes kanban --board x create …'],
+    [`cd /tmp/fake\nhermes kanban --board x show ${TASK_ID}`, 'cd /tmp/fake\nhermes kanban --board x show …'],
+  ]
+  for (const [cmd, shown] of cases) {
+    assert.equal(redactKanbanCommand(cmd), shown, cmd)
+    const nodes = new BashUseTracker().update([session], () => [bashEvent(cmd, 5, 'u')], NOW)
+    const wire = JSON.stringify(nodes)
+    for (const secret of [TASK_ID, TITLE, BODY]) assert.ok(!wire.includes(secret), `leaked in ${cmd}: ${secret}`)
+  }
+  assert.equal(redactKanbanCommand('hermes kanban list'), 'hermes kanban list', 'nothing to cut')
+  assert.equal(redactKanbanCommand('hermes status'), null)
+  assert.equal(redactKanbanCommand('git pull'), null)
+})
+
+test('a cut hook text of a chained kanban call carries no task text either, and the full delivery replaces it', () => {
+  const full = `git pull && hermes kanban --board agent-flow create "${TITLE}" --body "${BODY}" --assignee fake-profile`
+  const hook = bashEvent(full, 5, 'chain', true)
+  const transcript = bashEvent(full, 5, 'chain')
+  assert.ok(String(hook.payload.args).length >= HOOK_ARGS_MAX)
+  const tracker = new BashUseTracker()
+  const buffer: Ev[] = [hook]
+  const first = tracker.update([session], () => buffer, NOW)
+  assert.deepEqual(first.map(n => n.recent.map(r => r.command)), [['git pull && hermes kanban --board agent-flow create …']])
+  buffer.push(transcript)
+  const second = tracker.update([session], () => buffer, NOW)
+  assert.deepEqual(second.map(n => [n.total, n.recent.map(r => r.command)]), [[1, ['git pull && hermes kanban --board agent-flow create …']]])
+  assert.deepEqual(bashHeadsAndCommands([transcript, hook]), [['git', 'git pull && hermes kanban --board agent-flow create …']])
+})
+
+test('a cut hook delivery of a leading kanban call that the full delivery turns into a bash use: the full one wins', () => {
+  // The cut text shows a board; the full text ends in a `--board "$B"` that is no plain slug.
+  const full = `hermes kanban --board agent-flow list --assignee ${'a'.repeat(60)} --board "$B"`
+  const hook = bashEvent(full, 5, 'flip', true)
+  const transcript = bashEvent(full, 5, 'flip')
+  assert.deepEqual(bashHeads([hook]), [], 'provisional: a kanban call')
+  assert.deepEqual(bashHeads([hook, transcript]), ['hermes'], 'the full text has no plain board: a bash use, cut down')
+  assert.deepEqual(kanbanUses([hook, transcript]), [])
+})
+
+function bashHeadsAndCommands(events: Ev[]): Array<[string, string]> {
+  return new BashUseTracker().update([session], () => events, NOW).flatMap(n => n.recent.map((r): [string, string] => [n.head, r.command]))
+}

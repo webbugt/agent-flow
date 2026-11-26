@@ -23,8 +23,8 @@
  */
 import { MAX_FADE_SECONDS, MAX_LINGER_SECONDS } from './options-registry'
 import { blockId, type BlockStore, type ResourceBlock } from './resource-block'
-import { bashCommandOf, commandHead } from './command-head'
-import { kanbanCliUse } from './event-uses'
+import { bashCommandCut, bashCommandOf, commandHead } from './command-head'
+import { kanbanCliUse, redactKanbanCommand } from './event-uses'
 import { maskSecrets } from './secret-mask'
 import { identityFromLabel } from './fleet-model'
 
@@ -86,6 +86,8 @@ interface UseRec {
   at: number
   /** Masked and capped. */
   command: string
+  /** The command came from a full delivery (not the hook text cut at 80 characters). */
+  full: boolean
 }
 
 interface SessionState {
@@ -112,7 +114,7 @@ export class BashUseTracker {
   private readonly sessions = new Map<string, SessionState>()
   private readonly uses = new Map<string, UseRec>()
   /** Keys of calls left out because they are `hermes kanban` calls (no command text kept). */
-  private readonly kanbanCalls = new Set<string>()
+  private readonly kanbanCalls = new Map<string, 'cut' | 'full'>()
   private cache: BashHeadNode[] = []
   private dirty = true
   private builtFor = 0
@@ -141,7 +143,7 @@ export class BashUseTracker {
   private forget(sid: string): void {
     this.sessions.delete(sid)
     for (const [key, u] of this.uses) if (u.sid === sid) this.uses.delete(key)
-    for (const key of this.kanbanCalls) if (key.startsWith(`${sid}|`)) this.kanbanCalls.delete(key)
+    for (const key of this.kanbanCalls.keys()) if (key.startsWith(`${sid}|`)) this.kanbanCalls.delete(key)
     this.dirty = true
   }
 
@@ -181,26 +183,35 @@ export class BashUseTracker {
       const key = toolUseId ? `${session.id}|${toolUseId}` : `${session.id}|#${st.anonymous++}`
       // A `hermes kanban ...` call is a Kanban action (EventUseTracker records it), not a bash block. The ids of a
       // suppressed call are remembered, so the other delivery of the same call (hook / transcript, one of them cut
-      // at 80 characters) cannot slip in as a `hermes` use.
-      if (this.kanbanCalls.has(key)) continue
-      const cli = kanbanCliUse(command)
+      // at 80 characters) cannot slip in as a `hermes` use. A decision taken on the cut text is provisional: the full
+      // delivery of the call decides again.
+      const cut = bashCommandCut(p)
+      const decided = this.kanbanCalls.get(key)
+      if (decided === 'full' || (decided === 'cut' && cut)) continue
+      if (decided === 'cut') this.kanbanCalls.delete(key)
+      const cli = kanbanCliUse(command, { cut })
       if (cli !== null && cli.leading) {
-        this.kanbanCalls.add(key)
+        this.kanbanCalls.set(key, cut ? 'cut' : 'full')
         this.uses.delete(key)
         this.dirty = true
         continue
       }
-      const masked = maskAndCap(command)
+      // A kanban call that stays a bash use (chained behind another command, no `--board`, a `--board` that is no plain
+      // slug) shows the call as `hermes kanban [--board <slug>] <verb> …`: the title, body, comment or task id given to the
+      // CLI is not part of the inspection.
+      const masked = maskAndCap(redactKanbanCommand(command, { cut }) ?? command)
       const prev = this.uses.get(key)
       if (prev) {
-        // The second report of the same call (hook, then transcript): the longer text wins, the call counts once.
-        if (masked.length > prev.command.length) {
+        // The second report of the same call (hook, then transcript): the full text wins over the cut one, else the
+        // longer text wins; the call counts once.
+        if (cut ? !prev.full && masked.length > prev.command.length : masked !== prev.command || !prev.full) {
           prev.command = masked
+          prev.full = !cut
           this.dirty = true
         }
         continue
       }
-      this.uses.set(key, { sid: session.id, profile, head: commandHead(command), at, command: masked })
+      this.uses.set(key, { sid: session.id, profile, head: commandHead(command), at, command: masked, full: !cut })
       this.dirty = true
     }
     st.read = events.length
@@ -211,7 +222,7 @@ export class BashUseTracker {
       this.uses.delete(oldest)
     }
     while (this.kanbanCalls.size > MAX_USES) {
-      const oldest = this.kanbanCalls.values().next().value
+      const oldest = this.kanbanCalls.keys().next().value
       if (oldest === undefined) break
       this.kanbanCalls.delete(oldest)
     }
