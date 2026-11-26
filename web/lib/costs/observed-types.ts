@@ -32,6 +32,9 @@ export interface LimitsUpdatePayload {
   install: {
     state: 'not-installed' | 'installed' | 'refused' | 'broken'
     canInstall: boolean
+    /** Installed with the pre-launcher command (a fixed node path); install again upgrades it. */
+    legacy?: boolean
+    canUpgrade?: boolean
     reason?: string
     code?: string
     shadowedBy?: string[]
@@ -41,6 +44,8 @@ export interface LimitsUpdatePayload {
   /** Past readings (oldest first, at most 200). */
   history?: ObservedReading[]
   fileError?: string
+  /** The launcher could not find node the last time it ran (ms epoch). Only while the wrapper is installed. */
+  nodeMissing?: { at: number }
 }
 
 /** Answer to a wrapper install / remove request. */

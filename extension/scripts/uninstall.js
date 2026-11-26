@@ -21,9 +21,12 @@ const DISCOVERY_DIR = path.join(os.homedir(), '.claude', 'agent-flow');
 const MANIFEST_PATH = path.join(DISCOVERY_DIR, 'workspaces.json');
 // Chained statusLine wrapper (src/statusline-installer.ts). The wrapper script lives in DISCOVERY_DIR, which is
 // deleted below, so the user's own statusLine must be put back first or Claude Code would call a missing file.
-const STATUSLINE_MARKER = 'agent-flow/statusline-shim.js';
+// Two command forms carry it: `sh ".../statusline-run.sh"` (launcher, N1) and `"<node>" ".../statusline-shim.js"` (legacy / Windows).
+const STATUSLINE_MARKERS = ['agent-flow/statusline-shim.js', 'agent-flow/statusline-run.sh'];
 const AF_HOME = path.join(os.homedir(), '.agent-flow');
 const STATUSLINE_RECORD = path.join(AF_HOME, 'statusline-original.json');
+const NODE_PATH_FILE = path.join(AF_HOME, 'node-path');
+const NODE_MISSING_FILE = path.join(AF_HOME, 'limits', 'node-missing.json');
 const LIMITS_FILE = path.join(AF_HOME, 'limits', 'claude.json');
 const LIMITS_HISTORY_FILE = path.join(AF_HOME, 'limits', 'claude-history.json');
 
@@ -57,7 +60,7 @@ function restoreStatusLine(linkPath) {
     const settings = JSON.parse(raw);
     if (!isPlainObject(settings)) { return; }
     const sl = settings.statusLine;
-    if (!isPlainObject(sl) || typeof sl.command !== 'string' || !sl.command.replace(/\\/g, '/').includes(STATUSLINE_MARKER)) { return; }
+    if (!isPlainObject(sl) || typeof sl.command !== 'string' || !STATUSLINE_MARKERS.some(m => sl.command.replace(/\\/g, '/').includes(m))) { return; }
 
     let rec = null;
     try { rec = JSON.parse(fs.readFileSync(STATUSLINE_RECORD, 'utf-8')); } catch { /* no record */ }
@@ -82,7 +85,7 @@ function restoreStatusLine(linkPath) {
 }
 
 function removeStatusLineFiles() {
-  for (const f of [STATUSLINE_RECORD, LIMITS_FILE, LIMITS_HISTORY_FILE]) { try { fs.unlinkSync(f); } catch { /* not there */ } }
+  for (const f of [STATUSLINE_RECORD, NODE_PATH_FILE, NODE_MISSING_FILE, LIMITS_FILE, LIMITS_HISTORY_FILE]) { try { fs.unlinkSync(f); } catch { /* not there */ } }
   try { fs.rmdirSync(path.dirname(LIMITS_FILE)); } catch { /* not empty or not there */ }
   try { fs.unlinkSync(path.join(os.homedir(), '.claude', 'settings.json.agent-flow.bak')); } catch { /* not there */ }
 }

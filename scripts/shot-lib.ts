@@ -390,6 +390,13 @@ export const BUILTIN_PLANS: Record<string, ShotPlan> = {
       { name: 'optin-drawer', viewports: ['desktop', 'phone'], steps: [{ key: '$' }, { wait: 3000 }, ...OPEN_DRAWER, { eval: SCROLL_TO('claude-limits') }, { wait: 400 }] },
     ],
   },
+  // Costs N1: the wrapper cannot find node. Run with `--scenario claude --limits L-6 --config C-limits`: top bar chip ("... no node") and the LIMITS panel with the note.
+  n1_nonode: {
+    shots: [
+      { name: 'nonode-panel', viewports: ['desktop', 'phone'], steps: [{ key: '$' }, { wait: 3500 }] },
+      { name: 'nonode-drawer', viewports: ['desktop', 'phone'], steps: [{ key: '$' }, { wait: 3000 }, ...OPEN_DRAWER, { eval: SCROLL_TO('claude-limits') }, { wait: 400 }] },
+    ],
+  },
   p6fix_stale: {
     shots: [
       { name: 'stale-topbar', viewports: ['desktop', 'phone'], steps: [{ key: '$' }, { wait: 3000 }] },

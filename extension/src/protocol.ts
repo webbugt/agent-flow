@@ -100,6 +100,10 @@ export interface LimitsUpdatePayload {
     state: 'not-installed' | 'installed' | 'refused' | 'broken'
     /** An install would succeed right now. */
     canInstall: boolean
+    /** Installed with the pre-launcher command (a fixed node path): it stops silently when that node moves. Absent otherwise. */
+    legacy?: boolean
+    /** `legacy`, and running install again would upgrade it in place. */
+    canUpgrade?: boolean
     /** Why an install was refused, or what is broken. Plain text, never file content. */
     reason?: string
     code?: string
@@ -119,6 +123,8 @@ export interface LimitsUpdatePayload {
   history?: ObservedReading[]
   /** The limits file exists but cannot be used (not JSON, wrong version, too large). No content is quoted. */
   fileError?: string
+  /** The launcher could not find node the last time Claude Code ran the status line (`~/.agent-flow/limits/node-missing.json`); `at` is ms epoch. Only sent while the wrapper is installed. */
+  nodeMissing?: { at: number }
 }
 
 // ─── Costs config (the host reads files, the webview validates; see web/lib/costs/layers.ts) ───

@@ -8,7 +8,7 @@ import { promptHookSetupIfNeeded, configureClaudeHooks, isDisable1MContext } fro
 import { createLogger } from './logger'
 import { CostsConfigLoader, CostsConflictError, type CostsScalars } from './costs-config'
 import { LimitsObserver } from './limits-observer'
-import { defaultInstallerEnv, installStatusLine, uninstallStatusLine, type ActionResult, type InstallerEnv } from './statusline-installer'
+import { defaultInstallerEnv, inspectStatusLine, installStatusLine, uninstallStatusLine, type ActionResult, type InstallerEnv } from './statusline-installer'
 import { resolveNodePath } from './discovery'
 import type { AgentRuntime, AgentRuntimeMode } from './session-runtime'
 
@@ -79,13 +79,18 @@ function installerEnv(): InstallerEnv {
  */
 async function runStatusLineAction(action: 'install' | 'uninstall'): Promise<ActionResult | { ok: false; refused: true; code: 'cancelled'; message: string }> {
   const install = action === 'install'
-  const detail = install
+  // Install on an existing install = upgrade of the legacy command / repair of the recorded node: only Agent Flow's own files and the command change.
+  const existing = install ? inspectStatusLine(installerEnv()) : null
+  const reinstall = existing?.state === 'installed' || (existing?.state === 'broken' && existing.code === 'io-error')
+  const detail = reinstall
+    ? 'The wrapper stays installed. Only its command in ~/.claude/settings.json changes (it now starts through a small launcher script that finds node itself, so a node upgrade does not stop the readings) and Agent Flow\'s own files are refreshed. Your original statusLine, the backup and every other setting stay as they are.'
+    : install
     ? 'Agent Flow will wrap the statusLine in ~/.claude/settings.json. Your own status line keeps running unchanged. Only the usage percentages and reset times of each limit window (5-hour, weekly and any other the meter reports), the session id, the model id and a timestamp are saved to ~/.agent-flow/limits/claude.json, plus a short history of those readings in claude-history.json next to it. No prompts or transcripts are stored. A backup is written to settings.json.agent-flow.bak. "Remove Claude statusLine wrapper" restores your original.'
     : 'Your original statusLine is put back in ~/.claude/settings.json (same content) and the saved limits file and its history file are deleted.'
   const choice = await vscode.window.showWarningMessage(
-    install ? 'Observe Claude usage limits through a chained statusLine wrapper?' : 'Remove the Agent Flow statusLine wrapper?',
+    reinstall ? 'Upgrade / repair the Agent Flow statusLine wrapper?' : install ? 'Observe Claude usage limits through a chained statusLine wrapper?' : 'Remove the Agent Flow statusLine wrapper?',
     { modal: true, detail },
-    install ? 'Install wrapper' : 'Remove wrapper',
+    reinstall ? 'Upgrade wrapper' : install ? 'Install wrapper' : 'Remove wrapper',
   )
   if (!choice) return { ok: false, refused: true, code: 'cancelled', message: 'Cancelled. Nothing was changed.' }
   const result = install ? installStatusLine(installerEnv()) : uninstallStatusLine(installerEnv())

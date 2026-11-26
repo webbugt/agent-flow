@@ -137,3 +137,46 @@ test('formatUntil', () => {
   assert.equal(formatUntil(3 * 24 * H + 4 * H + 3 * 60_000), '3d 4h')
   assert.equal(formatUntil(NaN), '0m')
 })
+
+test('N1: node-missing marker newer than the last reading: clear note, chip says so, last reading still shown', () => {
+  const at = Date.UTC(2026, 10, 25, 9, 5)
+  const v = buildObservedLimitsView(payload({
+    observed: observed(at, true, [{ key: 'five_hour', kind: 'five_hour', usedPct: 80, resetsAt: NOW + H, state: 'stale' }]),
+    nodeMissing: { at: NOW - 10 * 60_000 },
+  }), NOW, utc)
+  assert.match(v.nodeMissingNote ?? '', /wrapper cannot find node \(last tried 14:20\)/)
+  assert.match(v.nodeMissingNote ?? '', /last reading, as of 09:05/)
+  assert.match(v.headline, /cannot find node/)
+  assert.equal(v.chip?.text, '5h 80% · as of 09:05 · no node')
+  assert.equal(v.chip?.tone, 'stale')
+  assert.equal(v.rows[0].valueText, '80%', 'the stale number stays visible')
+  assert.equal(v.notes[0], v.nodeMissingNote)
+  assert.deepEqual(v.reinstall, { label: 'Repair wrapper…' })
+})
+
+test('N1: node-missing without any reading: estimates stay, chip is "limits: no node"', () => {
+  const v = buildObservedLimitsView(payload({ nodeMissing: { at: NOW - 60_000 } }), NOW, utc)
+  assert.match(v.headline, /no readings can arrive. Limits stay estimated/)
+  assert.equal(v.chip?.text, 'limits: no node')
+  assert.equal(v.rows.length, 0)
+})
+
+test('N1: a reading newer than the marker clears the note; marker is ignored when not installed', () => {
+  const fresh = buildObservedLimitsView(payload({
+    observed: observed(NOW - 1000, false, [{ key: 'five_hour', kind: 'five_hour', usedPct: 10, resetsAt: NOW + H, state: 'fresh' }]),
+    nodeMissing: { at: NOW - 3_600_000 },
+  }), NOW, utc)
+  assert.equal(fresh.nodeMissingNote, null); assert.equal(fresh.chip?.text, '5h 10%'); assert.equal(fresh.reinstall, null)
+  const off = buildObservedLimitsView(payload({ install: { state: 'not-installed', canInstall: true }, nodeMissing: { at: NOW } }), NOW, utc)
+  assert.equal(off.nodeMissingNote, null)
+})
+
+test('N1: legacy command: note and an upgrade button (only when the host can configure)', () => {
+  const legacy = payload({ install: { state: 'installed', canInstall: false, legacy: true, canUpgrade: true } })
+  const v = buildObservedLimitsView(legacy, NOW, utc)
+  assert.match(v.notes.join(' '), /old command form/)
+  assert.deepEqual(v.reinstall, { label: 'Upgrade wrapper…' })
+  assert.equal(v.nodeMissingNote, null)
+  assert.equal(buildObservedLimitsView({ ...legacy, canConfigure: false }, NOW, utc).reinstall, null)
+  assert.equal(buildObservedLimitsView(payload({ install: { state: 'installed', canInstall: false, legacy: true, canUpgrade: false } }), NOW, utc).reinstall, null)
+})

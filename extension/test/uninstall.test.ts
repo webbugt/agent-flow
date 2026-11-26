@@ -60,6 +60,30 @@ describe('uninstall script: chained statusLine wrapper (P6a)', { skip: process.p
     assert.equal(fs.existsSync(path.join(home, '.claude', 'agent-flow')), false)
   })
 
+  it('N1: removes the launcher, node-path and node-missing marker too (launcher install and legacy install)', async () => {
+    const orig = { type: 'command', command: 'echo "a|b"', padding: 1 }
+    const { home, p } = await sandbox(orig)
+    assert.equal(fs.existsSync(p.launcher), true)
+    fs.mkdirSync(p.limitsDir, { recursive: true }); fs.writeFileSync(p.nodeMissing, '{"v":1,"at":1}')
+    run(home)
+    assert.deepEqual(JSON.parse(fs.readFileSync(p.settings, 'utf-8')), { model: 'opus', statusLine: orig })
+    for (const f of [p.shim, p.launcher, p.nodePath, p.nodeMissing, p.record, p.backup, p.limitsDir]) assert.equal(fs.existsSync(f), false, path.basename(f))
+    assert.equal(fs.existsSync(path.join(home, '.claude', 'agent-flow')), false)
+
+    // an install made before N1: `"<node>" "<shim>"`, no launcher, no node-path
+    const legacy = await sandbox(orig)
+    const { legacyWrapperCommand } = await import('../src/statusline-installer')
+    const s = JSON.parse(fs.readFileSync(legacy.p.settings, 'utf-8'))
+    s.statusLine.command = legacyWrapperCommand({ home: legacy.home, nodePath: process.execPath })
+    fs.writeFileSync(legacy.p.settings, JSON.stringify(s, null, 2) + '\n')
+    const rec = JSON.parse(fs.readFileSync(legacy.p.record, 'utf-8')); rec.installed = s.statusLine
+    fs.writeFileSync(legacy.p.record, JSON.stringify(rec))
+    fs.rmSync(legacy.p.launcher); fs.rmSync(legacy.p.nodePath)
+    run(legacy.home)
+    assert.deepEqual(JSON.parse(fs.readFileSync(legacy.p.settings, 'utf-8')), { model: 'opus', statusLine: orig })
+    assert.equal(fs.existsSync(legacy.p.shim), false)
+  })
+
   it('removes the key when there was no statusLine, and keeps the hooks removal working in the same file', async () => {
     const hookCmd = (h: string) => `"node" "${h}/.claude/agent-flow/hook.js"`
     const { home, p } = await sandbox(null)

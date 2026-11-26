@@ -53,6 +53,10 @@ export interface ObservedLimitsView {
   canRemove: boolean
   /** Not configurable from this host: the command to run in VS Code instead. */
   installHint: string | null
+  /** N1: the launcher could not find node the last time it ran, and no reading arrived since. Shown in the drawer, the panel and the chip. */
+  nodeMissingNote: string | null
+  /** N1: a one-click re-install that fixes the wrapper in place: upgrades the legacy command, or re-records node. */
+  reinstall: { label: string } | null
 }
 
 const PROVIDER = 'Claude Code'
@@ -108,11 +112,48 @@ function rowOf(w: ObservedLimitWindow, at: number, now: number, clock: LocalCloc
 
 const NOT_CONFIGURABLE = `Setting this up edits ~/.claude/settings.json, so it is only offered from the VS Code extension (command "${INSTALL_COMMAND}").`
 
+const LEGACY_NOTE = 'The wrapper is installed with the old command form, which fixes one node path: if node is upgraded or moved, readings stop without a warning. Upgrade it once; your own status line and settings are not changed.'
+
 /** Build the view. `payload` null = the host has not sent a limits message (older host): show nothing actionable. */
 export function buildObservedLimitsView(payload: LimitsUpdatePayload | null, now: number, clock: LocalClock): ObservedLimitsView {
+  const view = buildBaseView(payload, now, clock)
+  return payload ? withInstallHealth(view, payload, now, clock) : view
+}
+
+/**
+ * N1: the two things a working-looking install can hide. (1) The launcher found no node (marker newer than the last
+ * reading): say so instead of letting the numbers just age into `as of HH:MM`. (2) The legacy command: it works today
+ * and fails silently once its node path moves; offer the upgrade. The estimate fallback of the panel is untouched.
+ */
+function withInstallHealth(view: ObservedLimitsView, payload: LimitsUpdatePayload, now: number, clock: LocalClock): ObservedLimitsView {
+  const installed = payload.install.state === 'installed'
+  const nm = installed && payload.nodeMissing && (!payload.observed || payload.observed.at < payload.nodeMissing.at) ? payload.nodeMissing : null
+  const legacy = installed && payload.install.legacy === true
+  if (!nm && !legacy) return view
+  const out: ObservedLimitsView = { ...view, notes: [...view.notes] }
+  if (legacy) out.notes.unshift(LEGACY_NOTE)
+  if (nm) {
+    const since = atText(clock, nm.at, now)
+    const hasRows = view.rows.length > 0
+    out.nodeMissingNote = `The wrapper cannot find node (last tried ${since}), so Claude Code's limits are not being updated. ${hasRows ? `The numbers shown are the last reading${view.asOfText ? `, ${view.asOfText}` : ''}. ` : ''}Limits are estimated until node is found again: install node, or run "${INSTALL_COMMAND}" again.`
+    out.notes.unshift(out.nodeMissingNote)
+    out.headline = hasRows
+      ? `The wrapper cannot find node (last tried ${since}). Showing the last reading${view.asOfText ? `, ${view.asOfText}` : ''}; it is not current.`
+      : `The wrapper cannot find node (last tried ${since}), so no readings can arrive. Limits stay estimated.`
+    out.chip = {
+      text: view.mode === 'observed' && view.chip ? `${view.chip.text} · no node` : 'limits: no node',
+      title: `The wrapper cannot find node (last tried ${since}), so Claude Code's limits are not being updated. ${view.mode === 'observed' ? 'The figures are the last reading. ' : 'Limits are estimated. '}Open for details.`,
+      tone: 'stale',
+    }
+  }
+  if (payload.canConfigure && ((legacy && payload.install.canUpgrade === true) || nm)) out.reinstall = { label: legacy ? 'Upgrade wrapper…' : 'Repair wrapper…' }
+  return out
+}
+
+function buildBaseView(payload: LimitsUpdatePayload | null, now: number, clock: LocalClock): ObservedLimitsView {
   const base: ObservedLimitsView = {
     mode: 'unavailable', headline: 'Usage limits are estimated from this machine only.', rows: [], asOfText: null, chip: null, notes: [],
-    canInstall: false, canRemove: false, installHint: null,
+    canInstall: false, canRemove: false, installHint: null, nodeMissingNote: null, reinstall: null,
   }
   if (!payload) return base
   const installed = payload.install.state === 'installed'

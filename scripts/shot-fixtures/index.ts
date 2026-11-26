@@ -18,7 +18,7 @@
  *   F-F  Hermes, provider=ollama with latency= (one call straddling 22:00 local time)
  *   F-G  Hermes, unknown model acme-xyz-9
  *   F-H  Claude Code transcript with no usage reported (context-size estimate path)
- *   L-1..L-5  limits file variants (read by the app since P6a; L-5 = reading history only, P6b; see LIMITS_FIXTURES)
+ *   L-1..L-6  limits file variants (read by the app since P6a; L-5 = reading history only, P6b; L-6 = stale reading + node-missing marker, N1; see LIMITS_FIXTURES)
  *   C-default / C-eur / C-invalid / C-custom-price / C-local-energy / C-local-energy-tou  cost config variants (same note)
  *
  * Hermes watcher behaviour (H0-A7, verified in scripts/hermes-logs.ts `discover`):
@@ -230,6 +230,8 @@ export const LIMITS_FIXTURES: Record<string, unknown> = {
   'L-3': { five_hour: { used_percentage: 37 }, seven_day: { used_percentage: 4.2 }, fable_used: false, stale: true },
   'L-4': null,
   'L-5': { historyOnly: true },
+  // N1: the wrapper is installed, the last reading is 3 h old and the launcher has since reported "no node" (node-missing.json).
+  'L-6': { five_hour: { used_percentage: 37 }, seven_day: { used_percentage: 4.2 }, fable_used: false, stale: true, nodeMissing: true },
 }
 
 /** The shim's file for a limits fixture. `at` = when the reading was taken; resets are relative to `now`. */
@@ -543,6 +545,10 @@ export function materializeFixtures(opts: {
     fs.writeFileSync(settings, JSON.stringify({ statusLine: { type: 'command', command: 'echo demo-status' } }, null, 2) + '\n')
     const r = installStatusLine({ home: opts.home, nodePath: process.execPath, managedSettingsPaths: [path.join(opts.home, 'no-managed-settings.json')], claudeConfigDir: path.join(opts.home, '.claude') })
     if (!r.ok) throw new Error(`could not install the demo statusLine wrapper: ${r.message}`)
+    if ((LIMITS_FIXTURES[opts.limits] as { nodeMissing?: boolean }).nodeMissing) {
+      // What the launcher leaves when it cannot find node (N1); newer than the (stale) reading above.
+      fs.writeFileSync(path.join(af, 'limits', 'node-missing.json'), JSON.stringify({ v: 1, at: now - 4 * 60_000 }) + '\n', { mode: 0o600 })
+    }
   } else if (opts.limits && !(opts.limits in LIMITS_FIXTURES)) {
     throw new Error(`unknown limits fixture ${opts.limits}`)
   }

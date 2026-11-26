@@ -66,13 +66,15 @@ export function parseLimitsPayload(v: unknown): LimitsUpdatePayload | null {
   }
   const fileError = str(v.fileError, 200)
   const history = parseHistory(v.history)
+  const nodeMissing = isObj(v.nodeMissing) && num(v.nodeMissing.at) && v.nodeMissing.at > 0 ? { at: v.nodeMissing.at } : undefined
   return {
     version: 1, seq: v.seq, provider: 'claude', source: 'statusline', canConfigure: v.canConfigure,
     install: {
       state: i.state as LimitsUpdatePayload['install']['state'], canInstall: i.canInstall,
+      ...(i.legacy === true ? { legacy: true, canUpgrade: i.canUpgrade === true } : {}),
       ...(reason ? { reason } : {}), ...(code ? { code } : {}), ...(shadowedBy ? { shadowedBy } : {}), ...(warnings ? { warnings } : {}),
     },
-    observed, ...(history ? { history } : {}), ...(fileError ? { fileError } : {}),
+    observed, ...(history ? { history } : {}), ...(fileError ? { fileError } : {}), ...(nodeMissing ? { nodeMissing } : {}),
   }
 }
 

@@ -114,6 +114,12 @@ export function ClaudeLimitsSection({ view: given }: { view?: ObservedLimitsView
         <p data-testid="limits-hint" style={{ margin: '4px 0', color: COLORS.textMuted, fontSize: 10, lineHeight: 1.4 }}>{view.installHint}</p>
       )}
 
+      {view.reinstall && (
+        <button type="button" data-testid="limits-reinstall" disabled={busy !== null} onClick={() => run('install')} style={{ ...buttonStyle, marginTop: 4, opacity: busy ? 0.5 : 1 }}>
+          {busy === 'install' ? 'Waiting for confirmation…' : view.reinstall.label}
+        </button>
+      )}
+
       {view.canRemove && (
         <button type="button" data-testid="limits-remove" disabled={busy !== null} onClick={() => run('uninstall')} style={{ ...buttonStyle, marginTop: 4, color: COLORS.textMuted, opacity: busy ? 0.5 : 1 }}>
           {busy === 'uninstall' ? 'Waiting for confirmation…' : 'Remove wrapper…'}

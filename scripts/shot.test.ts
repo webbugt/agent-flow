@@ -108,10 +108,10 @@ test('validatePlan accepts a good plan and rejects bad ones', () => {
 // ─── Fixtures (H0-A3, H0-A6, H0-A7) ─────────────────────────────────────────
 
 test('fixture ids F-A..F-H, L-1..L-5 and C-* all exist', () => {
-  for (const id of ['F-A', 'F-B', 'F-C', 'F-D', 'F-E', 'F-F', 'F-G', 'F-H', 'L-1', 'L-2', 'L-3', 'L-4', 'L-5', 'C-default', 'C-limits', 'C-eur', 'C-invalid', 'C-custom-price', 'C-local-energy']) {
+  for (const id of ['F-A', 'F-B', 'F-C', 'F-D', 'F-E', 'F-F', 'F-G', 'F-H', 'L-1', 'L-2', 'L-3', 'L-4', 'L-5', 'L-6', 'C-default', 'C-limits', 'C-eur', 'C-invalid', 'C-custom-price', 'C-local-energy']) {
     assert.ok(FIXTURE_IDS.includes(id), `missing fixture ${id}`)
   }
-  assert.deepEqual(Object.keys(LIMITS_FIXTURES), ['L-1', 'L-2', 'L-3', 'L-4', 'L-5'])
+  assert.deepEqual(Object.keys(LIMITS_FIXTURES), ['L-1', 'L-2', 'L-3', 'L-4', 'L-5', 'L-6'])
   assert.deepEqual(Object.keys(CONFIG_FIXTURES), ['C-default', 'C-eur', 'C-invalid', 'C-custom-price', 'C-limits', 'C-hide-subscription', 'C-project-override', 'C-broken-json', 'C-one-bad-rule', 'C-hand-edit', 'C-local-energy', 'C-local-energy-tou'])
 })
 
@@ -183,7 +183,7 @@ test('materializeFixtures writes transcripts, profile folders and state.db into 
     assert.equal(lim.rate_limits.five_hour.used_percentage, 37)
     assert.equal(lim.v, 1)
     assert.deepEqual(Object.keys(lim).sort(), ['at', 'model', 'rate_limits', 'session_id', 'v'])
-    assert.match(fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf8'), /statusline-shim\.js/)
+    assert.match(fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf8'), /statusline-run\.sh/)
     assert.equal(JSON.parse(fs.readFileSync(path.join(home, '.agent-flow', 'costs.json'), 'utf8')).currency.display, 'EUR')
     const n = appendHermesLines(m, 'costs')
     assert.equal(n, 14)
@@ -209,6 +209,14 @@ test('materializeFixtures writes transcripts, profile folders and state.db into 
     assert.deepEqual(hist.readings.map(r => r.fiveHour.usedPct), [10, 37])
     assert.ok(hist.readings[1].at > hist.readings[0].at)
     assert.equal(JSON.parse(fs.readFileSync(path.join(home3, '.agent-flow', 'costs.json'), 'utf8')).limits.claude.plan, 'max5x')
+    // L-6 (N1) = wrapper installed (launcher command), a 3 h old reading and a node-missing marker newer than it
+    const home4 = path.join(tmp, 'home4')
+    materializeFixtures({ home: home4, workspace, scenario: 'claude', limits: 'L-6', config: 'C-limits' })
+    const reading6 = JSON.parse(fs.readFileSync(path.join(home4, '.agent-flow', 'limits', 'claude.json'), 'utf8')) as { at: number }
+    const miss = JSON.parse(fs.readFileSync(path.join(home4, '.agent-flow', 'limits', 'node-missing.json'), 'utf8')) as { v: number; at: number }
+    assert.equal(miss.v, 1)
+    assert.ok(miss.at > reading6.at)
+    assert.match(JSON.parse(fs.readFileSync(path.join(home4, '.claude', 'settings.json'), 'utf8')).statusLine.command, /statusline-run\.sh|statusline-shim\.js/)
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true })
   }

@@ -14,8 +14,14 @@
  *     keeps every other key, the key order, the indentation and the file mode.
  *  4b. A symlinked settings.json (stow, chezmoi, home-manager) is written THROUGH: the link stays a link, the target changes;
  *     a dangling or looping link is refused.
- *  5. Uninstall puts the original statusLine back (deep equal) and removes only Agent Flow's files. If the
- *     statusLine changed after install it is left alone and nothing is removed.
+ *  5. Uninstall puts the original statusLine back (deep equal) and removes only Agent Flow's files (shim, launcher,
+ *     node-path, node-missing marker, record, backup, limits files). If the statusLine changed after install it is
+ *     left alone and nothing is removed.
+ *  6. (N1) On POSIX the command is `sh "<home>/.claude/agent-flow/statusline-run.sh"`: the launcher finds node on every
+ *     run (statusline-launcher.ts), so a node upgrade or move cannot silently stop the readings. Windows keeps the
+ *     absolute node path. An install made before N1 (`"<node>" "<shim>"`, the "legacy command") is detected as installed
+ *     and upgraded in place by running install again: the command and the record's `installed` entry change; the saved
+ *     original and the backup do not.
  *
  * Refusing is a normal result, not an error: the caller shows `reason` and the UI falls back to estimates.
  */
@@ -23,12 +29,16 @@ import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 import { getShimScriptContent, STATUSLINE_SHIM_MARKER } from './statusline-shim'
+import { getLauncherScriptContent, STATUSLINE_LAUNCHER_MARKER } from './statusline-launcher'
 
 type Obj = Record<string, unknown>
 
 export const SETTINGS_BACKUP_SUFFIX = '.agent-flow.bak'
 export const ORIGINAL_RECORD_FILE = 'statusline-original.json'
 export const SHIM_FILE = 'statusline-shim.js'
+export const LAUNCHER_FILE = 'statusline-run.sh'
+export const NODE_PATH_FILE = 'node-path'
+export const NODE_MISSING_FILE = 'node-missing.json'
 export const LIMITS_RELATIVE = path.join('limits', 'claude.json')
 /** A settings file larger than this is not a settings file; refuse instead of reading it. */
 const MAX_SETTINGS_BYTES = 4 * 1024 * 1024
@@ -43,8 +53,10 @@ export type RefuseCode =
 export interface InstallerEnv {
   /** Home directory; every path derives from it. */
   home: string
-  /** Absolute path of the node binary the wrapper command will use. */
+  /** Absolute path of the node binary the wrapper starts with (POSIX: recorded in `~/.agent-flow/node-path`, the launcher falls back when it is gone; Windows: written into the command). */
   nodePath: string
+  /** Default `process.platform`. Windows has no `sh`: it keeps the absolute-node command. Tests pass their own. */
+  platform?: NodeJS.Platform
   /** Managed (enterprise) settings files to check. Default: the per-OS locations. Tests pass their own. */
   managedSettingsPaths?: string[]
   /** Workspace folders whose `.claude/settings*.json` may shadow the user scope. */
@@ -57,6 +69,12 @@ export type StatusLineState = 'not-installed' | 'installed' | 'refused' | 'broke
 
 export interface StatusLineInspection {
   state: StatusLineState
+  /** State in words; `installed (legacy command)` for an install made before the launcher existed. */
+  label: string
+  /** Installed with the old `"<node>" "<shim>"` command (POSIX only): it breaks when that node moves. Install again to upgrade it in place. */
+  legacy: boolean
+  /** `legacy`, and the upgrade would succeed right now. */
+  canUpgrade: boolean
   /** Install would succeed right now (state `not-installed`). */
   canInstall: boolean
   reason?: string
@@ -68,7 +86,7 @@ export interface StatusLineInspection {
 }
 
 export type ActionResult =
-  | { ok: true; action: 'installed' | 'already-installed' | 'uninstalled' | 'left-alone' | 'nothing-to-remove'; message: string; shadowedBy?: string[]; warnings?: string[] }
+  | { ok: true; action: 'installed' | 'upgraded' | 'already-installed' | 'uninstalled' | 'left-alone' | 'nothing-to-remove'; message: string; shadowedBy?: string[]; warnings?: string[] }
   | { ok: false; refused: true; code: RefuseCode; message: string }
 
 // ─── Paths ──────────────────────────────────────────────────────────────────
@@ -80,10 +98,13 @@ export function paths(home: string) {
     settings: path.join(claude, 'settings.json'),
     backup: path.join(claude, 'settings.json' + SETTINGS_BACKUP_SUFFIX),
     shim: path.join(claude, 'agent-flow', SHIM_FILE),
+    launcher: path.join(claude, 'agent-flow', LAUNCHER_FILE),
+    nodePath: path.join(af, NODE_PATH_FILE),
     record: path.join(af, ORIGINAL_RECORD_FILE),
     limitsDir: path.join(af, 'limits'),
     limits: path.join(af, LIMITS_RELATIVE),
     limitsHistory: path.join(af, 'limits', 'claude-history.json'),
+    nodeMissing: path.join(af, 'limits', NODE_MISSING_FILE),
   }
 }
 
@@ -101,13 +122,33 @@ export function defaultManagedSettingsPaths(platform: NodeJS.Platform = process.
   return list
 }
 
-/** The wrapper command written into settings.json. Quoted like the hook command. */
-export function wrapperCommand(env: Pick<InstallerEnv, 'home' | 'nodePath'>): string {
+/** POSIX installs go through the launcher; Windows has no `sh` and keeps the absolute node path in the command. */
+export function usesLauncher(env: Pick<InstallerEnv, 'platform'>): boolean {
+  return (env.platform ?? process.platform) !== 'win32'
+}
+
+/**
+ * The wrapper command written into settings.json. POSIX: `sh "<launcher>"` (the launcher finds node itself).
+ * Windows: `"<node>" "<shim>"`, quoted like the hook command.
+ */
+export function wrapperCommand(env: Pick<InstallerEnv, 'home' | 'nodePath' | 'platform'>): string {
+  return usesLauncher(env) ? `sh "${paths(env.home).launcher}"` : legacyWrapperCommand(env)
+}
+
+/** The command of an install made before the launcher existed (and the Windows form): a fixed node and the shim. */
+export function legacyWrapperCommand(env: Pick<InstallerEnv, 'home' | 'nodePath'>): string {
   return `"${env.nodePath}" "${paths(env.home).shim}"`
 }
 
+const slashes = (command: string): string => command.replace(/\\/g, '/')
+
 export function isWrapperCommand(command: unknown): boolean {
-  return typeof command === 'string' && command.replace(/\\/g, '/').includes(STATUSLINE_SHIM_MARKER)
+  return typeof command === 'string' && (slashes(command).includes(STATUSLINE_LAUNCHER_MARKER) || slashes(command).includes(STATUSLINE_SHIM_MARKER))
+}
+
+/** A command that names a node binary and the shim directly (the pre-launcher form). */
+export function isLegacyWrapperCommand(command: unknown): boolean {
+  return typeof command === 'string' && slashes(command).includes(STATUSLINE_SHIM_MARKER) && !slashes(command).includes(STATUSLINE_LAUNCHER_MARKER)
 }
 
 // ─── Reading ────────────────────────────────────────────────────────────────
@@ -176,7 +217,7 @@ function serializeLike(raw: string, value: unknown): string {
 
 // ─── Inspect ────────────────────────────────────────────────────────────────
 
-interface Record1 { v: 1; installedAt: string; hadStatusLine: boolean; /** settings.json did not exist before the install */ createdSettings?: boolean; original?: unknown; installed: unknown }
+interface Record1 { v: 1; installedAt: string; /** set when a legacy install was upgraded to the launcher */ upgradedAt?: string; hadStatusLine: boolean; /** settings.json did not exist before the install */ createdSettings?: boolean; original?: unknown; installed: unknown }
 
 function readRecord(file: string): Record1 | null {
   try {
@@ -216,11 +257,14 @@ function environmentWarnings(env: InstallerEnv): string[] {
   return out
 }
 
+const LABEL: Record<StatusLineState, string> = { 'not-installed': 'not installed', installed: 'installed', refused: 'refused', broken: 'broken' }
+
 /** What an install would do right now, without writing anything. */
 export function inspectStatusLine(env: InstallerEnv): StatusLineInspection {
   const p = paths(env.home)
   const base = { shadowedBy: shadowing(env), warnings: environmentWarnings(env) }
-  const refuse = (code: RefuseCode, reason: string, state: StatusLineState = 'refused'): StatusLineInspection => ({ state, canInstall: false, code, reason, ...base })
+  const refuse = (code: RefuseCode, reason: string, state: StatusLineState = 'refused'): StatusLineInspection =>
+    ({ state, label: LABEL[state], legacy: false, canUpgrade: false, canInstall: false, code, reason, ...base })
 
   const r = readSettings(p.settings)
   if (!r.ok) return refuse(r.code, r.message)
@@ -230,7 +274,13 @@ export function inspectStatusLine(env: InstallerEnv): StatusLineInspection {
     const rec = readRecord(p.record)
     if (!rec) return refuse('record-missing', 'the wrapper is in settings.json but its saved original (~/.agent-flow/statusline-original.json) is missing or damaged; Agent Flow cannot restore your status line automatically', 'broken')
     if (!fs.existsSync(p.shim)) return refuse('io-error', 'the wrapper script (~/.claude/agent-flow/statusline-shim.js) is missing; reinstall to repair it', 'broken')
-    return { state: 'installed', canInstall: false, ...base }
+    const cmd = (sl as Obj).command
+    const legacy = usesLauncher(env) && isLegacyWrapperCommand(cmd)
+    if (usesLauncher(env) && !legacy && !fs.existsSync(p.launcher)) {
+      return refuse('io-error', 'the launcher script (~/.claude/agent-flow/statusline-run.sh) is missing; reinstall to repair it', 'broken')
+    }
+    const canUpgrade = legacy && checkNode(env) === null && deepEqual(sl, rec.installed)
+    return { state: 'installed', label: legacy ? 'installed (legacy command)' : 'installed', legacy, canUpgrade, canInstall: false, ...base }
   }
 
   const managed = checkManaged(env)
@@ -247,16 +297,18 @@ export function inspectStatusLine(env: InstallerEnv): StatusLineInspection {
 
   const node = checkNode(env)
   if (node) return refuse(node.code, node.message)
-  return { state: 'not-installed', canInstall: true, ...base }
+  return { state: 'not-installed', label: LABEL['not-installed'], legacy: false, canUpgrade: false, canInstall: true, ...base }
 }
 
 function checkNode(env: InstallerEnv): { code: RefuseCode; message: string } | null {
   const n = env.nodePath
-  if (!n || !path.isAbsolute(n)) return { code: 'node-unavailable', message: 'the absolute path of the node binary is not known, so the wrapper command cannot be written safely' }
+  if (!n || !path.isAbsolute(n)) return { code: 'node-unavailable', message: 'the absolute path of the node binary is not known, so the wrapper cannot be set up safely' }
   try { fs.accessSync(n, fs.constants.X_OK) } catch { return { code: 'node-unavailable', message: `node (${n}) is not executable` } }
   for (const s of [n, env.home]) {
     if (/["\0\r\n]/.test(s)) return { code: 'path-unsafe', message: 'a path contains a character that cannot be put in the wrapper command safely' }
   }
+  // The POSIX command is `sh "<home>/...": the shell would expand these inside the double quotes.
+  if (usesLauncher(env) && /[$`\\]/.test(env.home)) return { code: 'path-unsafe', message: 'the home directory contains a character ($, ` or \\) that cannot be put in the wrapper command safely' }
   return null
 }
 
@@ -277,12 +329,60 @@ function writeFileAtomic(file: string, content: string, mode: number): void {
 
 function refusal(code: RefuseCode, message: string): ActionResult { return { ok: false, refused: true, code, message } }
 
+function readTextOrNull(file: string): string | null {
+  try { return fs.readFileSync(file, 'utf-8') } catch { return null }
+}
+
+/** The recorded node (first line of node-path), when it is a usable absolute path. */
+function recordedNode(file: string): string | null {
+  const line = (readTextOrNull(file) ?? '').split(/\r?\n/, 1)[0].trim()
+  return path.isAbsolute(line) ? line : null
+}
+
+function isExecutable(file: string): boolean {
+  try { return fs.statSync(file).isFile() && (fs.accessSync(file, fs.constants.X_OK), true) } catch { return false }
+}
+
+/**
+ * Write the files the wrapper runs from. Missing or outdated shim / launcher are written (they are ours); node-path is
+ * written when absent or when the recorded node is gone. Returns the files that did not exist before. Nothing here
+ * touches settings.json.
+ */
+function writeWrapperFiles(env: InstallerEnv, opts: { nodeOk: boolean }): string[] {
+  const p = paths(env.home)
+  const created: string[] = []
+  if (readTextOrNull(p.shim) !== getShimScriptContent()) {
+    const existed = fs.existsSync(p.shim)
+    writeFileAtomic(p.shim, getShimScriptContent(), 0o755)
+    if (!existed) created.push(p.shim)
+  }
+  if (usesLauncher(env)) {
+    if (readTextOrNull(p.launcher) !== getLauncherScriptContent()) {
+      const existed = fs.existsSync(p.launcher)
+      writeFileAtomic(p.launcher, getLauncherScriptContent(), 0o755)
+      if (!existed) created.push(p.launcher)
+    }
+    const rec = recordedNode(p.nodePath)
+    if (opts.nodeOk && (rec === null || !isExecutable(rec))) {
+      const existed = fs.existsSync(p.nodePath)
+      writeFileAtomic(p.nodePath, env.nodePath + '\n', 0o600)
+      if (!existed) created.push(p.nodePath)
+    }
+    try { fs.unlinkSync(p.nodeMissing) } catch { /* no marker */ } // node is known again; the launcher also clears it on its next run
+  }
+  return created
+}
+
 export function installStatusLine(env: InstallerEnv): ActionResult {
   const insp = inspectStatusLine(env)
   const p = paths(env.home)
-  if (insp.state === 'installed') {
-    // Idempotent: nothing in settings.json changes. A newer shim script (an upgrade) is refreshed, it is ours.
-    try { if (!fs.existsSync(p.shim) || fs.readFileSync(p.shim, 'utf-8') !== getShimScriptContent()) writeFileAtomic(p.shim, getShimScriptContent(), 0o755) } catch { /* keep the old script */ }
+  if (insp.state === 'installed' && insp.legacy) return upgradeLegacy(env, insp)
+  if (insp.state === 'installed' || (insp.state === 'broken' && insp.code === 'io-error')) {
+    // Idempotent: nothing in settings.json changes. A newer shim / launcher (an upgrade, or a deleted file) is rewritten,
+    // they are ours; so is a node-path whose node is gone.
+    try { writeWrapperFiles(env, { nodeOk: checkNode(env) === null }) } catch { /* keep the old files */ }
+    const after = inspectStatusLine(env)
+    if (after.state !== 'installed') return refusal(after.code ?? 'io-error', `Not repaired: ${after.reason ?? 'a file could not be written'}`)
     return { ok: true, action: 'already-installed', message: 'The statusLine wrapper is already installed. Nothing changed.', shadowedBy: insp.shadowedBy, warnings: insp.warnings }
   }
   if (!insp.canInstall) return refusal(insp.code ?? 'io-error', `Not installed, nothing was changed: ${insp.reason ?? 'unsafe to chain'}. Limits stay estimated.`)
@@ -297,9 +397,7 @@ export function installStatusLine(env: InstallerEnv): ActionResult {
 
   const created: string[] = []
   try {
-    const shimExisted = fs.existsSync(p.shim)
-    writeFileAtomic(p.shim, getShimScriptContent(), 0o755)
-    if (!shimExisted) created.push(p.shim)
+    created.push(...writeWrapperFiles(env, { nodeOk: true }))
     const record: Record1 = { v: 1, installedAt: new Date().toISOString(), hadStatusLine: had, ...(r.exists ? {} : { createdSettings: true }), ...(had ? { original } : {}), installed }
     const recordExisted = fs.existsSync(p.record)
     writeFileAtomic(p.record, JSON.stringify(record, null, 2) + '\n', 0o600)
@@ -319,11 +417,56 @@ export function installStatusLine(env: InstallerEnv): ActionResult {
   }
 }
 
+/**
+ * Legacy command -> launcher, in place. The command (and the record's `installed` copy of it) is the only thing that
+ * changes in settings.json / the record: every other statusLine field, the saved original, the backup of the user's
+ * pristine settings and the file mode stay. If the statusLine was edited after the install (it no longer equals the
+ * record) nothing is changed: the old command keeps working and uninstall keeps its safety check.
+ */
+function upgradeLegacy(env: InstallerEnv, insp: StatusLineInspection): ActionResult {
+  const p = paths(env.home)
+  const node = checkNode(env)
+  if (node) return refusal(node.code, `Not upgraded, nothing was changed: ${node.message}. The current wrapper keeps working until its node path breaks.`)
+  const r = readSettings(p.settings)
+  if (!r.ok) return refusal(r.code, r.message)
+  const rec = readRecord(p.record)
+  const sl = r.settings.statusLine as Obj
+  if (!rec || !deepEqual(sl, rec.installed)) {
+    return refusal('modified-after-install', 'Not upgraded, nothing was changed: the statusLine entry was edited after the wrapper was installed. Remove the wrapper first, or restore the entry by hand.')
+  }
+  const installed: Obj = { ...sl, command: wrapperCommand(env) }
+  const next: Obj = { ...r.settings, statusLine: installed }
+  const oldRecordText = readTextOrNull(p.record)
+  const created: string[] = []
+  let recordWritten = false
+  try {
+    created.push(...writeWrapperFiles(env, { nodeOk: true }))
+    writeFileAtomic(p.record, JSON.stringify({ ...rec, upgradedAt: new Date().toISOString(), installed }, null, 2) + '\n', 0o600)
+    recordWritten = true
+    const mode = fs.statSync(r.target).mode & 0o777
+    writeFileAtomic(r.target, serializeLike(r.raw, next), mode) // through a symlink: the link stays a link
+  } catch {
+    if (recordWritten && oldRecordText !== null) { try { writeFileAtomic(p.record, oldRecordText, 0o600) } catch { /* best effort */ } }
+    for (const f of created) { try { fs.unlinkSync(f) } catch { /* best effort */ } }
+    return refusal('io-error', 'Not upgraded: a file could not be written. settings.json was not changed.')
+  }
+  return {
+    ok: true, action: 'upgraded', shadowedBy: insp.shadowedBy, warnings: insp.warnings,
+    message: 'Upgraded. The status line command now starts through a launcher that finds node itself, so a node upgrade no longer stops the readings. Your own status line and the saved original are unchanged.',
+  }
+}
+
 // ─── Uninstall ──────────────────────────────────────────────────────────────
+
+/** Files that only exist because of the wrapper (settings.json is handled separately). */
+function ourFiles(home: string): string[] {
+  const p = paths(home)
+  return [p.shim, p.launcher, p.nodePath, p.record, p.limits, p.limitsHistory, p.nodeMissing]
+}
 
 function removeOurFiles(env: InstallerEnv): void {
   const p = paths(env.home)
-  for (const f of [p.shim, p.record, p.limits, p.limitsHistory, p.backup]) { try { fs.unlinkSync(f) } catch { /* not there */ } }
+  for (const f of [...ourFiles(env.home), p.backup]) { try { fs.unlinkSync(f) } catch { /* not there */ } }
   try { fs.rmdirSync(p.limitsDir) } catch { /* not empty or not there: leave it */ }
 }
 
@@ -335,7 +478,7 @@ export function uninstallStatusLine(env: InstallerEnv): ActionResult {
   const ours = hasKey(r.settings, 'statusLine') && !!sl && typeof sl === 'object' && !Array.isArray(sl) && isWrapperCommand((sl as Obj).command)
 
   if (!ours) {
-    const leftovers = [p.shim, p.record, p.limits, p.limitsHistory].some(f => fs.existsSync(f))
+    const leftovers = ourFiles(env.home).some(f => fs.existsSync(f))
     if (!leftovers) return { ok: true, action: 'nothing-to-remove', message: 'The statusLine wrapper is not installed. Nothing to remove.' }
     removeOurFiles(env)
     return { ok: true, action: 'left-alone', message: 'Your statusLine setting no longer points to Agent Flow, so it was left as it is. Agent Flow\'s own files were removed.' }

@@ -8,10 +8,11 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import {
-  deepEqual, defaultManagedSettingsPaths, inspectStatusLine, installStatusLine, isWrapperCommand, paths, uninstallStatusLine, wrapperCommand,
+  deepEqual, defaultManagedSettingsPaths, inspectStatusLine, installStatusLine, isLegacyWrapperCommand, isWrapperCommand, legacyWrapperCommand, paths, uninstallStatusLine, wrapperCommand,
   type InstallerEnv,
 } from '../src/statusline-installer'
 import { getShimScriptContent, STATUSLINE_SHIM_MARKER } from '../src/statusline-shim'
+import { getLauncherScriptContent, STATUSLINE_LAUNCHER_MARKER } from '../src/statusline-launcher'
 
 const temps: string[] = []
 afterEach(() => { for (const d of temps.splice(0)) fs.rmSync(d, { recursive: true, force: true }) })
@@ -34,7 +35,7 @@ function writeSettings(p: ReturnType<typeof paths>, text: string, mode = 0o644):
 }
 const read = (f: string) => fs.readFileSync(f, 'utf-8')
 const mode = (f: string) => fs.statSync(f).mode & 0o777
-const ours = (home: string) => [paths(home).shim, paths(home).record, paths(home).backup, paths(home).limitsDir, path.join(home, '.agent-flow')]
+const ours = (home: string) => [paths(home).shim, paths(home).launcher, paths(home).nodePath, paths(home).record, paths(home).backup, paths(home).limitsDir, path.join(home, '.agent-flow')]
 
 const HOOKS = { SessionStart: [{ hooks: [{ type: 'command', command: '"node" "/h/.claude/agent-flow/hook.js"', timeout: 5 }] }] }
 
@@ -65,9 +66,57 @@ describe('statusLine installer: install', { skip: process.platform === 'win32' &
     // shim: executable, exact content
     assert.equal(read(t.p.shim), getShimScriptContent())
     assert.equal(mode(t.p.shim) & 0o100, 0o100)
-    // the command names the absolute node and the shim in this HOME
-    assert.equal(after.statusLine.command, `"${process.execPath}" "${t.home}/.claude/agent-flow/statusline-shim.js"`)
-    assert.ok(after.statusLine.command.includes(STATUSLINE_SHIM_MARKER))
+    // N1: the command names the launcher in this HOME, not a node binary; the launcher finds node itself
+    assert.equal(after.statusLine.command, `sh "${t.home}/.claude/agent-flow/statusline-run.sh"`)
+    assert.ok(after.statusLine.command.includes(STATUSLINE_LAUNCHER_MARKER))
+    assert.equal(after.statusLine.command.includes(process.execPath), false, 'no fixed node path in settings.json')
+    assert.equal(read(t.p.launcher), getLauncherScriptContent())
+    assert.equal(mode(t.p.launcher), 0o755)
+    // the install-time node is recorded for the launcher (0600)
+    assert.equal(read(t.p.nodePath), process.execPath + '\n')
+    assert.equal(mode(t.p.nodePath), 0o600)
+  })
+
+  it('Windows keeps the absolute-node command: no launcher, no node-path, and the round trip still works', () => {
+    const t = mk()
+    const env = { ...t.env, platform: 'win32' as const }
+    writeSettings(t.p, JSON.stringify({ model: 'm' }, null, 2) + '\n')
+    assert.equal(installStatusLine(env).ok, true)
+    const cmd = JSON.parse(read(t.p.settings)).statusLine.command
+    assert.equal(cmd, `"${process.execPath}" "${t.home}/.claude/agent-flow/statusline-shim.js"`)
+    assert.equal(cmd, legacyWrapperCommand(env))
+    assert.equal(fs.existsSync(t.p.launcher), false)
+    assert.equal(fs.existsSync(t.p.nodePath), false)
+    const insp = inspectStatusLine(env)
+    assert.equal(insp.state, 'installed')
+    assert.equal(insp.legacy, false, 'on Windows this is the normal form, not a legacy one')
+    const again = installStatusLine(env)
+    assert.equal(again.ok && again.action, 'already-installed')
+    assert.equal(fs.existsSync(t.p.launcher), false)
+    assert.equal(uninstallStatusLine(env).ok, true)
+    assert.equal(read(t.p.settings), JSON.stringify({ model: 'm' }, null, 2) + '\n')
+  })
+
+  it('works with a HOME that contains spaces: the command is quoted, the round trip is exact', () => {
+    const t = mk()
+    const home = path.join(path.dirname(t.home), 'my home dir')
+    fs.mkdirSync(home)
+    const env = { ...t.env, home }
+    const p = paths(home)
+    const raw = JSON.stringify({ statusLine: { type: 'command', command: 'echo "a b"' } }, null, 2) + '\n'
+    writeSettings(p, raw)
+    assert.equal(installStatusLine(env).ok, true)
+    assert.equal(JSON.parse(read(p.settings)).statusLine.command, `sh "${home}/.claude/agent-flow/statusline-run.sh"`)
+    assert.equal(uninstallStatusLine(env).ok, true)
+    assert.equal(read(p.settings), raw)
+  })
+
+  it('refuses a HOME the POSIX shell would expand inside the double quotes ($, backtick, backslash)', () => {
+    for (const ch of ['$', '`', '\\']) {
+      const t = mk()
+      const r = installStatusLine({ ...t.env, home: `${t.home}/we${ch}ird` })
+      assert.equal(!r.ok && r.code, 'path-unsafe', ch)
+    }
   })
 
   it('(b) command statusLine: the original is stored verbatim and every extra field survives in the wrapper entry', () => {
@@ -451,5 +500,226 @@ describe('statusLine installer: symlinked settings.json and limits history (R2 M
     const u = uninstallStatusLine(t.env)
     assert.equal(u.ok && u.action, 'left-alone')
     assert.equal(fs.existsSync(t.p.limitsHistory), false)
+  })
+})
+
+describe('statusLine installer: launcher, legacy command, repair (N1)', { skip: process.platform === 'win32' && 'POSIX modes' }, () => {
+  /** A legacy install = what the installer wrote before N1: `"<node>" "<shim>"`. The win32 form is exactly that command. */
+  function legacyInstall(original: unknown, fileMode = 0o640) {
+    const t = mk()
+    const raw = JSON.stringify({ model: 'opus', hooks: HOOKS, ...(original === undefined ? {} : { statusLine: original }), env: { A: '1' } }, null, 2) + '\n'
+    writeSettings(t.p, raw, fileMode)
+    assert.equal(installStatusLine({ ...t.env, platform: 'win32' }).ok, true)
+    return { ...t, raw }
+  }
+  const orig = { type: 'command', command: 'echo "a|b"', padding: 2, refreshInterval: 30, extra: { n: [1, { x: null }] } }
+
+  it('the old command form is detected as installed, legacy, upgradable', () => {
+    const t = legacyInstall(orig)
+    const cmd = JSON.parse(read(t.p.settings)).statusLine.command
+    assert.equal(cmd, legacyWrapperCommand(t.env))
+    assert.equal(isLegacyWrapperCommand(cmd), true)
+    assert.equal(isLegacyWrapperCommand(wrapperCommand(t.env)), false)
+    assert.equal(isWrapperCommand(cmd), true, 'still recognised as ours')
+    const insp = inspectStatusLine(t.env)
+    assert.equal(insp.state, 'installed')
+    assert.equal(insp.legacy, true)
+    assert.equal(insp.canUpgrade, true)
+    assert.equal(insp.label, 'installed (legacy command)')
+    assert.equal(insp.canInstall, false)
+    assert.equal(inspectStatusLine({ ...t.env, platform: 'win32' }).label, 'installed')
+  })
+
+  it('installing again upgrades in place: only the command (and the record copy of it) changes; original, backup, mode, key order stay', () => {
+    const t = legacyInstall(orig)
+    const recBefore = JSON.parse(read(t.p.record))
+    const backupBefore = read(t.p.backup)
+    assert.equal(backupBefore, t.raw)
+    const bakMtime = fs.statSync(t.p.backup).mtimeMs
+
+    const r = installStatusLine(t.env)
+    assert.equal(r.ok && r.action, 'upgraded')
+
+    const after = JSON.parse(read(t.p.settings))
+    assert.deepEqual(Object.keys(after), ['model', 'hooks', 'statusLine', 'env'])
+    assert.deepEqual(after.statusLine, { ...orig, command: wrapperCommand(t.env) }, 'every other statusLine field is kept')
+    assert.deepEqual(after.hooks, HOOKS)
+    assert.equal(mode(t.p.settings), 0o640)
+    // the saved original survives untouched; only `installed` follows the new command
+    const rec = JSON.parse(read(t.p.record))
+    assert.deepEqual(rec.original, orig)
+    assert.equal(rec.hadStatusLine, true)
+    assert.equal(rec.installedAt, recBefore.installedAt)
+    assert.equal(typeof rec.upgradedAt, 'string')
+    assert.deepEqual(rec.installed, after.statusLine)
+    assert.equal(mode(t.p.record), 0o600)
+    // the backup is still the pristine pre-install file (not the legacy-wrapped one)
+    assert.equal(read(t.p.backup), backupBefore)
+    assert.equal(fs.statSync(t.p.backup).mtimeMs, bakMtime)
+    // new files
+    assert.equal(read(t.p.launcher), getLauncherScriptContent()); assert.equal(mode(t.p.launcher), 0o755)
+    assert.equal(read(t.p.nodePath), process.execPath + '\n'); assert.equal(mode(t.p.nodePath), 0o600)
+    // now a normal install
+    const insp = inspectStatusLine(t.env)
+    assert.equal(insp.state, 'installed'); assert.equal(insp.legacy, false); assert.equal(insp.label, 'installed')
+    const again = installStatusLine(t.env)
+    assert.equal(again.ok && again.action, 'already-installed')
+  })
+
+  it('upgrade then uninstall restores the original deep-equal (byte-identical file) and removes every file Agent Flow made', () => {
+    const t = legacyInstall(orig)
+    assert.equal(installStatusLine(t.env).ok && true, true)
+    fs.mkdirSync(t.p.limitsDir, { recursive: true })
+    fs.writeFileSync(t.p.limits, '{"v":1}'); fs.writeFileSync(t.p.nodeMissing, '{"v":1,"at":1}')
+    const u = uninstallStatusLine(t.env)
+    assert.equal(u.ok && u.action, 'uninstalled')
+    assert.equal(read(t.p.settings), t.raw)
+    assert.ok(deepEqual(JSON.parse(read(t.p.settings)).statusLine, orig))
+    for (const f of [t.p.shim, t.p.launcher, t.p.nodePath, t.p.record, t.p.backup, t.p.limits, t.p.nodeMissing, t.p.limitsDir]) assert.equal(fs.existsSync(f), false, path.basename(f))
+  })
+
+  it('a legacy install without a user statusLine upgrades and uninstalls too (key removed again)', () => {
+    const t = legacyInstall(undefined)
+    assert.equal(inspectStatusLine(t.env).legacy, true)
+    assert.equal(installStatusLine(t.env).ok && true, true)
+    assert.deepEqual(JSON.parse(read(t.p.settings)).statusLine, { type: 'command', command: wrapperCommand(t.env) })
+    assert.equal(uninstallStatusLine(t.env).ok, true)
+    assert.equal(read(t.p.settings), t.raw)
+  })
+
+  it('an uninstall of a legacy install that was never upgraded still works and also removes launcher / node-path leftovers', () => {
+    const t = legacyInstall(orig)
+    fs.writeFileSync(t.p.launcher, '#!/bin/sh\n'); fs.writeFileSync(t.p.nodePath, '/x\n')
+    assert.equal(uninstallStatusLine(t.env).ok, true)
+    assert.equal(read(t.p.settings), t.raw)
+    assert.equal(fs.existsSync(t.p.launcher), false); assert.equal(fs.existsSync(t.p.nodePath), false)
+  })
+
+  it('a statusLine edited after the install is NOT upgraded (nothing changes, uninstall still guards it)', () => {
+    const t = legacyInstall(orig)
+    const s = JSON.parse(read(t.p.settings)); s.statusLine.padding = 9
+    fs.writeFileSync(t.p.settings, JSON.stringify(s, null, 2) + '\n')
+    const before = read(t.p.settings); const recBefore = read(t.p.record)
+    assert.equal(inspectStatusLine(t.env).canUpgrade, false)
+    const r = installStatusLine(t.env)
+    assert.equal(!r.ok && r.code, 'modified-after-install')
+    assert.equal(read(t.p.settings), before); assert.equal(read(t.p.record), recBefore)
+    assert.equal(fs.existsSync(t.p.launcher), false)
+  })
+
+  it('no usable node: the upgrade is refused and the working legacy install is left exactly as it was', () => {
+    const t = legacyInstall(orig)
+    const before = read(t.p.settings); const recBefore = read(t.p.record)
+    const r = installStatusLine({ ...t.env, nodePath: path.join(t.home, 'no-such-node') })
+    assert.equal(!r.ok && r.code, 'node-unavailable')
+    assert.equal(read(t.p.settings), before); assert.equal(read(t.p.record), recBefore)
+    assert.equal(fs.existsSync(t.p.launcher), false); assert.equal(fs.existsSync(t.p.nodePath), false)
+  })
+
+  it('a failed settings write during the upgrade rolls back: record restored, new files removed', () => {
+    if (process.getuid && process.getuid() === 0) return // root ignores directory permissions
+    const t = legacyInstall(orig)
+    const before = read(t.p.settings); const recBefore = read(t.p.record)
+    fs.chmodSync(path.dirname(t.p.settings), 0o500) // settings.json cannot be replaced; .claude/agent-flow stays writable
+    try {
+      const r = installStatusLine(t.env)
+      assert.equal(!r.ok && r.code, 'io-error')
+    } finally { fs.chmodSync(path.dirname(t.p.settings), 0o700) }
+    assert.equal(read(t.p.settings), before)
+    assert.equal(read(t.p.record), recBefore, 'the record matches settings.json again')
+    assert.equal(fs.existsSync(t.p.launcher), false); assert.equal(fs.existsSync(t.p.nodePath), false)
+    assert.equal(uninstallStatusLine(t.env).ok, true, 'uninstall still works afterwards')
+  })
+
+  it('a symlinked settings.json is upgraded through the link (stays a link, target changes, mode kept)', () => {
+    const t = mk()
+    const target = path.join(t.home, 'dotfiles', 'settings.json')
+    fs.mkdirSync(path.dirname(target), { recursive: true })
+    fs.writeFileSync(target, JSON.stringify({ statusLine: orig, model: 'm' }, null, 2) + '\n', { mode: 0o640 }); fs.chmodSync(target, 0o640)
+    fs.mkdirSync(path.dirname(t.p.settings), { recursive: true })
+    fs.symlinkSync(path.join('..', 'dotfiles', 'settings.json'), t.p.settings)
+    assert.equal(installStatusLine({ ...t.env, platform: 'win32' }).ok, true)
+    assert.equal(inspectStatusLine(t.env).legacy, true)
+    const r = installStatusLine(t.env)
+    assert.equal(r.ok && r.action, 'upgraded')
+    assert.equal(fs.lstatSync(t.p.settings).isSymbolicLink(), true)
+    assert.equal(fs.lstatSync(target).isSymbolicLink(), false)
+    assert.equal(JSON.parse(read(target)).statusLine.command, wrapperCommand(t.env))
+    assert.equal(mode(target), 0o640)
+    assert.deepEqual(fs.readdirSync(path.dirname(target)), ['settings.json'], 'no temp file next to the target')
+    assert.equal(uninstallStatusLine(t.env).ok, true)
+    assert.equal(fs.lstatSync(t.p.settings).isSymbolicLink(), true)
+    assert.ok(deepEqual(JSON.parse(read(target)), { statusLine: orig, model: 'm' }))
+  })
+
+  it('a deleted launcher is reported as broken and install repairs it; a node-path whose node is gone is re-recorded', () => {
+    const t = mk()
+    writeSettings(t.p, JSON.stringify({ model: 'm' }) + '\n')
+    assert.equal(installStatusLine(t.env).ok, true)
+    fs.rmSync(t.p.launcher)
+    const insp = inspectStatusLine(t.env)
+    assert.equal(insp.state, 'broken'); assert.equal(insp.code, 'io-error')
+    const settingsBefore = read(t.p.settings)
+    const fixed = installStatusLine(t.env)
+    assert.equal(fixed.ok && fixed.action, 'already-installed')
+    assert.equal(read(t.p.launcher), getLauncherScriptContent())
+    assert.equal(read(t.p.settings), settingsBefore, 'settings.json untouched by the repair')
+    assert.equal(inspectStatusLine(t.env).state, 'installed')
+
+    fs.writeFileSync(t.p.nodePath, path.join(t.home, 'old-node', 'bin', 'node') + '\n')
+    assert.equal(installStatusLine(t.env).ok, true)
+    assert.equal(read(t.p.nodePath), process.execPath + '\n', 'the stale record is replaced by the node that works now')
+    // a record that still works is left alone
+    const other = path.join(t.home, 'other-node'); fs.writeFileSync(other, '#!/bin/sh\n', { mode: 0o755 })
+    fs.writeFileSync(t.p.nodePath, other + '\n')
+    assert.equal(installStatusLine(t.env).ok, true)
+    assert.equal(read(t.p.nodePath), other + '\n')
+  })
+
+  it('install clears a stale node-missing marker (node is known again)', () => {
+    const t = mk()
+    writeSettings(t.p, '{}\n')
+    assert.equal(installStatusLine(t.env).ok, true)
+    fs.mkdirSync(t.p.limitsDir, { recursive: true }); fs.writeFileSync(t.p.nodeMissing, '{"v":1,"at":1}')
+    fs.writeFileSync(t.p.nodePath, '/gone/node\n')
+    assert.equal(installStatusLine(t.env).ok, true)
+    assert.equal(fs.existsSync(t.p.nodeMissing), false)
+  })
+
+  it('uninstall (launcher install) removes launcher, node-path and node-missing marker; the left-alone path does too', () => {
+    const t = mk()
+    writeSettings(t.p, JSON.stringify({ statusLine: { type: 'command', command: 'old' } }, null, 2) + '\n')
+    assert.equal(installStatusLine(t.env).ok, true)
+    fs.mkdirSync(t.p.limitsDir, { recursive: true }); fs.writeFileSync(t.p.nodeMissing, '{"v":1,"at":1}')
+    assert.equal(uninstallStatusLine(t.env).ok, true)
+    for (const f of [t.p.launcher, t.p.nodePath, t.p.nodeMissing, t.p.limitsDir]) assert.equal(fs.existsSync(f), false, path.basename(f))
+
+    const u = mk()
+    writeSettings(u.p, JSON.stringify({ model: 'm' }) + '\n')
+    assert.equal(installStatusLine(u.env).ok, true)
+    fs.mkdirSync(u.p.limitsDir, { recursive: true }); fs.writeFileSync(u.p.nodeMissing, '{"v":1,"at":1}')
+    fs.writeFileSync(u.p.settings, JSON.stringify({ statusLine: { type: 'command', command: 'mine' } }))
+    const left = uninstallStatusLine(u.env)
+    assert.equal(left.ok && left.action, 'left-alone')
+    for (const f of [u.p.launcher, u.p.nodePath, u.p.nodeMissing]) assert.equal(fs.existsSync(f), false, path.basename(f))
+  })
+
+  it('neighbours survive uninstall: hook.js and costs.json are not ours', () => {
+    const t = mk()
+    writeSettings(t.p, '{}\n')
+    const hookJs = path.join(path.dirname(t.p.shim), 'hook.js')
+    installStatusLine(t.env)
+    fs.writeFileSync(hookJs, '// hook'); fs.writeFileSync(path.join(t.home, '.agent-flow', 'costs.json'), '{}')
+    uninstallStatusLine(t.env)
+    assert.equal(fs.existsSync(hookJs), true); assert.equal(fs.existsSync(path.join(t.home, '.agent-flow', 'costs.json')), true)
+  })
+
+  it('isWrapperCommand / isLegacyWrapperCommand: both forms, either slash style, nothing else', () => {
+    assert.equal(isWrapperCommand('sh "/h/.claude/agent-flow/statusline-run.sh"'), true)
+    assert.equal(isWrapperCommand('sh "C:\\Users\\a\\.claude\\agent-flow\\statusline-run.sh"'), true)
+    assert.equal(isLegacyWrapperCommand('sh "/h/.claude/agent-flow/statusline-run.sh"'), false)
+    assert.equal(isLegacyWrapperCommand('"/n/bin/node" "/h/.claude/agent-flow/statusline-shim.js"'), true)
+    assert.equal(isLegacyWrapperCommand(undefined), false)
+    assert.equal(isWrapperCommand('sh "/h/.claude/agent-flow/hook.js"'), false)
   })
 })

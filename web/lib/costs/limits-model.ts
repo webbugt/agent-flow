@@ -348,6 +348,9 @@ export function buildLimitsPanel(input: LimitsModelInput): LimitsPanelModel {
   if (f.row) rows.push(f.row)
 
   const notes: string[] = []
+  // N1: the wrapper cannot find node: say so here, next to the `as of HH:MM` of the stale rows.
+  const nodeNote = buildObservedLimitsView(payload, now, clock).nodeMissingNote
+  if (nodeNote) notes.push(nodeNote)
   if (calls.some(x => !x.priced)) notes.push('Some counted calls have no price, so they count as 0 toward the limits.')
   if (rows.some(r => r.estimate)) notes.push('Estimates use this machine\'s sessions only (Claude Code provider; Copilot never counts). Real meters cover the whole account.')
   return { visible: rows.length > 0, plan, planText: plan ? plan.text : 'plan not set', rows, notes }

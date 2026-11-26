@@ -7,7 +7,7 @@ import assert from 'node:assert/strict'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
-import { buildLimitsUpdate, classifyWindows, LimitsObserver, LIMITS_STALE_MS, limitsUpdateMessage, parseLimitsFile, readLimitsFile } from '../src/limits-observer'
+import { buildLimitsUpdate, classifyWindows, readNodeMissing, LimitsObserver, LIMITS_STALE_MS, limitsUpdateMessage, parseLimitsFile, readLimitsFile } from '../src/limits-observer'
 import { installStatusLine, paths, type InstallerEnv } from '../src/statusline-installer'
 
 const temps: string[] = []
@@ -152,6 +152,40 @@ describe('buildLimitsUpdate', () => {
     assert.equal(u.install.state, 'not-installed')
     assert.equal(u.observed?.stale, true)
     assert.equal(u.canConfigure, false)
+  })
+  it('N1: a node-missing marker is reported while the wrapper is installed; legacy command is flagged', () => {
+    const t = mk()
+    installStatusLine(t.env)
+    assert.equal(buildLimitsUpdate({ env: t.env, now: NOW, seq: 1, canConfigure: true }).nodeMissing, undefined)
+    fs.mkdirSync(t.p.limitsDir, { recursive: true })
+    fs.writeFileSync(t.p.nodeMissing, JSON.stringify({ v: 1, at: NOW - 5000 }))
+    const u = buildLimitsUpdate({ env: t.env, now: NOW, seq: 1, canConfigure: true })
+    assert.deepEqual(u.nodeMissing, { at: NOW - 5000 })
+    assert.equal(u.install.legacy, undefined)
+    assert.equal(JSON.stringify(u).includes(t.env.home), false, 'no absolute home path in the payload')
+    // a marker without the wrapper is stale leftovers: ignored
+    const n = mk()
+    fs.mkdirSync(n.p.limitsDir, { recursive: true }); fs.writeFileSync(n.p.nodeMissing, JSON.stringify({ v: 1, at: NOW }))
+    assert.equal(buildLimitsUpdate({ env: n.env, now: NOW, seq: 1, canConfigure: true }).nodeMissing, undefined)
+    // legacy command
+    const l = mk()
+    installStatusLine({ ...l.env, platform: 'win32' })
+    const li = buildLimitsUpdate({ env: l.env, now: NOW, seq: 1, canConfigure: true }).install
+    assert.equal(li.state, 'installed'); assert.equal(li.legacy, true); assert.equal(li.canUpgrade, true)
+  })
+  it('readNodeMissing: json at, damaged file falls back to mtime, directory / missing = null, huge value rejected', () => {
+    const t = mk()
+    fs.mkdirSync(t.p.limitsDir, { recursive: true })
+    assert.equal(readNodeMissing(t.p.nodeMissing), null)
+    fs.writeFileSync(t.p.nodeMissing, '{"v":1,"at":1234567890123}')
+    assert.deepEqual(readNodeMissing(t.p.nodeMissing), { at: 1234567890123 })
+    fs.writeFileSync(t.p.nodeMissing, 'garbage')
+    const m = readNodeMissing(t.p.nodeMissing)
+    assert.ok(m && Math.abs(m.at - Date.now()) < 60_000)
+    fs.writeFileSync(t.p.nodeMissing, '{"v":1,"at":9e99}')
+    assert.ok(readNodeMissing(t.p.nodeMissing)!.at < 1e14)
+    fs.rmSync(t.p.nodeMissing); fs.mkdirSync(t.p.nodeMissing)
+    assert.equal(readNodeMissing(t.p.nodeMissing), null)
   })
   it('a malformed file gives fileError and no numbers', () => {
     const t = mk()

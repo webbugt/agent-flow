@@ -93,6 +93,25 @@ export function readLimitsFile(file: string): ParsedLimitsFile | null {
   return parseLimitsFile(text)
 }
 
+/**
+ * `~/.agent-flow/limits/node-missing.json` (`{"v":1,"at":<ms>}`), left by the launcher when it found no node. A file that
+ * exists but does not parse still means "node was missing": its modification time stands in for `at`. null = no marker.
+ */
+export function readNodeMissing(file: string): { at: number } | null {
+  try {
+    const st = fs.statSync(file)
+    if (!st.isFile()) return null
+    let at = st.mtimeMs
+    if (st.size <= 1024) {
+      try {
+        const doc = JSON.parse(fs.readFileSync(file, 'utf-8')) as Obj
+        if (doc && typeof doc === 'object' && finite(doc.at) && doc.at > 0 && doc.at < 1e14) at = doc.at
+      } catch { /* damaged marker: keep the mtime */ }
+    }
+    return { at: Math.floor(at) }
+  } catch { return null }
+}
+
 /** Classify the windows of a parsed file at `now` (ms). */
 export function classifyWindows(parsed: Extract<ParsedLimitsFile, { ok: true }>, now: number, staleMs = LIMITS_STALE_MS): { stale: boolean; windows: ObservedLimitWindow[] } {
   const stale = now - parsed.at > staleMs
@@ -118,10 +137,13 @@ export function buildLimitsUpdate(opts: BuildOptions): LimitsUpdatePayload {
   const p = paths(opts.env.home)
   const parsed = readLimitsFile(p.limits)
   const history = readHistory(path.join(p.limitsDir, HISTORY_FILE)).slice(-HISTORY_SENT)
+  // The marker only means something while the wrapper is installed (uninstall removes it; a stray one is ignored).
+  const nodeMissing = insp.state === 'installed' ? readNodeMissing(p.nodeMissing) : null
   const base: LimitsUpdatePayload = {
     version: 1, seq: opts.seq, provider: 'claude', source: 'statusline', canConfigure: opts.canConfigure,
     install: {
       state: insp.state, canInstall: insp.canInstall,
+      ...(insp.legacy ? { legacy: true, canUpgrade: insp.canUpgrade } : {}),
       ...(insp.reason ? { reason: insp.reason } : {}),
       ...(insp.code ? { code: insp.code } : {}),
       ...(insp.shadowedBy.length > 0 ? { shadowedBy: insp.shadowedBy.map(f => tilde(f, opts.env.home)) } : {}),
@@ -129,6 +151,7 @@ export function buildLimitsUpdate(opts: BuildOptions): LimitsUpdatePayload {
     },
     observed: null,
     ...(history.length > 0 ? { history } : {}),
+    ...(nodeMissing ? { nodeMissing } : {}),
   }
   if (parsed === null) return base
   if (!parsed.ok) return { ...base, fileError: parsed.error }
