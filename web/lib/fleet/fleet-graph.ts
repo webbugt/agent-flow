@@ -27,9 +27,10 @@ import {
   groupInstances, latestInstance, splitInstanceId,
   type FleetInstance, type FleetInstanceStatus, type FleetSelectionView,
 } from './fleet-model'
-import { BASH_COLOR, KANBAN_COLOR, SUPERMEMORY_COLOR } from './fleet-colors'
+import { BASH_COLOR, KANBAN_COLOR, SUBSYSTEM_COLOR, SUPERMEMORY_COLOR } from './fleet-colors'
 import { defaultOptions, type AgentFlowOptions } from './options-registry'
-import { EMPTY_PINS, isBlockShown, lifeViewOf, resolveLife, type BlockLife, type PinSet } from './resource-block'
+import { EMPTY_PINS, agentsInWindow, isBlockShown, lifeViewOf, resolveLife, type BlockLife, type PinSet, type ResourceBlock } from './resource-block'
+import { buildUseBlocks, useCountsLine, type UseNode } from './event-uses'
 import {
   buildKanbanBlocks, isKanbanBoardShown, kanbanBlockId, kanbanBlockInfo, kanbanCountsLine, kanbanLifeView,
   type KanbanBlockInfo,
@@ -37,9 +38,9 @@ import {
 import type { BlockLifeView } from './block-alpha'
 import { bashBlockId, bashCountsLine, buildBashBlocks, type BashHeadNode } from './bash-blocks'
 import { buildMemoryBlocks, memoryBlockId } from './memory-blocks'
-export { BASH_COLOR, KANBAN_COLOR, SUPERMEMORY_COLOR }
+export { BASH_COLOR, KANBAN_COLOR, SUBSYSTEM_COLOR, SUPERMEMORY_COLOR }
 
-export type FleetNodeKind = 'session' | 'kanban' | 'supermemory' | 'bash'
+export type FleetNodeKind = 'session' | 'kanban' | 'supermemory' | 'bash' | 'subsystem'
 
 export interface FleetGraphNode {
   id: string
@@ -57,6 +58,17 @@ export interface FleetGraphNode {
   block?: KanbanBlockInfo
   /** Resource blocks (Kanban, memory, bash): the block's life (last use, linger, fade, pin), so the draw loop fades it on the wall clock. */
   life?: BlockLifeView
+  /**
+   * Resource blocks: the agents (profiles with a cloud on the map) that touched the block in its window (linger + fade of
+   * its kind), by name. Names only, never content. Absent when nobody did (a pinned block that went quiet has no badge).
+   */
+  badge?: BlockBadge
+}
+
+export interface BlockBadge {
+  count: number
+  /** Profile names (the cloud captions), first-seen order. */
+  names: string[]
 }
 
 /** The sessions of one profile, drawn as a blob with a halo and the profile name. Not a node. */
@@ -74,7 +86,7 @@ export interface FleetCloud {
   openId?: string
 }
 
-export type FleetEdgeKind = 'kanban' | 'memory' | 'bash'
+export type FleetEdgeKind = 'kanban' | 'memory' | 'bash' | 'subsystem'
 
 /** One interaction behind a link; `key` is unique and stable, so a pulse fires only once per event. */
 export interface FleetEdgeEvent {
@@ -144,6 +156,8 @@ export interface FleetGraphInput {
   supermemory?: readonly SupermemoryNamespaceNode[]
   /** Bash command heads from the BashUseTracker (bash-blocks.ts). */
   bash?: readonly BashHeadNode[]
+  /** Hermes subsystem nodes (cron, gateway) from the EventUseTracker (event-uses.ts). */
+  subsystem?: readonly UseNode[]
   selection: FleetSelectionView
   /** Epoch ms, to judge whether a resource is in use. */
   now: number
@@ -171,6 +185,15 @@ export function buildFleetGraph(input: FleetGraphInput): FleetGraph {
   const edges = new Map<string, FleetGraphEdge>()
   /** profileKey -> cloud, for the resource links. */
   const cloudByKey = new Map<string, FleetCloud>()
+  /** The fleet badge of a block: agents in the window that have a cloud on the map, named by the cloud caption (once each). */
+  const badgeOf = (block: ResourceBlock): BlockBadge | undefined => {
+    const names: string[] = []
+    for (const agent of agentsInWindow(block, now, options)) {
+      const cloud = cloudByKey.get(profileKey(agent))
+      if (cloud && !names.includes(cloud.profile)) names.push(cloud.profile)
+    }
+    return names.length > 0 ? { count: names.length, names } : undefined
+  }
 
   /** One link per (cloud, resource); uses by several names of the same profile merge into it. */
   const addUse = (cloud: FleetCloud, to: string, kind: FleetEdgeKind, weight: number, lastUsedAt: number, events: FleetEdgeEvent[], life?: BlockLife) => {
@@ -220,6 +243,7 @@ export function buildFleetGraph(input: FleetGraphInput): FleetGraph {
       id: board.id, kind: 'kanban', label: board.slug, sublabel: kanbanCountsLine(info),
       color: KANBAN_COLOR, status: running > 0 ? 'active' : 'idle',
       block: info, life: kanbanLifeView(block, options, pins),
+      ...withBadge(badgeOf(block)),
     })
     // Who uses the board: assignees of its recent events.
     const used = new Map<string, FleetEdgeEvent[]>()
@@ -249,6 +273,7 @@ export function buildFleetGraph(input: FleetGraphInput): FleetGraph {
       color: SUPERMEMORY_COLOR,
       status: space.lastEventAt !== null && now - space.lastEventAt <= RECENT_USE_MS ? 'active' : 'idle',
       life: lifeViewOf(block, options, pins),
+      ...withBadge(badgeOf(block)),
     })
     const recent = space.recent ?? []
     for (const [name, counts] of Object.entries(space.byProfile)) {
@@ -272,6 +297,7 @@ export function buildFleetGraph(input: FleetGraphInput): FleetGraph {
       id: head.id, kind: 'bash', label: head.head, sublabel: bashCountsLine(block.useCount),
       color: BASH_COLOR, status: now - block.lastUsedAt <= bashLife.lingerMs ? 'active' : 'idle',
       life: lifeViewOf(block, options, pins),
+      ...withBadge(badgeOf(block)),
     })
     for (const [profile, use] of Object.entries(head.byProfile)) {
       const cloud = cloudByKey.get(profileKey(profile))
@@ -283,12 +309,38 @@ export function buildFleetGraph(input: FleetGraphInput): FleetGraph {
     }
   }
 
+  // Hermes subsystems (cron, gateway): a block per subsystem with a use by a profile whose cloud is on the map.
+  const subsystemLife = resolveLife('subsystem', options)
+  const subsystemBlocks = buildUseBlocks(input.subsystem, profile => cloudByKey.has(profileKey(profile)))
+  for (const sub of input.subsystem ?? []) {
+    const block = subsystemBlocks.get(sub.id)
+    if (!block || !isBlockShown(block, now, 'fleet', options, pins)) continue
+    nodes.push({
+      id: sub.id, kind: 'subsystem', label: sub.key, sublabel: useCountsLine(sub),
+      color: SUBSYSTEM_COLOR, status: now - block.lastUsedAt <= subsystemLife.lingerMs ? 'active' : 'idle',
+      life: lifeViewOf(block, options, pins),
+      ...withBadge(badgeOf(block)),
+    })
+    for (const [profile, use] of Object.entries(sub.byProfile)) {
+      const cloud = cloudByKey.get(profileKey(profile))
+      if (!cloud) continue
+      const events: FleetEdgeEvent[] = sub.recent
+        .filter(r => r.profile === profile)
+        .map(r => ({ key: `${sub.id}#${r.profile}:${r.action}:${r.at}`, at: r.at, kind: 'subsystem' as const, label: r.action }))
+      addUse(cloud, sub.id, 'subsystem', use.count, use.lastUsedAt, events, subsystemLife)
+    }
+  }
+
   return { nodes, clouds, edges: [...edges.values()] }
+}
+
+function withBadge(badge: BlockBadge | undefined): { badge?: BlockBadge } {
+  return badge ? { badge } : {}
 }
 
 /** Counts per node kind (and clouds), e.g. for a legend or a test. */
 export function countByKind(graph: FleetGraph): Record<FleetNodeKind | 'cloud', number> {
-  const out: Record<FleetNodeKind | 'cloud', number> = { cloud: graph.clouds.length, session: 0, kanban: 0, supermemory: 0, bash: 0 }
+  const out: Record<FleetNodeKind | 'cloud', number> = { cloud: graph.clouds.length, session: 0, kanban: 0, supermemory: 0, bash: 0, subsystem: 0 }
   for (const n of graph.nodes) out[n.kind]++
   return out
 }

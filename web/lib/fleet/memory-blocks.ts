@@ -33,6 +33,8 @@ export function buildMemoryBlocks(spaces: readonly SupermemoryNamespaceNode[] | 
       lastUsedAt: space.lastEventAt,
       useCount: space.total,
       agents: Object.keys(space.byProfile),
+      // `lastByProfile` is not capped like `recent`; a profile without an entry counts at the namespace's newest event.
+      agentLast: Object.fromEntries(Object.keys(space.byProfile).map(p => [p, space.lastByProfile?.[p] ?? space.lastEventAt as number])),
     })
   }
   return store

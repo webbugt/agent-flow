@@ -245,5 +245,46 @@ export function drawFleetLabels(
   }
   for (const a of labelled) if (emphasised(a)) draw(a, true)
   for (const a of labelled) if (!emphasised(a)) draw(a, false)
+  const hovered = hoveredId ? agents.get(hoveredId) : undefined
+  if (hovered?.badge && hovered.resourceKind && lifeOf(hovered) > 0) drawAgentNamesPanel(ctx, hovered, radiusOf(hovered), zoom)
+  ctx.restore()
+}
+
+/** Most names listed on hover; the rest are counted ("+3 more"). */
+export const BADGE_NAMES_SHOWN = 12
+
+/**
+ * Hover on a resource block with a badge: the names of the agents (profiles) that touched it in its window, one per line,
+ * names only. A panel to the right of the node, sized for the screen like the labels.
+ */
+function drawAgentNamesPanel(ctx: CanvasRenderingContext2D, node: Agent, nodeRadius: number, zoom: number) {
+  const badge = node.badge
+  if (!badge || badge.names.length === 0) return
+  const px = 11
+  const lineH = (px * 1.35) / zoom
+  const pad = 6 / zoom
+  const shown = badge.names.slice(0, BADGE_NAMES_SHOWN)
+  const more = badge.names.length - shown.length
+  const lines = [`${badge.count} agent${badge.count === 1 ? '' : 's'}`, ...shown, ...(more > 0 ? [`+${more} more`] : [])]
+  ctx.save()
+  ctx.font = `400 ${px / zoom}px monospace`
+  ctx.globalAlpha = 1
+  const w = Math.max(...lines.map(l => ctx.measureText(l).width)) + pad * 2
+  const h = lines.length * lineH + pad * 2
+  const x = node.x + nodeRadius + 8 / zoom
+  const y = node.y - h / 2
+  ctx.fillStyle = 'rgba(8,12,24,0.94)'
+  ctx.strokeStyle = COLORS.holoBase + '88'
+  ctx.lineWidth = 1 / zoom
+  ctx.beginPath()
+  ctx.roundRect(x, y, w, h, 4 / zoom)
+  ctx.fill()
+  ctx.stroke()
+  ctx.textAlign = 'left'
+  ctx.textBaseline = 'top'
+  lines.forEach((line, i) => {
+    ctx.fillStyle = i === 0 ? COLORS.textMuted : COLORS.textPrimary
+    ctx.fillText(line, x + pad, y + pad + i * lineH)
+  })
   ctx.restore()
 }

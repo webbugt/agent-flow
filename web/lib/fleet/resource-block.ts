@@ -29,6 +29,12 @@ export interface ResourceBlock {
   useCount: number
   /** Distinct agent ids that touched the block, in first-seen order (capped at MAX_BLOCK_AGENTS). */
   agents: string[]
+  /**
+   * Epoch ms of each agent's latest use of the block. The fleet badge counts from it: the agents that touched the
+   * block IN THE WINDOW, not every agent that ever did. Missing (hand-made blocks): every agent counts as having
+   * used the block at `lastUsedAt`.
+   */
+  agentLast?: Record<string, number>
 }
 
 export type BlockStore = ReadonlyMap<string, ResourceBlock>
@@ -68,6 +74,8 @@ export function recordUse(store: BlockStore, use: BlockUse): BlockStore {
   const agentId = typeof use.agentId === 'string' && use.agentId !== '' ? use.agentId : null
   const agents = prev ? [...prev.agents] : []
   if (agentId !== null && !agents.includes(agentId) && agents.length < MAX_BLOCK_AGENTS) agents.push(agentId)
+  const agentLast: Record<string, number> = { ...(prev?.agentLast ?? {}) }
+  if (agentId !== null && agents.includes(agentId)) agentLast[agentId] = Math.max(agentLast[agentId] ?? -Infinity, use.at)
   const next: ResourceBlock = {
     kind: use.kind,
     key,
@@ -75,6 +83,7 @@ export function recordUse(store: BlockStore, use: BlockUse): BlockStore {
     lastUsedAt: prev ? Math.max(prev.lastUsedAt, use.at) : use.at,
     useCount: (prev?.useCount ?? 0) + 1,
     agents,
+    agentLast,
   }
   const out = new Map(store)
   out.set(id, next)
@@ -160,6 +169,17 @@ export function pruneBlocks(store: BlockStore, now: number, options: AgentFlowOp
     out.delete(id)
   }
   return out ?? store
+}
+
+/**
+ * The agents that touched the block in the window: those whose latest use is still within the block's own visible
+ * time (linger + fade of its kind, so until the moment the block would have faded out for them). A kind with linger 0
+ * has no window, so nobody counts (the block is hidden anyway, unless pinned). Names only, first-seen order. Pure.
+ */
+export function agentsInWindow(block: ResourceBlock, now: number, options: AgentFlowOptions): string[] {
+  const life = resolveLife(block.kind, options)
+  if (visibleMs(life) <= 0) return []
+  return block.agents.filter(agent => lifeAlpha(block.agentLast?.[agent] ?? block.lastUsedAt, now, life.lingerMs, life.fadeMs) > 0)
 }
 
 /** Toggle a pin. Returns a new set. */

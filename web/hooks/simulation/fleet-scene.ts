@@ -33,7 +33,7 @@ import {
   type Agent, type Edge, type SimulationEvent, type ToolCallNode,
 } from '@/lib/agent-types'
 import { TOOL_CARD_H, TOOL_CARD_W, MODEL_FAMILY_CONTEXT, DEFAULT_CONTEXT_SIZE, FALLBACK_CONTEXT_SIZE } from '@/lib/canvas-constants'
-import { BASH_COLOR, KANBAN_COLOR, SUPERMEMORY_COLOR } from '@/lib/fleet/fleet-colors'
+import { BASH_COLOR, KANBAN_COLOR, SUBSYSTEM_COLOR, SUPERMEMORY_COLOR } from '@/lib/fleet/fleet-colors'
 import {
   groupColor, identityFromLabel, nodeInstanceId,
   type FleetInstance, type FleetSelectionView, type SessionLike,
@@ -224,8 +224,9 @@ function resourceAgent(node: FleetGraph['nodes'][number], x: number, y: number):
     parentId: null, tokensUsed: 0, tokensMax: 1, contextBreakdown: emptyContextBreakdown(),
     toolCalls: 0, timeAlive: 0, x, y, vx: 0, vy: 0, pinned: true, isMain: false,
     task: node.sublabel, spawnTime: 0, opacity: 1, scale: 1, messageBubbles: [],
-    resourceKind: node.kind === 'kanban' ? 'kanban' : node.kind === 'bash' ? 'bash' : 'supermemory',
+    resourceKind: node.kind === 'kanban' ? 'kanban' : node.kind === 'bash' ? 'bash' : node.kind === 'subsystem' ? 'subsystem' : 'supermemory',
     ...(node.life ? { block: node.life } : {}),
+    ...(node.badge ? { badge: node.badge } : {}),
   }
 }
 
@@ -326,7 +327,7 @@ export function buildFleetScene(input: FleetSceneInput): FleetScene {
 
   // 3. Resources near the weighted centroid of the clouds they link to; unlinked ones on the rim.
   // Placed from the layout, before drags, so a dragged node does not move the map around it.
-  const resources = graph.nodes.filter(nd => nd.kind === 'kanban' || nd.kind === 'supermemory' || nd.kind === 'bash')
+  const resources = graph.nodes.filter(nd => nd.kind === 'kanban' || nd.kind === 'supermemory' || nd.kind === 'bash' || nd.kind === 'subsystem')
   const linksOf = new Map<string, Array<{ cloudId: string; weight: number }>>()
   for (const e of graph.edges) {
     if (!centers.has(e.from)) continue
@@ -347,7 +348,7 @@ export function buildFleetScene(input: FleetSceneInput): FleetScene {
     edges.push({
       id: e.id, from: e.from, to: e.to, type: 'resource', opacity: 1, fromCloud: true, lastUsedAt: e.lastUsedAt,
       ...(e.life ? { lingerMs: e.life.lingerMs, fadeMs: e.life.fadeMs } : {}),
-      color: e.kind === 'kanban' ? KANBAN_COLOR : e.kind === 'bash' ? BASH_COLOR : SUPERMEMORY_COLOR,
+      color: e.kind === 'kanban' ? KANBAN_COLOR : e.kind === 'bash' ? BASH_COLOR : e.kind === 'subsystem' ? SUBSYSTEM_COLOR : SUPERMEMORY_COLOR,
     })
   }
 

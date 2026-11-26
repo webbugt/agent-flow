@@ -2,7 +2,7 @@
 
 import { COLORS } from "@/lib/colors"
 import { ageLabel, type FleetInspection } from "@/lib/fleet/fleet-inspect"
-import { BASH_COLOR, KANBAN_COLOR, SUPERMEMORY_COLOR } from "@/lib/fleet/fleet-colors"
+import { BASH_COLOR, KANBAN_COLOR, SUBSYSTEM_COLOR, SUPERMEMORY_COLOR } from "@/lib/fleet/fleet-colors"
 import { kanbanCountsLine } from "@/lib/fleet/kanban-blocks"
 
 interface FleetInspectorProps {
@@ -26,8 +26,8 @@ const SESSION_CARD_CLEARANCE = 52
  * A Bash row shows the full command (masked when it was taken in, see bash-blocks.ts), wrapped, not cut.
  */
 export function FleetInspector({ inspection, now, onClose, right, top, narrow, pinned = false, onTogglePin }: FleetInspectorProps) {
-  const color = inspection.kind === 'kanban' ? KANBAN_COLOR : inspection.kind === 'bash' ? BASH_COLOR : SUPERMEMORY_COLOR
-  const kindLabel = inspection.kind === 'kanban' ? 'Kanban' : inspection.kind === 'bash' ? 'Bash' : 'Memory'
+  const color = inspection.kind === 'kanban' ? KANBAN_COLOR : inspection.kind === 'bash' ? BASH_COLOR : inspection.kind === 'subsystem' ? SUBSYSTEM_COLOR : SUPERMEMORY_COLOR
+  const kindLabel = inspection.kind === 'kanban' ? 'Kanban' : inspection.kind === 'bash' ? 'Bash' : inspection.kind === 'subsystem' ? 'Subsystem' : 'Memory'
   const isBash = inspection.kind === 'bash'
   return (
     <div

@@ -21,6 +21,7 @@ import { FileAttentionPanel } from "./file-attention-panel"
 import { TimelinePanel } from "./timeline-panel"
 import { FleetTimelinePanel } from "./fleet-timeline-panel"
 import { FleetMap } from "./fleet-map"
+import { SingleBlocks } from "./single-blocks"
 import { createDemoResources, addDemoEvent, addDemoNodes, type DemoEventKind } from "@/lib/fleet/fleet-demo-resources"
 import { mapInsetBottom } from "@/lib/fleet/fleet-timeline-pref"
 import { getOptions, updateOptions } from "@/lib/options-store"
@@ -193,6 +194,12 @@ export function AgentVisualizer() {
   const panelInstances = useMemo(() => applyActivityFilter(fleetInstances, activityFilter.hidden), [fleetInstances, activityFilter.hidden])
   const panelKanban = useMemo(() => fleetKanban && applyActivityFilter(fleetKanban, activityFilter.hidden), [fleetKanban, activityFilter.hidden])
   const panelMemory = useMemo(() => fleetMemory && applyActivityFilter(fleetMemory, activityFilter.hidden), [fleetMemory, activityFilter.hidden])
+
+  // Single view: the open session as the resource blocks see it (id and label only). Its own events, nobody else's.
+  const openBlockSession = useMemo(() => {
+    const s = bridgeSessions.find(x => x.id === bridge.selectedSessionId)
+    return s ? { id: s.id, label: s.label } : null
+  }, [bridgeSessions, bridge.selectedSessionId])
   // Fleet on: nodes deselected in the fleet drop out of the tab strip (the open tab always stays).
   // Fleet off: the single-profile tab strip is unchanged.
   const visibleSessions = useMemo(
@@ -667,6 +674,9 @@ export function AgentVisualizer() {
         insetRight={detailInset(showSessionDetail, viewportWidth, CARD.sessionDetail.width)}
         screensaver={sv}
       />
+
+      {/* Single view: the resource blocks (Kanban, memory, bash, subsystem) the open session used lately. */}
+      <SingleBlocks session={openBlockSession} eventsOf={getSessionEvents} visible={!showFleet && !bridge.useMockData} />
 
       {/* Fleet timeline panel (grouped agents + Kanban/Supermemory lanes) */}
       <FleetTimelinePanel

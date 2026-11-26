@@ -242,14 +242,16 @@ export function buildBashBlocks(nodes: readonly BashHeadNode[] | undefined, incl
     let last = -Infinity
     let count = 0
     const agents: string[] = []
+    const agentLast: Record<string, number> = {}
     for (const [profile, u] of Object.entries(node.byProfile)) {
       if (!include(profile)) continue
       last = Math.max(last, u.lastUsedAt)
       count += u.count
       agents.push(profile)
+      agentLast[profile] = u.lastUsedAt
     }
     if (agents.length === 0 || !Number.isFinite(last)) continue
-    store.set(bashBlockId(node.head), { kind: 'bash', key: node.head, label: node.head, lastUsedAt: last, useCount: count, agents })
+    store.set(bashBlockId(node.head), { kind: 'bash', key: node.head, label: node.head, lastUsedAt: last, useCount: count, agents, agentLast })
   }
   return store
 }
