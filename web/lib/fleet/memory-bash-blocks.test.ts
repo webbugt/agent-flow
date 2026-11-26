@@ -267,6 +267,18 @@ test('bash blocks: one per head; lastUsedAt and counts only from profiles whose 
   assert.equal(buildBashBlocks(undefined).size, 0)
 })
 
+test('bash graph (F2 x resource blocks): every bash link event names the session node that did it, and the link counts them', () => {
+  const g = buildFleetGraph({ instances: instances(), bash: trackerOf([bashEvent(SECRET_CMD, 5), bashEvent('git status', 8)]), selection: all, now: NOW, options: defaultOptions() })
+  const bashEdges = g.edges.filter(e => e.kind === 'bash')
+  assert.ok(bashEdges.length > 0)
+  for (const e of bashEdges) {
+    const cloud = g.clouds.find(c => c.id === e.from)!
+    assert.ok(e.events.length > 0)
+    for (const ev of e.events) assert.ok(ev.sessionId && cloud.sessionIds.includes(ev.sessionId), `${ev.key} has a source in its own cloud`)
+    assert.equal(e.sessions.reduce((n, s) => n + s.weight, 0), e.events.length, 'the per-node weights add up to the events')
+  }
+})
+
 test('bash graph: the visual carries the head and a call count; a link to the cloud; life follows the bash linger', () => {
   const o = defaultOptions()
   const nodes = trackerOf([bashEvent(SECRET_CMD, 5), bashEvent('git status', 8)])

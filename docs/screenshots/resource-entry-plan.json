@@ -1,0 +1,56 @@
+{
+  "_note": "Integration: a RESOURCE node (kanban board 'Entry Demo') enters the map (F3 entry animation on a resource, F2 pulses from the session nodes). /api/fleet is faked in the page; the animation clock is pinned with window.__AF_FLEET_CLOCK__ (?shot=1 only). The clock is set to T0 before the board appears (so its entry stamp starts at T0, plus the 400 ms the poll took in wall time is not on this clock), then moved to T0+dt for the frame. Run: pnpm shot --task-id integrated --scenario all --plan docs/screenshots/resource-entry-plan.json --viewports desktop",
+  "shots": [
+    {
+      "name": "resource-entry-1-start",
+      "viewports": [
+        "desktop"
+      ],
+      "steps": [
+        {
+          "click": "[data-testid=\"fleet-toggle\"]"
+        },
+        {
+          "wait": 1500
+        },
+        {
+          "eval": "(async () => { const mk = (evs) => ({ kanban: evs.length ? [{ id: 'kanban:entry-demo', type: 'kanban-board', slug: 'entry-demo', name: 'Entry Demo', description: '', archived: false, taskCounts: { running: 1, done: 3 }, totalTasks: 4, recentEvents: evs.map((e, i) => ({ id: e[2], taskId: 't_e' + (i + 1), taskTitle: 'Demo ' + (i + 1), assignee: e[0], kind: e[1], runId: null, at: e[2] })), lastEventAt: Math.max(...evs.map(e => e[2])) }] : [], supermemory: [] }); let data = mk([]); const orig = window.fetch.bind(window); let waiters = []; window.fetch = async (u, o) => { if (String(u).includes('/api/fleet')) { waiters.splice(0).forEach(f => f()); return new Response(JSON.stringify(data), { status: 200, headers: { 'content-type': 'application/json' } }) } return orig(u, o) }; const next = () => new Promise(r => waiters.push(r)); await next(); await new Promise(r => setTimeout(r, 1500)); window.__AF_FLEET_CLOCK__ = 2000000000000; await new Promise(r => setTimeout(r, 300)); const n = Date.now(); data = mk([['sub-demo', 'completed', n - 2000], ['copilot-demo', 'claimed', n - 1500], ['sub-demo', 'claimed', n - 1000]]); await next(); await new Promise(r => setTimeout(r, 400)); window.__AF_FLEET_CLOCK__ = 2000000000000 + 60; await new Promise(r => setTimeout(r, 300)); })()"
+        }
+      ]
+    },
+    {
+      "name": "resource-entry-2-middle",
+      "viewports": [
+        "desktop"
+      ],
+      "steps": [
+        {
+          "click": "[data-testid=\"fleet-toggle\"]"
+        },
+        {
+          "wait": 1500
+        },
+        {
+          "eval": "(async () => { const mk = (evs) => ({ kanban: evs.length ? [{ id: 'kanban:entry-demo', type: 'kanban-board', slug: 'entry-demo', name: 'Entry Demo', description: '', archived: false, taskCounts: { running: 1, done: 3 }, totalTasks: 4, recentEvents: evs.map((e, i) => ({ id: e[2], taskId: 't_e' + (i + 1), taskTitle: 'Demo ' + (i + 1), assignee: e[0], kind: e[1], runId: null, at: e[2] })), lastEventAt: Math.max(...evs.map(e => e[2])) }] : [], supermemory: [] }); let data = mk([]); const orig = window.fetch.bind(window); let waiters = []; window.fetch = async (u, o) => { if (String(u).includes('/api/fleet')) { waiters.splice(0).forEach(f => f()); return new Response(JSON.stringify(data), { status: 200, headers: { 'content-type': 'application/json' } }) } return orig(u, o) }; const next = () => new Promise(r => waiters.push(r)); await next(); await new Promise(r => setTimeout(r, 1500)); window.__AF_FLEET_CLOCK__ = 2000000000000; await new Promise(r => setTimeout(r, 300)); const n = Date.now(); data = mk([['sub-demo', 'completed', n - 2000], ['copilot-demo', 'claimed', n - 1500], ['sub-demo', 'claimed', n - 1000]]); await next(); await new Promise(r => setTimeout(r, 400)); window.__AF_FLEET_CLOCK__ = 2000000000000 + 260; await new Promise(r => setTimeout(r, 300)); })()"
+        }
+      ]
+    },
+    {
+      "name": "resource-entry-3-end",
+      "viewports": [
+        "desktop"
+      ],
+      "steps": [
+        {
+          "click": "[data-testid=\"fleet-toggle\"]"
+        },
+        {
+          "wait": 1500
+        },
+        {
+          "eval": "(async () => { const mk = (evs) => ({ kanban: evs.length ? [{ id: 'kanban:entry-demo', type: 'kanban-board', slug: 'entry-demo', name: 'Entry Demo', description: '', archived: false, taskCounts: { running: 1, done: 3 }, totalTasks: 4, recentEvents: evs.map((e, i) => ({ id: e[2], taskId: 't_e' + (i + 1), taskTitle: 'Demo ' + (i + 1), assignee: e[0], kind: e[1], runId: null, at: e[2] })), lastEventAt: Math.max(...evs.map(e => e[2])) }] : [], supermemory: [] }); let data = mk([]); const orig = window.fetch.bind(window); let waiters = []; window.fetch = async (u, o) => { if (String(u).includes('/api/fleet')) { waiters.splice(0).forEach(f => f()); return new Response(JSON.stringify(data), { status: 200, headers: { 'content-type': 'application/json' } }) } return orig(u, o) }; const next = () => new Promise(r => waiters.push(r)); await next(); await new Promise(r => setTimeout(r, 1500)); window.__AF_FLEET_CLOCK__ = 2000000000000; await new Promise(r => setTimeout(r, 300)); const n = Date.now(); data = mk([['sub-demo', 'completed', n - 2000], ['copilot-demo', 'claimed', n - 1500], ['sub-demo', 'claimed', n - 1000]]); await next(); await new Promise(r => setTimeout(r, 400)); window.__AF_FLEET_CLOCK__ = 2000000000000 + 900; await new Promise(r => setTimeout(r, 300)); })()"
+        }
+      ]
+    }
+  ]
+}
