@@ -1,5 +1,6 @@
 import type { KanbanBoardNode, PublicKanbanBoardNode } from './kanban-source'
 import type { SupermemoryNamespaceNode } from './supermemory-source'
+import { filterPersonalNamespaces, MEMORY_OWNER_ENV } from './memory-blocks'
 import { anonymizeTaskTitle, isAnonymized } from '../content-privacy'
 import type { AnonymizePolicy } from '../content-privacy'
 
@@ -115,7 +116,7 @@ export function handleFleetRequest(req: Request, deps: FleetApiDeps): Response {
   try {
     const kanban = deps.readKanban()
     const supermemory = deps.readSupermemory()
-    return Response.json({ readAt: (deps.now ?? Date.now)(), kanban: applyAnonymization(kanban.nodes.map(toPublicNode), deps.anonymize), supermemory: supermemory.nodes })
+    return Response.json({ readAt: (deps.now ?? Date.now)(), kanban: applyAnonymization(kanban.nodes.map(toPublicNode), deps.anonymize), supermemory: filterPersonalNamespaces(supermemory.nodes, env[MEMORY_OWNER_ENV]) })
   } catch (err) {
     // Errors can contain absolute DB paths: log them here, tell the client nothing specific.
     ;(deps.logError ?? ((m, e) => console.error(m, e)))('[fleet] /api/fleet read failed', err)

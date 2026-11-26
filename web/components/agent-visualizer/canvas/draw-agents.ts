@@ -6,7 +6,7 @@ import {
 import { alphaHex, formatTokens } from '@/lib/utils'
 import { truncateText, drawHexagon, CLAUDE_SPARK_D, OPENAI_LOGO_D, OPENAI_LOGO_VIEWBOX } from './draw-misc'
 import { getAgentGlowSprite } from './render-cache'
-import { KANBAN_COLOR, SUPERMEMORY_COLOR } from '@/lib/fleet/fleet-colors'
+import { BASH_COLOR, KANBAN_COLOR, SUPERMEMORY_COLOR } from '@/lib/fleet/fleet-colors'
 import { blockViewAlpha } from '@/lib/fleet/block-alpha'
 
 let _claudeSparkPath: Path2D | null = null
@@ -350,11 +350,11 @@ function drawPinMark(ctx: CanvasRenderingContext2D, x: number, y: number, color:
 }
 
 /**
- * Fleet map: a resource node (Kanban board = rounded square, Supermemory namespace = diamond),
+ * Fleet map: a resource node (Kanban board = rounded square, Supermemory namespace = diamond, Bash command head = terminal),
  * in the same holographic style as the agent hexagons: glow sprite, dark interior, ring, label.
  */
 function drawResourceNode(ctx: CanvasRenderingContext2D, agent: Agent, isHovered: boolean, isSelected: boolean, time: number, drawLabels: boolean) {
-  const color = agent.resourceKind === 'kanban' ? KANBAN_COLOR : SUPERMEMORY_COLOR
+  const color = agent.resourceKind === 'kanban' ? KANBAN_COLOR : agent.resourceKind === 'bash' ? BASH_COLOR : SUPERMEMORY_COLOR
   const r = NODE.radiusSub
   if (agent.block?.pinned) drawPinMark(ctx, agent.x + r * 0.95, agent.y - r * 0.95, color)
   const active = agent.state !== 'idle' && agent.state !== 'complete'
@@ -366,6 +366,9 @@ function drawResourceNode(ctx: CanvasRenderingContext2D, agent: Agent, isHovered
   ctx.beginPath()
   if (agent.resourceKind === 'kanban') {
     ctx.roundRect(agent.x - r * 0.85, agent.y - r * 0.85, r * 1.7, r * 1.7, 5)
+  } else if (agent.resourceKind === 'bash') {
+    // A terminal window: wider than tall, with a prompt chevron.
+    ctx.roundRect(agent.x - r * 1.05, agent.y - r * 0.7, r * 2.1, r * 1.4, 4)
   } else {
     const d = r * 1.1
     ctx.moveTo(agent.x, agent.y - d); ctx.lineTo(agent.x + d, agent.y); ctx.lineTo(agent.x, agent.y + d); ctx.lineTo(agent.x - d, agent.y); ctx.closePath()
@@ -377,6 +380,14 @@ function drawResourceNode(ctx: CanvasRenderingContext2D, agent: Agent, isHovered
   if (!active) ctx.setLineDash([4, 4])
   ctx.stroke()
   ctx.setLineDash([])
+  if (agent.resourceKind === 'bash') {
+    ctx.beginPath()
+    ctx.moveTo(agent.x - r * 0.55, agent.y - r * 0.28); ctx.lineTo(agent.x - r * 0.2, agent.y); ctx.lineTo(agent.x - r * 0.55, agent.y + r * 0.28)
+    ctx.moveTo(agent.x + r * 0.05, agent.y + r * 0.3); ctx.lineTo(agent.x + r * 0.55, agent.y + r * 0.3)
+    ctx.strokeStyle = active ? color : color + '80'
+    ctx.lineWidth = 1.6
+    ctx.stroke()
+  }
   if (active) {
     // Soft pulse on a resource that is in use
     ctx.beginPath()

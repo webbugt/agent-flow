@@ -9,6 +9,7 @@
  * caller's rule (the source of the event), and is not widened here.
  */
 import { lifeAlpha } from './fleet-edge-life'
+import type { BlockLifeView } from './block-alpha'
 import {
   RESOURCE_KINDS, isResourceKind,
   type AgentFlowOptions, type BlockView, type ResourceKind,
@@ -103,6 +104,12 @@ export function blockAlpha(block: ResourceBlock, now: number, options: AgentFlow
   if (pinned) return 1
   const life = resolveLife(block.kind, options)
   return lifeAlpha(block.lastUsedAt, now, life.lingerMs, life.fadeMs)
+}
+
+/** The block's own life for the draw loop (linger and fade of its kind, the pin): the draw loop fades it on the wall clock. */
+export function lifeViewOf(block: ResourceBlock, options: AgentFlowOptions, pins: PinSet = EMPTY_PINS): BlockLifeView {
+  const life = resolveLife(block.kind, options)
+  return { lastUsedAt: block.lastUsedAt, lingerMs: life.lingerMs, fadeMs: life.fadeMs, pinned: pins.has(blockId(block.kind, block.key)) }
 }
 
 /** Whether blocks of this kind are switched on for the view. A switched-off kind hides even pinned blocks. */

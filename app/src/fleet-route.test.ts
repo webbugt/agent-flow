@@ -6,7 +6,7 @@ import { handleFleetHttp, isFleetPath, type FleetReaders, type FleetRouteOptions
 
 const okReaders: FleetReaders = {
   readKanban: () => ({ nodes: [{ id: 'kanban:main', label: 'main' } as never] }),
-  readSupermemory: () => ({ nodes: [{ id: 'sm:omh_family', label: 'omh_family' } as never] }),
+  readSupermemory: () => ({ nodes: [{ id: 'supermemory:omh_family', containerTag: 'omh_family' } as never] }),
 }
 
 interface Reply { status: number; headers: http.IncomingHttpHeaders; body: string }

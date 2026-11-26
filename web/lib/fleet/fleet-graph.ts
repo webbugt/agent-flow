@@ -9,11 +9,14 @@
  *     A cloud is NOT a node: it only groups its session nodes (soft halo and caption on the map).
  *     There is no hub node and no link between sessions of one profile.
  *   - Sessions: one node per session (agent node) of a profile. Nothing is capped.
- *   - Resources: one node per Kanban board that is in use (a Kanban resource block, see kanban-blocks.ts:
- *     it appears on a task event, lives for the `kanban` linger of the options, then fades; a pin keeps it)
- *     and one per Supermemory namespace.
+ *   - Resources are resource blocks (resource-block.ts): each appears when an agent touches it, lives for the linger
+ *     of its kind in the options, then fades; a pin keeps it.
+ *       Kanban: one per board with a task event (kanban-blocks.ts), `kanban` linger.
+ *       Memory: one per Supermemory namespace with a call (memory-blocks.ts), `memory` linger. Tag and counts only.
+ *       Bash: one per command head with a call by a shown profile (bash-blocks.ts), `bash` linger. Head only.
  *   - Links: cloud -> Kanban board when the board's recent events name the profile as assignee;
- *     cloud -> Supermemory namespace when the namespace has events by that profile. Every link
+ *     cloud -> Supermemory namespace when the namespace has events by that profile;
+ *     cloud -> Bash command head when that profile ran it. Every link
  *     stores `lastUsedAt` (see fleet-edge-life.ts for when it is drawn).
  *
  * Nothing here depends on which tab is open: the graph is built from ALL profiles.
@@ -24,17 +27,19 @@ import {
   groupInstances, latestInstance, splitInstanceId,
   type FleetInstance, type FleetInstanceStatus, type FleetSelectionView,
 } from './fleet-model'
-import { KANBAN_COLOR, SUPERMEMORY_COLOR } from './fleet-colors'
+import { BASH_COLOR, KANBAN_COLOR, SUPERMEMORY_COLOR } from './fleet-colors'
 import { defaultOptions, type AgentFlowOptions } from './options-registry'
-import { EMPTY_PINS, resolveLife, type BlockLife, type PinSet } from './resource-block'
+import { EMPTY_PINS, isBlockShown, lifeViewOf, resolveLife, type BlockLife, type PinSet } from './resource-block'
 import {
   buildKanbanBlocks, isKanbanBoardShown, kanbanBlockId, kanbanBlockInfo, kanbanCountsLine, kanbanLifeView,
   type KanbanBlockInfo,
 } from './kanban-blocks'
 import type { BlockLifeView } from './block-alpha'
-export { KANBAN_COLOR, SUPERMEMORY_COLOR }
+import { bashBlockId, bashCountsLine, buildBashBlocks, type BashHeadNode } from './bash-blocks'
+import { buildMemoryBlocks, memoryBlockId } from './memory-blocks'
+export { BASH_COLOR, KANBAN_COLOR, SUPERMEMORY_COLOR }
 
-export type FleetNodeKind = 'session' | 'kanban' | 'supermemory'
+export type FleetNodeKind = 'session' | 'kanban' | 'supermemory' | 'bash'
 
 export interface FleetGraphNode {
   id: string
@@ -50,7 +55,7 @@ export interface FleetGraphNode {
   cloudId?: string
   /** Kanban nodes (resource blocks): board slug, counts and event kinds only. */
   block?: KanbanBlockInfo
-  /** Kanban nodes: the block's life (last use, linger, fade, pin), so the draw loop fades it on the wall clock. */
+  /** Resource blocks (Kanban, memory, bash): the block's life (last use, linger, fade, pin), so the draw loop fades it on the wall clock. */
   life?: BlockLifeView
 }
 
@@ -69,7 +74,7 @@ export interface FleetCloud {
   openId?: string
 }
 
-export type FleetEdgeKind = 'kanban' | 'memory'
+export type FleetEdgeKind = 'kanban' | 'memory' | 'bash'
 
 /** One interaction behind a link; `key` is unique and stable, so a pulse fires only once per event. */
 export interface FleetEdgeEvent {
@@ -77,7 +82,7 @@ export interface FleetEdgeEvent {
   /** Epoch ms. */
   at: number
   kind: FleetEdgeKind
-  /** Kanban event kind, or the Supermemory action. */
+  /** Kanban event kind, the Supermemory action, or `run` for a Bash call. */
   label: string
 }
 
@@ -94,7 +99,7 @@ export interface FleetGraphEdge {
   weight: number
   /** The latest interactions behind the link, newest first (what a pulse is made of). */
   events: FleetEdgeEvent[]
-  /** Kanban links follow the `kanban` linger and fade of the options. Without it: the fixed edge window. */
+  /** Links of a resource block follow the linger and fade of the block's kind (options). Without it: the fixed edge window. */
   life?: BlockLife
 }
 
@@ -137,12 +142,14 @@ export interface FleetGraphInput {
   instances: readonly FleetInstance[]
   kanban?: readonly PublicKanbanBoardNode[]
   supermemory?: readonly SupermemoryNamespaceNode[]
+  /** Bash command heads from the BashUseTracker (bash-blocks.ts). */
+  bash?: readonly BashHeadNode[]
   selection: FleetSelectionView
   /** Epoch ms, to judge whether a resource is in use. */
   now: number
   /** Linger, fade and show/hide per block kind. Default: the registry defaults. */
   options?: AgentFlowOptions
-  /** Ids of pinned blocks (`kanban:<slug>`); a pinned block stays visible. Default: none. */
+  /** Ids of pinned blocks (`kanban:<slug>`, `memory:<tag>`, `bash:<head>`); a pinned block stays visible. Default: none. */
   pins?: PinSet
 }
 
@@ -156,6 +163,9 @@ export function buildFleetGraph(input: FleetGraphInput): FleetGraph {
   const pins = input.pins ?? EMPTY_PINS
   const kanbanLife = resolveLife('kanban', options)
   const blocks = buildKanbanBlocks(input.kanban)
+  const memoryBlocks = buildMemoryBlocks(input.supermemory)
+  const memoryLife = resolveLife('memory', options)
+  const bashLife = resolveLife('bash', options)
   const nodes: FleetGraphNode[] = []
   const clouds: FleetCloud[] = []
   const edges = new Map<string, FleetGraphEdge>()
@@ -229,11 +239,16 @@ export function buildFleetGraph(input: FleetGraphInput): FleetGraph {
 
   for (const space of input.supermemory ?? []) {
     if (!sel.isSelected(space.id)) continue
+    // A namespace is a resource block: drawn only while an agent used it within linger + fade of the memory kind
+    // (or pinned), and only while the memory kind is switched on for the fleet view.
+    const block = memoryBlocks.get(memoryBlockId(space.containerTag))
+    if (!block || !isBlockShown(block, now, 'fleet', options, pins)) continue
     nodes.push({
       id: space.id, kind: 'supermemory', label: space.containerTag,
       sublabel: `${space.counts.store}s ${space.counts.search}q ${space.counts.forget}f`,
       color: SUPERMEMORY_COLOR,
       status: space.lastEventAt !== null && now - space.lastEventAt <= RECENT_USE_MS ? 'active' : 'idle',
+      life: lifeViewOf(block, options, pins),
     })
     const recent = space.recent ?? []
     for (const [name, counts] of Object.entries(space.byProfile)) {
@@ -244,7 +259,27 @@ export function buildFleetGraph(input: FleetGraphInput): FleetGraph {
         .map(r => ({ key: `${space.id}#${r.profile}:${r.action}:${r.at}`, at: r.at, kind: 'memory' as const, label: r.action }))
       // `lastByProfile` is not capped like `recent`, so it is the better source for the use time.
       const last = space.lastByProfile?.[name] ?? events[0]?.at ?? space.lastEventAt ?? 0
-      addUse(cloud, space.id, 'memory', counts.store + counts.search + counts.forget, last, events)
+      addUse(cloud, space.id, 'memory', counts.store + counts.search + counts.forget, last, events, memoryLife)
+    }
+  }
+
+  // Bash command heads: a block per head, counted for the profiles whose cloud is on the map.
+  const bashBlocks = buildBashBlocks(input.bash, profile => cloudByKey.has(profileKey(profile)))
+  for (const head of input.bash ?? []) {
+    const block = bashBlocks.get(bashBlockId(head.head))
+    if (!block || !isBlockShown(block, now, 'fleet', options, pins)) continue
+    nodes.push({
+      id: head.id, kind: 'bash', label: head.head, sublabel: bashCountsLine(block.useCount),
+      color: BASH_COLOR, status: now - block.lastUsedAt <= bashLife.lingerMs ? 'active' : 'idle',
+      life: lifeViewOf(block, options, pins),
+    })
+    for (const [profile, use] of Object.entries(head.byProfile)) {
+      const cloud = cloudByKey.get(profileKey(profile))
+      if (!cloud) continue
+      const events: FleetEdgeEvent[] = head.recent
+        .filter(r => r.profile === profile)
+        .map(r => ({ key: `${head.id}#${r.profile}:${r.at}:${r.command.length}`, at: r.at, kind: 'bash' as const, label: 'run' }))
+      addUse(cloud, head.id, 'bash', use.count, use.lastUsedAt, events, bashLife)
     }
   }
 
@@ -253,7 +288,7 @@ export function buildFleetGraph(input: FleetGraphInput): FleetGraph {
 
 /** Counts per node kind (and clouds), e.g. for a legend or a test. */
 export function countByKind(graph: FleetGraph): Record<FleetNodeKind | 'cloud', number> {
-  const out: Record<FleetNodeKind | 'cloud', number> = { cloud: graph.clouds.length, session: 0, kanban: 0, supermemory: 0 }
+  const out: Record<FleetNodeKind | 'cloud', number> = { cloud: graph.clouds.length, session: 0, kanban: 0, supermemory: 0, bash: 0 }
   for (const n of graph.nodes) out[n.kind]++
   return out
 }

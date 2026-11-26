@@ -2,7 +2,7 @@
 
 import { COLORS } from "@/lib/colors"
 import { ageLabel, type FleetInspection } from "@/lib/fleet/fleet-inspect"
-import { KANBAN_COLOR, SUPERMEMORY_COLOR } from "@/lib/fleet/fleet-colors"
+import { BASH_COLOR, KANBAN_COLOR, SUPERMEMORY_COLOR } from "@/lib/fleet/fleet-colors"
 import { kanbanCountsLine } from "@/lib/fleet/kanban-blocks"
 
 interface FleetInspectorProps {
@@ -13,7 +13,7 @@ interface FleetInspectorProps {
   right: number
   top: number
   narrow: boolean
-  /** Kanban blocks: whether the block is pinned (kept on the map past its linger) and the toggle. */
+  /** Whether the block is pinned (kept on the map past its linger) and the toggle. */
   pinned?: boolean
   onTogglePin?: () => void
 }
@@ -21,9 +21,14 @@ interface FleetInspectorProps {
 /** Space under the top bar that the session summary card (top left) takes, px: the panel starts below it. */
 const SESSION_CARD_CLEARANCE = 52
 
-/** Read-only list of the latest interactions of a Kanban board or Supermemory namespace. */
+/**
+ * Read-only list of the latest interactions of a Kanban board, a Supermemory namespace or a Bash command head.
+ * A Bash row shows the full command (masked when it was taken in, see bash-blocks.ts), wrapped, not cut.
+ */
 export function FleetInspector({ inspection, now, onClose, right, top, narrow, pinned = false, onTogglePin }: FleetInspectorProps) {
-  const color = inspection.kind === 'kanban' ? KANBAN_COLOR : SUPERMEMORY_COLOR
+  const color = inspection.kind === 'kanban' ? KANBAN_COLOR : inspection.kind === 'bash' ? BASH_COLOR : SUPERMEMORY_COLOR
+  const kindLabel = inspection.kind === 'kanban' ? 'Kanban' : inspection.kind === 'bash' ? 'Bash' : 'Memory'
+  const isBash = inspection.kind === 'bash'
   return (
     <div
       data-testid="fleet-inspector"
@@ -44,7 +49,7 @@ export function FleetInspector({ inspection, now, onClose, right, top, narrow, p
     >
       <div className="flex items-center justify-between px-3 py-2" style={{ borderBottom: `1px solid ${color}33` }}>
         <span style={{ color }}>
-          {inspection.kind === 'kanban' ? 'Kanban' : 'Memory'} · {inspection.title}
+          {kindLabel} · {inspection.title}
         </span>
         <span className="flex items-center gap-3">
           {onTogglePin && (
@@ -72,6 +77,11 @@ export function FleetInspector({ inspection, now, onClose, right, top, narrow, p
           )}
         </div>
       )}
+      {inspection.summary && (
+        <div data-testid="fleet-inspector-summary" className="px-3 py-1" style={{ borderBottom: `1px solid ${color}22`, color: COLORS.textMuted }}>
+          {inspection.summary}
+        </div>
+      )}
       <div className="overflow-y-auto px-3 py-1" style={{ minHeight: 0 }}>
         {inspection.items.length === 0 && <div className="py-2" style={{ color: COLORS.textMuted }}>No interactions recorded yet.</div>}
         {inspection.items.map((item, i) => (
@@ -79,7 +89,9 @@ export function FleetInspector({ inspection, now, onClose, right, top, narrow, p
             <span className="shrink-0" style={{ color: COLORS.textMuted, width: 74 }}>{ageLabel(item.at, now)}</span>
             <span className="shrink-0 truncate" style={{ width: 72 }}>{item.profile ?? '—'}</span>
             <span className="shrink-0" style={{ color, width: 64 }}>{item.action}</span>
-            {item.detail && <span className="truncate" style={{ color: COLORS.textMuted }}>{item.detail}</span>}
+            {item.detail && (isBash
+              ? <span data-testid="fleet-inspector-command" className="min-w-0" style={{ color: COLORS.textPrimary ?? '#cfe', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{item.detail}</span>
+              : <span className="truncate" style={{ color: COLORS.textMuted }}>{item.detail}</span>)}
           </div>
         ))}
         {inspection.more > 0 && (

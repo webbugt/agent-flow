@@ -7,7 +7,7 @@
  * Pure and clock-free: the caller passes `now`; drawing derives the dot position from `startedAt`.
  */
 import type { FleetEdgeKind, FleetGraphEdge } from './fleet-graph'
-import { KANBAN_COLOR, SUPERMEMORY_COLOR } from './fleet-colors'
+import { BASH_COLOR, KANBAN_COLOR, SUPERMEMORY_COLOR } from './fleet-colors'
 
 /** One dot's trip along its link, ms. */
 export const PULSE_MS = 1800
@@ -28,9 +28,9 @@ export interface FleetPulse {
   startedAt: number
 }
 
-/** Colour of a pulse: one for Kanban events, one for memory store/search/forget. */
+/** Colour of a pulse: one for Kanban events, one for memory store/search/forget, one for Bash commands. */
 export function pulseColor(kind: FleetEdgeKind): string {
-  return kind === 'kanban' ? KANBAN_COLOR : SUPERMEMORY_COLOR
+  return kind === 'kanban' ? KANBAN_COLOR : kind === 'bash' ? BASH_COLOR : SUPERMEMORY_COLOR
 }
 
 /** Progress of a pulse, 0..1, or null when it has not started or is over. */
