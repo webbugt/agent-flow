@@ -3,7 +3,8 @@ import { BEAM, ANIM, NODE } from '@/lib/agent-types'
 import { COLORS } from '@/lib/colors'
 import { alphaHex } from '@/lib/utils'
 import { MIN_VISIBLE_OPACITY } from '@/lib/canvas-constants'
-import { edgeAlpha } from '@/lib/fleet/fleet-edge-life'
+import { EDGE_FADE_MS, EDGE_LINGER_MS, lifeAlpha } from '@/lib/fleet/fleet-edge-life'
+import { blockViewAlpha } from '@/lib/fleet/block-alpha'
 import type { CloudGeometry, CloudView } from '@/lib/fleet/fleet-cloud-geometry'
 import { pulseProgress, type FleetPulse } from '@/lib/fleet/fleet-pulses'
 import { LABEL_WIDTH_PX, LabelPlacer, fitText, labelScreenPx, type Rect } from '@/lib/fleet/fleet-labels'
@@ -78,7 +79,7 @@ export function drawFleetLinks(
 ) {
   for (const edge of edges) {
     if (!edge.fromCloud) continue
-    const life = edgeAlpha(edge.lastUsedAt, now)
+    const life = lifeAlpha(edge.lastUsedAt, now, edge.lingerMs ?? EDGE_LINGER_MS, edge.fadeMs ?? EDGE_FADE_MS)
     if (life <= 0) continue
     const ends = fleetLinkEnds(edge, agents, clouds)
     if (!ends) continue
@@ -199,14 +200,17 @@ export function drawFleetLabels(
   agents: ReadonlyMap<string, Agent>, selectedId: string | null, hoveredId: string | null,
   /** Screensaver mode passes false: the second line under a resource (its task text) is not drawn. Names and captions stay. */
   showTaskText = true,
+  /** Wall clock (epoch ms): the label of a resource block fades with its node. */
+  wallNow = Date.now(),
 ) {
   const zoom = currentZoom(ctx)
   const gap = 8 / Math.min(zoom, 1)
   const placer = new LabelPlacer()
   ctx.save()
   const radiusOf = (a: Agent) => (a.resourceKind ? NODE.radiusSub : a.isMain ? NODE.radiusMain : NODE.radiusSub) * a.scale
+  const lifeOf = (a: Agent) => (a.block ? blockViewAlpha(a.block, wallNow) : 1)
   for (const a of agents.values()) {
-    if (a.opacity < MIN_VISIBLE_OPACITY) continue
+    if (a.opacity < MIN_VISIBLE_OPACITY || lifeOf(a) <= 0) continue
     const r = radiusOf(a)
     placer.reserve({ x0: a.x - r, x1: a.x + r, y0: a.y - r, y1: a.y + r })
   }
@@ -221,10 +225,11 @@ export function drawFleetLabels(
   }
 
   const labelled = [...agents.values()]
-    .filter(a => a.opacity >= MIN_VISIBLE_OPACITY && a.name)
+    .filter(a => a.opacity >= MIN_VISIBLE_OPACITY && a.name && lifeOf(a) > 0)
     .sort((a, b) => Number(!!b.resourceKind) - Number(!!a.resourceKind) || a.id.localeCompare(b.id))
   const emphasised = (a: Agent) => a.id === selectedId || a.id === hoveredId
   const draw = (a: Agent, force: boolean) => {
+    ctx.globalAlpha = lifeOf(a)
     const rect = drawLabelJob(ctx, placer, {
       text: a.name, x: a.x, y: a.y + radiusOf(a) + gap, nominalPx: 10, weight: '400',
       alt: { aboveBottom: a.y - radiusOf(a) - gap, sideX: a.x + radiusOf(a) + 6 / Math.min(zoom, 1), centreY: a.y },

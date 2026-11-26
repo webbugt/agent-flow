@@ -23,7 +23,7 @@ const memory = (n: number): SupermemoryNamespaceNode => ({
 test('Kanban inspector: time, profile, event kind, newest first, limited with a "more" count', () => {
   const r = inspectResource('kanban:agent-flow', [board(30)], [])!
   assert.equal(r.kind, 'kanban')
-  assert.equal(r.title, 'Agent Flow')
+  assert.equal(r.title, 'agent-flow', 'a Kanban block is named by its board slug')
   assert.equal(r.items.length, INSPECT_LIMIT)
   assert.equal(r.total, 30)
   assert.equal(r.more, 30 - INSPECT_LIMIT)

@@ -5,6 +5,7 @@
  */
 import type { PublicKanbanBoardNode } from './kanban-source'
 import type { SupermemoryNamespaceNode } from './supermemory-source'
+import { kanbanBlockInfo, type KanbanBlockInfo } from './kanban-blocks'
 
 /** Rows shown in the inspector. */
 export const INSPECT_LIMIT = 20
@@ -30,6 +31,8 @@ export interface FleetInspection {
   items: FleetInteraction[]
   /** Interactions beyond the limit, for a "+N more" line. */
   more: number
+  /** Kanban only: the block's allowed fields (board slug, status counts, event kinds). */
+  block?: KanbanBlockInfo
 }
 
 /** Latest interactions of the resource `id`, or null when it is neither a known board nor namespace. */
@@ -46,7 +49,7 @@ export function inspectResource(
       // Newest first; the event id breaks ties (it only grows).
       .sort((a, b) => b.at - a.at || b.order - a.order)
       .map(({ order: _order, ...rest }) => rest)
-    return { id, kind: 'kanban', title: board.name || board.slug, total: all.length, items: all.slice(0, limit), more: Math.max(all.length - limit, 0) }
+    return { id, kind: 'kanban', title: board.slug, total: all.length, items: all.slice(0, limit), more: Math.max(all.length - limit, 0), block: kanbanBlockInfo(board) }
   }
   const space = supermemory?.find(s => s.id === id)
   if (space) {

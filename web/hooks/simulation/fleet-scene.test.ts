@@ -3,6 +3,7 @@ import { strict as assert } from 'node:assert'
 import type { SimulationEvent } from '@/lib/agent-types'
 import { instancesFromSessionEvents, splitInstanceId, type FleetSelectionView, type SessionLike } from '@/lib/fleet/fleet-model'
 import { buildFleetGraph } from '@/lib/fleet/fleet-graph'
+import { defaultOptions } from '@/lib/fleet/options-registry'
 import type { PublicKanbanBoardNode } from '@/lib/fleet/kanban-source'
 import type { SupermemoryNamespaceNode } from '@/lib/fleet/supermemory-source'
 import { anonymizeToolInput, createAnonymizePolicy, isAnonymized } from '@/lib/content-privacy'
@@ -214,6 +215,27 @@ test('fleet scene: Kanban boards and Supermemory namespaces stay on the map, lin
   assert.equal(link(kanban[0].id).lastUsedAt, NOW - MIN)
   // Resources are not an agent to open.
   assert.equal(openTargetOf(scene, kanban[0].id), null)
+})
+
+test('fleet scene: a Kanban block carries its life (last use, kanban linger and fade, pin) and its link the kanban window, for the draw loop', () => {
+  const f = fixture()
+  const instances = instancesFromSessionEvents(f.sessions, id => f.events[id] ?? [])
+  const options = defaultOptions()
+  options.lingerSeconds.kanban = 120
+  options.fadeSeconds = 30
+  const build = (pins: ReadonlySet<string>) => {
+    const graph = buildFleetGraph({ instances, kanban: [board('agent-flow', 'taxis')], selection: all, now: NOW, options, pins })
+    return buildFleetScene({ sessions: f.sessions, stateOf: id => new FleetReplay().advance(id, f.events[id] ?? []), instances, selection: all, graph }).state
+  }
+  const state = build(new Set())
+  const node = state.agents.get('kanban:agent-flow')!
+  assert.deepEqual(node.block, { lastUsedAt: NOW - MIN, lingerMs: 120_000, fadeMs: 30_000, pinned: false })
+  assert.equal(node.name, 'agent-flow')
+  assert.equal(node.task, '1 running · 1 done')
+  const link = state.edges.find(e => e.to === 'kanban:agent-flow')!
+  assert.equal(link.lingerMs, 120_000)
+  assert.equal(link.fadeMs, 30_000)
+  assert.equal(build(new Set(['kanban:agent-flow'])).agents.get('kanban:agent-flow')!.block!.pinned, true)
 })
 
 test('fleet replay: resets when the buffer is shorter, and does not reprocess an unchanged buffer', () => {
