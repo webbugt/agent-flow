@@ -79,9 +79,9 @@ export interface Agent {
   /** Bridge session (Hermes profile) the node came from, set from the spawn event's session id.
    *  The fleet map uses it to hide/show a node by the fleet selection. */
   sessionId?: string
-  /** Fleet map only: this node stands for a resource (a Kanban board or a Supermemory namespace),
+  /** Fleet map only: this node stands for a resource (a Kanban board, a Supermemory namespace or a Bash command head),
    *  not an agent. `name` is its label and `task` its second line. */
-  resourceKind?: 'kanban' | 'supermemory'
+  resourceKind?: 'kanban' | 'supermemory' | 'bash'
   /** Fleet map, resource blocks: the block's life. The draw loop fades the node by it on the wall clock. */
   block?: BlockLifeView
 }

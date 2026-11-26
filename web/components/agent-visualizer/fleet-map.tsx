@@ -6,6 +6,7 @@ import { Z, type SimulationEvent } from "@/lib/agent-types"
 import type { FleetInstance, FleetSelectionView, SessionLike } from "@/lib/fleet/fleet-model"
 import type { PublicKanbanBoardNode } from "@/lib/fleet/kanban-source"
 import type { SupermemoryNamespaceNode } from "@/lib/fleet/supermemory-source"
+import { BashUseTracker } from "@/lib/fleet/bash-blocks"
 import { buildFleetGraph, EMPTY_GRAPH } from "@/lib/fleet/fleet-graph"
 import { inspectResource } from "@/lib/fleet/fleet-inspect"
 import { EMPTY_PINS, togglePin, type PinSet } from "@/lib/fleet/resource-block"
@@ -105,9 +106,19 @@ export function FleetMap({
   // (live: an edit in the options panel applies at once) and fade; a pinned block stays.
   const options = useOptions()
   const [pins, setPins] = useState<PinSet>(EMPTY_PINS)
+  // Bash command heads: read from the session event buffers (a ref-backed getter, so `tick` says when they grew).
+  // The tracker keeps the commands masked, so nothing below ever holds an unmasked command.
+  const bashTrackerRef = useRef<BashUseTracker | null>(null)
+  if (!bashTrackerRef.current) bashTrackerRef.current = new BashUseTracker()
+  const bash = useMemo(
+    () => visible ? (bashTrackerRef.current as BashUseTracker).update(sessions, eventsOf, Date.now()) : [],
+    // tick: the event buffers are refs, so React does not see new events by itself; now: aging
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [visible, sessions, eventsOf, tick, now],
+  )
   const graph = useMemo(
-    () => visible ? buildFleetGraph({ instances, kanban, supermemory, selection, now, options, pins }) : EMPTY_GRAPH,
-    [visible, instances, kanban, supermemory, selection, now, options, pins],
+    () => visible ? buildFleetGraph({ instances, kanban, supermemory, bash, selection, now, options, pins }) : EMPTY_GRAPH,
+    [visible, instances, kanban, supermemory, bash, selection, now, options, pins],
   )
   // Clusters per row follow the free area's shape, so a phone gets a tall column, a desktop a wide grid.
   const columns = useMemo(
@@ -151,16 +162,18 @@ export function FleetMap({
   let agentCount = 0
   let kanbanCount = 0
   let memoryCount = 0
+  let bashCount = 0
   for (const a of scene.state.agents.values()) {
     if (a.resourceKind === 'kanban') kanbanCount++
     else if (a.resourceKind === 'supermemory') memoryCount++
+    else if (a.resourceKind === 'bash') bashCount++
     else agentCount++
   }
-  const inspection = inspectId ? inspectResource(inspectId, kanban, supermemory) : null
+  const inspection = inspectId ? inspectResource(inspectId, kanban, supermemory, undefined, bash) : null
   const profileNames = [...scene.clusters.values()].map(c => c.identity)
 
   const open = (nodeId: string | null) => {
-    // Kanban and memory nodes open the read-only inspector of their latest interactions.
+    // Kanban, memory and bash nodes open the read-only inspector of their latest interactions.
     const picked = nodeId ? scene.state.agents.get(nodeId) : undefined
     if (picked?.resourceKind) {
       setSelectedId(picked.id)
@@ -182,6 +195,7 @@ export function FleetMap({
       data-satellites={scene.state.toolCalls.size}
       data-kanban={kanbanCount}
       data-supermemory={memoryCount}
+      data-bash={bashCount}
       data-timeline-visible={timelineVisible}
       data-clouds={scene.state.clouds?.length ?? 0}
       data-edges={scene.state.edges.filter(e => e.fromCloud).length}
@@ -237,8 +251,8 @@ export function FleetMap({
       </div>
       {inspection && (
         <FleetInspector inspection={inspection} now={now} top={top} right={insetRight} narrow={narrow}
-          pinned={inspection.kind === 'kanban' && pins.has(inspection.id)}
-          onTogglePin={inspection.kind === 'kanban' ? () => setPins(p => togglePin(p, inspection.id)) : undefined}
+          pinned={pins.has(inspection.pinId)}
+          onTogglePin={() => setPins(p => togglePin(p, inspection.pinId))}
           onClose={() => { setInspectId(null); setSelectedId(null) }} />
       )}
       {onToggleTimeline && (
