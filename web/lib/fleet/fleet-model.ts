@@ -38,7 +38,9 @@ export interface FleetInstance {
   markers: FleetMarker[]
   /**
    * Epoch ms of the newest event seen for this instance (tool call, message, spawn, completion).
-   * Absent: derive it from startTime, endTime and markers (see fleet-activity-filter).
+   * `agent_idle` and the quiet-timeout completion do not count. When present it decides on its own
+   * (endTime is then not an activity time: it may be a quiet timeout). Absent: derive it from
+   * startTime, endTime and markers (see fleet-activity-filter).
    */
   lastEventAt?: number
 }
@@ -181,12 +183,22 @@ const ACTIVITY_EVENT_TYPES: ReadonlySet<string> = new Set([
   'agent_spawn', 'agent_complete', 'tool_call_start', 'tool_call_end', 'message', 'permission_requested',
 ])
 
+/**
+ * Does this event show that the node did something? `agent_idle` and the relay's quiet-timeout
+ * completion (`agent_complete` with `reason: 'quiet'`) mark the ABSENCE of activity and do not count;
+ * a real completion (subagent finished, history restored) does.
+ */
+export function countsAsActivity(type: string, payload?: Record<string, unknown>): boolean {
+  if (!ACTIVITY_EVENT_TYPES.has(type)) return false
+  return !(type === 'agent_complete' && payload?.reason === 'quiet')
+}
+
 /** Agent nodes of one session, rebuilt from its buffered events. Only nodes with an epoch time base (`startedAt`) can be placed. */
 function nodesFromEvents(sessionId: string, events: readonly SessionEventLike[]): NodeDraft[] {
   const nodes = new Map<string, NodeDraft>()
   /** Record the event as the node's newest activity (the node's time base is set by its spawn). */
   const touch = (node: NodeDraft | undefined, e: SessionEventLike) => {
-    if (!node || !ACTIVITY_EVENT_TYPES.has(e.type) || typeof e.time !== 'number') return
+    if (!node || !countsAsActivity(e.type, e.payload) || typeof e.time !== 'number') return
     const at = node.base + e.time * 1000
     if (Number.isFinite(at) && (node.lastEventAt === undefined || at > node.lastEventAt)) node.lastEventAt = at
   }

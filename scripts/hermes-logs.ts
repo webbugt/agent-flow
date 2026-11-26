@@ -967,7 +967,9 @@ export class HermesLogWatcher {
       s.completed = true
       s.active = false
       if (s.spawned) {
-        this.opts.emit({ time: this.elapsed(s, t), type: 'agent_complete', payload: { name: s.agentName } } as AgentEvent, p.sessionId)
+        // `reason: 'quiet'` marks this completion as the absence of activity (like agent_idle): the fleet
+        // activity filter must not count it as an event of the session.
+        this.opts.emit({ time: this.elapsed(s, t), type: 'agent_complete', payload: { name: s.agentName, reason: 'quiet' } } as AgentEvent, p.sessionId)
       }
     } else if (quiet > idleMs && s.spawned) {
       this.opts.emit({ time: this.elapsed(s, t), type: 'agent_idle', payload: { name: s.agentName } } as AgentEvent, p.sessionId)

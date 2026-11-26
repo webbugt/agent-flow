@@ -2,11 +2,11 @@ import { test } from 'node:test'
 import { strict as assert } from 'node:assert'
 import {
   ACTIVITY_WINDOWS, DEFAULT_ACTIVITY_WINDOW, FLEET_ACTIVITY_FILTER_KEY, applyActivityFilter, hiddenByActivity, inWindow,
-  loadActivityWindow, parseActivityWindow, sameIds, saveActivityWindow, summarizeHidden, withActivityFilter,
+  instanceLastActivity, loadActivityWindow, parseActivityWindow, sameIds, saveActivityWindow, summarizeHidden, withActivityFilter,
   type ActivityWindowId,
 } from './fleet-activity-filter'
 import { buildFleetGraph } from './fleet-graph'
-import { instancesFromSessionEvents, type FleetInstance, type SessionEventLike, type SessionLike } from './fleet-model'
+import { countsAsActivity, instancesFromSessionEvents, type FleetInstance, type SessionEventLike, type SessionLike } from './fleet-model'
 import type { PublicKanbanBoardNode } from './kanban-source'
 import type { SupermemoryNamespaceNode } from './supermemory-source'
 
@@ -192,6 +192,51 @@ test('events decide the activity: a message keeps a node visible, agent_idle doe
   assert.equal(instances.length, 2)
   const hidden = hiddenByActivity({ window: '5m', now: NOW, instances })
   assert.deepEqual([...hidden], ['s-quiet::Quiet · A'])
+})
+
+test('the relay\'s quiet-timeout agent_complete is not activity: spawn, tool at T, timeout complete at T+10 min, hidden in 5m at T+11', () => {
+  const START = NOW - 60 * MIN
+  const T = 30 * 60 // tool call 30 minutes into the node, in seconds
+  const sessions: SessionLike[] = [{ id: 's-q', label: 'Quiet', status: 'completed', startTime: START, lastActivityTime: NOW }]
+  const events: SessionEventLike[] = [
+    { time: 0, type: 'agent_spawn', payload: { name: 'Quiet · A', parent: 'x', startedAt: START } },
+    { time: T, type: 'tool_call_start', payload: { agent: 'Quiet · A', tool: 'Bash' } },
+    { time: T + 10 * 60, type: 'agent_complete', payload: { name: 'Quiet · A', reason: 'quiet' } },
+  ]
+  const [inst] = instancesFromSessionEvents(sessions, () => events)
+  const tool = START + T * 1000
+  assert.equal(inst.status, 'completed')
+  assert.equal(inst.lastEventAt, tool, 'the quiet timeout does not set lastEventAt')
+  assert.equal(instanceLastActivity(inst), tool, 'and its end time is not an activity time either')
+  const at = (offsetMin: number, window: ActivityWindowId) => hiddenByActivity({ window, now: tool + offsetMin * MIN, instances: [inst] }).has(inst.id)
+  assert.equal(at(4, '5m'), false)
+  assert.equal(at(6, '5m'), true, 'hidden 5 minutes after the last real event')
+  assert.equal(at(11, '5m'), true, 'still hidden after the synthetic completion at T+10')
+  assert.equal(at(11, '30m'), false)
+  assert.equal(at(31, '30m'), true, 'the 30 min window is not stretched by the timeout either')
+})
+
+test('a real agent_complete (subagent finished, history restored) still counts as activity', () => {
+  const START = NOW - 60 * MIN
+  const sessions: SessionLike[] = [{ id: 's-r', label: 'Real', status: 'completed', startTime: START, lastActivityTime: NOW }]
+  const events: SessionEventLike[] = [
+    { time: 0, type: 'agent_spawn', payload: { name: 'Real · A', parent: 'x', startedAt: START } },
+    { time: 20 * 60, type: 'tool_call_start', payload: { agent: 'Real · A', tool: 'Bash' } },
+    { time: 58 * 60, type: 'agent_complete', payload: { name: 'Real · A' } },
+  ]
+  const [inst] = instancesFromSessionEvents(sessions, () => events)
+  assert.equal(inst.lastEventAt, START + 58 * 60 * 1000)
+  assert.equal(hiddenByActivity({ window: '5m', now: NOW, instances: [inst] }).has(inst.id), false, 'finished 2 minutes ago')
+})
+
+test('countsAsActivity: agent_idle and the quiet-timeout completion do not count, real events do', () => {
+  assert.equal(countsAsActivity('agent_idle', { name: 'a' }), false)
+  assert.equal(countsAsActivity('agent_complete', { name: 'a', reason: 'quiet' }), false)
+  assert.equal(countsAsActivity('agent_complete', { name: 'a' }), true)
+  assert.equal(countsAsActivity('agent_complete', { name: 'a', idle: true }), true)
+  assert.equal(countsAsActivity('tool_call_start', {}), true)
+  assert.equal(countsAsActivity('message'), true)
+  assert.equal(countsAsActivity('context_update', {}), false)
 })
 
 test('a session without nodes uses the session\'s own last activity time', () => {

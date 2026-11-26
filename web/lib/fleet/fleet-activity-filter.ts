@@ -76,9 +76,13 @@ function newest(values: ReadonlyArray<number | null | undefined>): number | unde
   return out
 }
 
-/** Epoch ms of the instance's newest event: its recorded last event, its start, its end, its newest tool call. */
+/**
+ * Epoch ms of the instance's newest event: its recorded last event, its start, its newest tool call.
+ * The end time counts only when no last event is recorded: with one, `endTime` may be the relay's
+ * quiet-timeout completion, which is the absence of activity.
+ */
 export function instanceLastActivity(inst: FleetInstance): number | undefined {
-  return newest([inst.lastEventAt, inst.startTime, inst.endTime, ...inst.markers.map(m => m.at)])
+  return newest([inst.lastEventAt, inst.startTime, inst.lastEventAt === undefined ? inst.endTime : undefined, ...inst.markers.map(m => m.at)])
 }
 
 export function kanbanLastActivity(board: PublicKanbanBoardNode): number | undefined {

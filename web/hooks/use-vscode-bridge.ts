@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { vscodeBridge, type ConnectionStatus, type AgentEvent, type SessionInfo } from '@/lib/vscode-bridge'
 import { SimulationEvent } from '@/lib/agent-types'
+import { countsAsActivity } from '@/lib/fleet/fleet-model'
 
 interface BridgeHookResult {
   isVSCode: boolean
@@ -130,8 +131,10 @@ export function useVSCodeBridge(): BridgeHookResult {
         buf.push(simEvent)
         sessionEventsRef.current.set(event.sessionId, buf)
         // Keep lastActivityTime roughly current (throttled: one state update per 5s per session)
+        // agent_idle and the quiet-timeout completion mark the absence of activity: they do not bump it
+        // (the fleet activity filter reads it for sessions without nodes).
         const now = Date.now()
-        setSessions(prev => {
+        if (countsAsActivity(event.type, event.payload)) setSessions(prev => {
           const s = prev.find(x => x.id === event.sessionId)
           if (!s || now - s.lastActivityTime < 5000) return prev
           return prev.map(x => x.id === event.sessionId ? { ...x, lastActivityTime: now } : x)
