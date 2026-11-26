@@ -1,46 +1,40 @@
-import { useState, useCallback, useEffect, useMemo } from 'react'
+import { useCallback, useMemo } from 'react'
 import {
-  FLEET_SELECTION_KEY, isSelected, loadSelection, saveSelection, selectAll, selectNone, setMany, toggleMany,
+  MAX_STORED_IDS, isSelected, selectAll, selectNone, setMany, toggleMany, type OffSet,
 } from '@/lib/fleet/fleet-selection'
+import { getOptions, updateOptions } from '@/lib/options-store'
+import { useOptions } from '@/hooks/use-options'
 
 /**
- * Fleet selection (which agents/lanes are visible), persisted in localStorage.
+ * Fleet selection (which agents/lanes are visible), kept in the options registry (`fleetDeselected`), so the
+ * options panel and the fleet timeline checkboxes edit the same value and stay in sync, also across tabs.
  *
  * Deselecting only hides. Nothing here stops a process or closes a session.
  * State is the set of DESELECTED ids, so new instances show up by default.
- * Storage is read after mount (not in the initial state) so server and client
- * render the same first frame.
+ * The options load after mount (not in the first render) so server and client render the same first frame.
  */
-export function useFleetSelection(storageKey: string = FLEET_SELECTION_KEY) {
-  const [off, setOff] = useState<ReadonlySet<string>>(() => new Set())
-  const [hydrated, setHydrated] = useState(false)
+export function useFleetSelection() {
+  const options = useOptions()
+  const deselected = options.fleetDeselected
+  // `deselected` keeps its identity until the list really changes (applyOptionsPatch), so this Set does too.
+  const off = useMemo<OffSet>(() => new Set(deselected), [deselected])
+  // The options store reads storage on its first client read; there is nothing left to wait for.
+  const hydrated = true
 
-  useEffect(() => {
-    setOff(loadSelection(window.localStorage, storageKey))
-    setHydrated(true)
-  }, [storageKey])
-
-  // Persist after the initial load only, so an empty first render can't wipe the saved selection.
-  useEffect(() => {
-    if (hydrated) saveSelection(window.localStorage, off, storageKey)
-  }, [off, hydrated, storageKey])
-
-  // Keep several open tabs/panels in sync.
-  useEffect(() => {
-    const onStorage = (e: StorageEvent) => {
-      if (e.key === storageKey) setOff(loadSelection(window.localStorage, storageKey))
-    }
-    window.addEventListener('storage', onStorage)
-    return () => window.removeEventListener('storage', onStorage)
-  }, [storageKey])
+  /** Apply `f` to the CURRENT stored set (not a stale render's), and write only if it changed. */
+  const change = useCallback((f: (prev: OffSet) => OffSet) => {
+    const prev: OffSet = new Set(getOptions().fleetDeselected)
+    const next = f(prev)
+    if (next !== prev) updateOptions({ fleetDeselected: [...next].slice(0, MAX_STORED_IDS) })
+  }, [])
 
   const view = useMemo(() => ({ isSelected: (id: string) => isSelected(off, id) }), [off])
 
   /** Group/section checkbox: all on -> all off, otherwise all on. */
-  const toggleIds = useCallback((ids: readonly string[]) => setOff(prev => toggleMany(prev, ids)), [])
-  const setIds = useCallback((ids: readonly string[], on: boolean) => setOff(prev => setMany(prev, ids, on)), [])
-  const selectAllIds = useCallback(() => setOff(prev => selectAll(prev)), [])
-  const selectNoneIds = useCallback((allIds: readonly string[]) => setOff(prev => selectNone(prev, allIds)), [])
+  const toggleIds = useCallback((ids: readonly string[]) => change(prev => toggleMany(prev, ids)), [change])
+  const setIds = useCallback((ids: readonly string[], on: boolean) => change(prev => setMany(prev, ids, on)), [change])
+  const selectAllIds = useCallback(() => change(prev => selectAll(prev)), [change])
+  const selectNoneIds = useCallback((allIds: readonly string[]) => change(prev => selectNone(prev, allIds)), [change])
 
   return { off, view, hydrated, toggleIds, setIds, selectAll: selectAllIds, selectNone: selectNoneIds }
 }

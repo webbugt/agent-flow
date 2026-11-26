@@ -22,7 +22,10 @@ import { TimelinePanel } from "./timeline-panel"
 import { FleetTimelinePanel } from "./fleet-timeline-panel"
 import { FleetMap } from "./fleet-map"
 import { createDemoResources, addDemoEvent, addDemoNodes, type DemoEventKind } from "@/lib/fleet/fleet-demo-resources"
-import { loadTimelineVisible, saveTimelineVisible, mapInsetBottom } from "@/lib/fleet/fleet-timeline-pref"
+import { mapInsetBottom } from "@/lib/fleet/fleet-timeline-pref"
+import { getOptions, updateOptions } from "@/lib/options-store"
+import { useOptions } from "@/hooks/use-options"
+import { OptionsPanel } from "./options-panel"
 import { useFleetSelection } from "@/hooks/use-fleet-selection"
 import { useFleetActivityFilter } from "@/hooks/use-fleet-activity-filter"
 import { applyActivityFilter, withActivityFilter } from "@/lib/fleet/fleet-activity-filter"
@@ -100,11 +103,13 @@ export function AgentVisualizer() {
   const [showCostOverlay, setShowCostOverlay] = useState(false)
   const [showTimeline, setShowTimeline] = useState(false)
   const [showFleet, setShowFleet] = useState(false)
-  // Fleet timeline panel: shown by default; the choice is kept in localStorage (read after mount, so SSR matches).
-  const [fleetTimelineVisible, setFleetTimelineVisible] = useState(true)
-  useEffect(() => { setFleetTimelineVisible(loadTimelineVisible(window.localStorage)) }, [])
+  // Options panel (linger/fade/show per block kind, and the other client settings), see options-panel.tsx.
+  const [showOptions, setShowOptions] = useState(false)
+  // Fleet timeline panel: shown by default; the choice is kept in the options registry (read after mount, so SSR
+  // matches), so the options panel and this toggle edit the same value.
+  const fleetTimelineVisible = useOptions().fleetTimelineVisible
   const toggleFleetTimeline = useCallback(() => {
-    setFleetTimelineVisible(prev => { saveTimelineVisible(window.localStorage, !prev); return !prev })
+    updateOptions({ fleetTimelineVisible: !getOptions().fleetTimelineVisible })
   }, [])
   const [showFileAttention, setShowFileAttention] = useState(false)
   const [showTranscript, setShowTranscript] = useState(false)
@@ -690,7 +695,9 @@ export function AgentVisualizer() {
         costText={costText}
         projectOverride={costSources.projectOverrides}
         projectOverrideTitle={costSources.text}
-        onOpenCostSettings={() => setShowCostSettings(true)}
+        onOpenCostSettings={() => { setShowOptions(false); setShowCostSettings(true) }}
+        showOptions={showOptions}
+        onToggleOptions={() => { setShowCostSettings(false); setShowOptions(prev => !prev) }}
         showFileAttention={showFileAttention}
         showTranscript={showTranscript}
         showCostOverlay={showCostOverlay}
@@ -710,6 +717,9 @@ export function AgentVisualizer() {
 
       {/* LIMITS panel: observed 5h / weekly, estimates with tags, and the Fable estimate when Fable was used this week */}
       {!sv && <LimitsPanelHost sessionIds={limitSessionIds} eventsOf={getSessionEvents} />}
+
+      {/* Options panel: linger/fade/show per resource kind, sound, timeline, cost unit, hidden fleet agents (browser only, no server config) */}
+      {showOptions && <OptionsPanel selection={fleetSelection} onClose={() => setShowOptions(false)} />}
 
       {/* Cost settings drawer: prices per provider/model, currency and FX (writes the user costs.json) */}
       {!sv && showCostSettings && (
