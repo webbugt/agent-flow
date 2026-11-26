@@ -1,12 +1,14 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { SimulationEvent } from '@/lib/agent-types'
 import type { FleetInstance, FleetSelectionView, SessionLike } from '@/lib/fleet/fleet-model'
 import type { FleetGraph } from '@/lib/fleet/fleet-graph'
 import { FleetPulseTracker } from '@/lib/fleet/fleet-pulses'
 import { glideAll, startPositions } from '@/lib/fleet/fleet-glide'
+import { fleetNow } from '@/lib/fleet/fleet-clock'
 import { buildFleetScene, FleetReplay, type FleetScene } from './simulation/fleet-scene'
+import { newFleetPresenceTracker, withGhosts } from './simulation/fleet-presence-scene'
 import { createEmptyState, type SimulationState } from './simulation/types'
 
 export interface UseFleetSceneOptions {
@@ -46,26 +48,37 @@ export function useFleetScene(opts: UseFleetSceneOptions) {
   const pulsesRef = useRef<FleetPulseTracker | null>(null)
   if (!pulsesRef.current) pulsesRef.current = new FleetPulseTracker()
   const frameRef = useRef<SimulationState>(EMPTY_SCENE.state)
+  // Entry and exit: what is on the map now, and the ghosts of what just left. Ghosts live in the frame the
+  // canvas draws, not in `scene` (counts and click targets must not see them).
+  const presenceRef = useRef<ReturnType<typeof newFleetPresenceTracker> | null>(null)
+  if (!presenceRef.current) presenceRef.current = newFleetPresenceTracker()
+  // Bumped when the oldest ghost is over, so the scene is rebuilt without it (and the camera fit drops it).
+  const [ghostTick, setGhostTick] = useState(0)
 
-  const scene = useMemo(() => {
-    if (!visible) return EMPTY_SCENE
+  const built = useMemo(() => {
+    if (!visible) return { scene: EMPTY_SCENE, frame: EMPTY_SCENE.state }
     const replay = replayRef.current as FleetReplay
     replay.retain(new Set(sessions.map(s => s.id)))
     // Idempotent for the same links: a second call (strict mode, a re-render) starts no dot twice.
     const pulses = (pulsesRef.current as FleetPulseTracker).update(graph.edges, Date.now())
-    return buildFleetScene({
+    const fresh = buildFleetScene({
       sessions, stateOf: id => replay.advance(id, eventsOf(id)), instances, selection, graph, columns,
       moved: movedRef.current, pulses,
     })
+    const tracker = presenceRef.current as NonNullable<typeof presenceRef.current>
+    return { scene: fresh, frame: withGhosts(fresh.state, tracker, fleetNow()) }
     // tick: the event buffers are refs, so React does not see new events by itself
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visible, sessions, eventsOf, instances, selection, graph, columns, tick])
+  }, [visible, sessions, eventsOf, instances, selection, graph, columns, tick, ghostTick])
+  const scene = built.scene
   // Only when the scene was rebuilt: a re-render must not undo a drag that moved the frame.
   const lastSceneRef = useRef<FleetScene | null>(null)
   if (lastSceneRef.current !== scene) {
     lastSceneRef.current = scene
     // A rebuilt scene places every resource at its (new) weighted target. Showing it there would make the
     // node jump, so a resource that is already on the map starts where it is drawn now and glides (below).
+    // A resource that is new on the map has no start: it appears at its target and gets the entry animation
+    // (opacity/scale from the presence stamps, applied per frame on top of this frame, see animatedView).
     const prev = frameRef.current
     const here = new Map<string, { x: number; y: number }>()
     for (const id of scene.resourceTargets.keys()) {
@@ -73,18 +86,27 @@ export function useFleetScene(opts: UseFleetSceneOptions) {
       if (a) here.set(id, { x: a.x, y: a.y })
     }
     const starts = startPositions(here, scene.resourceTargets)
-    let agents: typeof scene.state.agents | null = null
+    let agents: typeof built.frame.agents | null = null
     for (const [id, p] of starts) {
-      const a = scene.state.agents.get(id)
+      const a = built.frame.agents.get(id)
       if (!a || (a.x === p.x && a.y === p.y)) continue
-      if (!agents) agents = new Map(scene.state.agents)
+      if (!agents) agents = new Map(built.frame.agents)
       agents.set(id, { ...a, x: p.x, y: p.y })
     }
-    frameRef.current = agents ? { ...scene.state, agents } : scene.state
+    frameRef.current = agents ? { ...built.frame, agents } : built.frame
   }
 
+  // When the oldest ghost is over, rebuild once so it leaves the frame (and the camera's fit).
+  useEffect(() => {
+    const end = presenceRef.current?.nextExpiry()
+    if (end === null || end === undefined) return
+    const timer = setTimeout(() => setGhostTick(n => n + 1), Math.max(end - fleetNow(), 0) + 30)
+    return () => clearTimeout(timer)
+  }, [built])
+
   // Glide the resources to their targets, frame by frame, until they are there. The canvas reads
-  // frameRef every frame, so mutating it here is all the drawing needs; a node the user dragged is held.
+  // frameRef every frame (and animatedView reads positions from it), so mutating it here is all the
+  // drawing needs; a node the user dragged is held. Ghosts are not in resourceTargets: they stay put.
   useEffect(() => {
     if (!visible || typeof requestAnimationFrame === 'undefined') return
     let raf = 0
