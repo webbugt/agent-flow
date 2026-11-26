@@ -172,5 +172,7 @@ test('pruneBlocks drops finished unpinned blocks, keeps live and pinned, and ret
 
 test('the model carries no content fields', () => {
   const s = recordUse(empty, { kind: 'bash', key: 'git', at: T, agentId: 'a' })
-  assert.deepEqual(Object.keys(s.get('bash:git')!).sort(), ['agents', 'key', 'kind', 'label', 'lastUsedAt', 'useCount'])
+  // agentLast (C5) is agent name -> epoch ms, for the fleet badge; still no content.
+  assert.deepEqual(Object.keys(s.get('bash:git')!).sort(), ['agentLast', 'agents', 'key', 'kind', 'label', 'lastUsedAt', 'useCount'])
+  assert.deepEqual(s.get('bash:git')!.agentLast, { a: T })
 })

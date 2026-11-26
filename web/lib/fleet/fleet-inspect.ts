@@ -11,6 +11,7 @@ import { kanbanBlockInfo, type KanbanBlockInfo } from './kanban-blocks'
 import type { BashHeadNode } from './bash-blocks'
 import { bashCountsLine } from './bash-blocks'
 import { memoryBlockId, memoryBlockInfo, memoryCountsLine } from './memory-blocks'
+import { useCountsLine, type UseNode } from './event-uses'
 
 /** Rows shown in the inspector. */
 export const INSPECT_LIMIT = 20
@@ -30,7 +31,7 @@ export interface FleetInspection {
   id: string
   /** The id the block is pinned by (`kanban:<slug>`, `memory:<tag>`, `bash:<head>`). */
   pinId: string
-  kind: 'kanban' | 'supermemory' | 'bash'
+  kind: 'kanban' | 'supermemory' | 'bash' | 'subsystem'
   title: string
   /** Memory and Bash: the block's counts line ("3 search · 1 store", "4 calls"). No content. */
   summary?: string
@@ -51,7 +52,11 @@ export function inspectResource(
   supermemory: readonly SupermemoryNamespaceNode[] | undefined,
   limit = INSPECT_LIMIT,
   bash?: readonly BashHeadNode[],
+  /** Hermes subsystem nodes (cron, gateway). */
+  subsystem?: readonly UseNode[],
 ): FleetInspection | null {
+  const sub = subsystem?.find(n => n.id === id)
+  if (sub) return inspectUseNode(sub, limit)
   const board = kanban?.find(b => b.id === id)
   if (board) {
     const all: FleetInteraction[] = board.recentEvents
@@ -84,6 +89,24 @@ export function inspectResource(
     }
   }
   return null
+}
+
+/**
+ * Inspector of a block that comes from the event buffers (a subsystem, or in the single view a memory container or a
+ * Kanban board): the newest uses with who and how (the verb / platform), nothing else. No content: `UseNode` has no field for it.
+ */
+export function inspectUseNode(node: UseNode, limit = INSPECT_LIMIT): FleetInspection {
+  const all: FleetInteraction[] = [...node.recent]
+    .sort((a, b) => b.at - a.at || a.profile.localeCompare(b.profile) || a.action.localeCompare(b.action))
+    .map(r => ({ at: r.at, profile: r.profile, action: r.action }))
+  const profiles = Object.keys(node.byProfile).length
+  return {
+    id: node.id, pinId: node.id,
+    kind: node.kind === 'memory' ? 'supermemory' : node.kind,
+    title: node.key,
+    summary: `${useCountsLine(node)} · ${profiles} ${profiles === 1 ? 'profile' : 'profiles'}`,
+    total: node.total, items: all.slice(0, limit), more: Math.max(node.total - Math.min(all.length, limit), 0),
+  }
 }
 
 /** "12s ago", "3 min ago", "2 h ago", "4 d ago". */

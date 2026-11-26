@@ -81,9 +81,11 @@ export interface Agent {
   sessionId?: string
   /** Fleet map only: this node stands for a resource (a Kanban board, a Supermemory namespace or a Bash command head),
    *  not an agent. `name` is its label and `task` its second line. */
-  resourceKind?: 'kanban' | 'supermemory' | 'bash'
+  resourceKind?: 'kanban' | 'supermemory' | 'bash' | 'subsystem'
   /** Fleet map, resource blocks: the block's life. The draw loop fades the node by it on the wall clock. */
   block?: BlockLifeView
+  /** Fleet map, resource blocks: how many agents (profiles) touched the block in its window, and their names (names only). */
+  badge?: { count: number; names: string[] }
 }
 
 export interface MessageBubble {

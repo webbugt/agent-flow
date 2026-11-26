@@ -6,7 +6,8 @@ import {
 import { alphaHex, formatTokens } from '@/lib/utils'
 import { truncateText, drawHexagon, CLAUDE_SPARK_D, OPENAI_LOGO_D, OPENAI_LOGO_VIEWBOX } from './draw-misc'
 import { getAgentGlowSprite } from './render-cache'
-import { BASH_COLOR, KANBAN_COLOR, SUPERMEMORY_COLOR } from '@/lib/fleet/fleet-colors'
+import { BASH_COLOR, KANBAN_COLOR, SUBSYSTEM_COLOR, SUPERMEMORY_COLOR } from '@/lib/fleet/fleet-colors'
+import { overviewBoost } from './draw-fleet'
 import { blockViewAlpha } from '@/lib/fleet/block-alpha'
 
 let _claudeSparkPath: Path2D | null = null
@@ -350,11 +351,35 @@ function drawPinMark(ctx: CanvasRenderingContext2D, x: number, y: number, color:
 }
 
 /**
+ * Fleet map: the number of agents that touched a resource block in its window, a small disc at the node's upper left
+ * (the pin mark is at the upper right). Sized so it stays readable when the camera has zoomed out. The names are shown on hover.
+ */
+function drawAgentCountBadge(ctx: CanvasRenderingContext2D, x: number, y: number, count: number, color: string) {
+  const k = overviewBoost(ctx)
+  const text = count > 99 ? '99+' : String(count)
+  const rad = (text.length > 2 ? 8.5 : text.length > 1 ? 7.5 : 6.5) * k
+  ctx.save()
+  ctx.beginPath()
+  ctx.arc(x, y, rad, 0, Math.PI * 2)
+  ctx.fillStyle = COLORS.nodeInterior
+  ctx.fill()
+  ctx.strokeStyle = color
+  ctx.lineWidth = 1.5 * k
+  ctx.stroke()
+  ctx.fillStyle = color
+  ctx.font = `600 ${9 * k}px monospace`
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  ctx.fillText(text, x, y + 0.5 * k)
+  ctx.restore()
+}
+
+/**
  * Fleet map: a resource node (Kanban board = rounded square, Supermemory namespace = diamond, Bash command head = terminal),
  * in the same holographic style as the agent hexagons: glow sprite, dark interior, ring, label.
  */
 function drawResourceNode(ctx: CanvasRenderingContext2D, agent: Agent, isHovered: boolean, isSelected: boolean, time: number, drawLabels: boolean) {
-  const color = agent.resourceKind === 'kanban' ? KANBAN_COLOR : agent.resourceKind === 'bash' ? BASH_COLOR : SUPERMEMORY_COLOR
+  const color = agent.resourceKind === 'kanban' ? KANBAN_COLOR : agent.resourceKind === 'bash' ? BASH_COLOR : agent.resourceKind === 'subsystem' ? SUBSYSTEM_COLOR : SUPERMEMORY_COLOR
   const r = NODE.radiusSub
   if (agent.block?.pinned) drawPinMark(ctx, agent.x + r * 0.95, agent.y - r * 0.95, color)
   const active = agent.state !== 'idle' && agent.state !== 'complete'
@@ -369,6 +394,17 @@ function drawResourceNode(ctx: CanvasRenderingContext2D, agent: Agent, isHovered
   } else if (agent.resourceKind === 'bash') {
     // A terminal window: wider than tall, with a prompt chevron.
     ctx.roundRect(agent.x - r * 1.05, agent.y - r * 0.7, r * 2.1, r * 1.4, 4)
+  } else if (agent.resourceKind === 'subsystem') {
+    // A Hermes subsystem (cron, gateway): a gear-like octagon.
+    const d = r * 1.05
+    for (let i = 0; i < 8; i++) {
+      const a = Math.PI / 8 + (i * Math.PI) / 4
+      const px = agent.x + Math.cos(a) * d
+      const py = agent.y + Math.sin(a) * d
+      if (i === 0) ctx.moveTo(px, py)
+      else ctx.lineTo(px, py)
+    }
+    ctx.closePath()
   } else {
     const d = r * 1.1
     ctx.moveTo(agent.x, agent.y - d); ctx.lineTo(agent.x + d, agent.y); ctx.lineTo(agent.x, agent.y + d); ctx.lineTo(agent.x - d, agent.y); ctx.closePath()
@@ -388,6 +424,19 @@ function drawResourceNode(ctx: CanvasRenderingContext2D, agent: Agent, isHovered
     ctx.lineWidth = 1.6
     ctx.stroke()
   }
+  if (agent.resourceKind === 'subsystem') {
+    // Hub and spokes inside the octagon.
+    ctx.beginPath()
+    ctx.arc(agent.x, agent.y, r * 0.3, 0, Math.PI * 2)
+    for (let i = 0; i < 4; i++) {
+      const a = (i * Math.PI) / 2
+      ctx.moveTo(agent.x + Math.cos(a) * r * 0.3, agent.y + Math.sin(a) * r * 0.3)
+      ctx.lineTo(agent.x + Math.cos(a) * r * 0.62, agent.y + Math.sin(a) * r * 0.62)
+    }
+    ctx.strokeStyle = active ? color : color + '80'
+    ctx.lineWidth = 1.4
+    ctx.stroke()
+  }
   if (active) {
     // Soft pulse on a resource that is in use
     ctx.beginPath()
@@ -396,6 +445,8 @@ function drawResourceNode(ctx: CanvasRenderingContext2D, agent: Agent, isHovered
     ctx.lineWidth = 1
     ctx.stroke()
   }
+
+  if (agent.badge && agent.badge.count > 0) drawAgentCountBadge(ctx, agent.x - r * 0.95, agent.y - r * 0.95, agent.badge.count, color)
 
   if (!drawLabels) return
   drawAgentLabel(ctx, agent, r, isHovered)
