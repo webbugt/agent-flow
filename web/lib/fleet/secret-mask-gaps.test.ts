@@ -1,0 +1,150 @@
+/**
+ * Regression tests for the C4 masker gaps (MASK-A). Every secret below is a fake fixture (FAKE_123 and friends).
+ * The older shapes (Authorization headers, URL credentials, api keys) stay covered by secret-mask.test.ts.
+ */
+import { test } from 'node:test'
+import { strict as assert } from 'node:assert'
+import { MASK, looksSecret, maskSecrets } from './secret-mask'
+
+function assertMasked(input: string, secrets: string[]): string {
+  const out = maskSecrets(input)
+  for (const s of secrets) assert.ok(!out.includes(s), `secret fixture "${s}" still in: ${out}`)
+  assert.ok(out.includes(MASK), `nothing masked in: ${out}`)
+  assert.equal(maskSecrets(out), out, 'masking must be idempotent')
+  return out
+}
+
+function assertUnchanged(inputs: string[]): void {
+  for (const t of inputs) assert.equal(maskSecrets(t), t, t)
+}
+
+test('gap 1: uppercase env assignments named *PASS*, *PASSWORD*, *SECRET*, *TOKEN*, *KEY* are masked', () => {
+  let out = assertMasked('DB_PASS=FAKE_123 ./run.sh', ['FAKE_123'])
+  assert.match(out, /^DB_PASS=\[MASKED\] \.\/run\.sh$/, 'name and command stay readable')
+  assertMasked('docker run -e MYSQL_ROOT_PASSWORD=FAKE_123 mysql:8', ['FAKE_123'])
+  assertMasked('export APP_SECRET=FAKE_123 && node x.js', ['FAKE_123'])
+  assertMasked('SERVICE_TOKEN=FAKE_123 curl https://x.test', ['FAKE_123'])
+  assertMasked('STRIPE_API_KEY=FAKE_123 node pay.js', ['FAKE_123'])
+  assertMasked('SSH_KEY=FAKE_123 run', ['FAKE_123'])
+  assertMasked('PASS=FAKE_123 run', ['FAKE_123'])
+  assertMasked('REDIS_PASS="FAKE 123" run', ['FAKE 123'])
+  assertMasked("KEY='FAKE_123' run", ['FAKE_123'])
+  out = assertMasked('DB_PASS=FAKE_123 DB_USER=bob DB_HOST=db ./run', ['FAKE_123'])
+  assert.match(out, /DB_USER=bob DB_HOST=db/, 'other assignments stay')
+  assertMasked('docker run --env=DB_PASS=FAKE_123 img', ['FAKE_123'])
+})
+
+test('gap 1: env names that only contain the letters, and ordinary assignments, are left alone', () => {
+  assertUnchanged([
+    'MAX_KEYS=5 ./run',
+    'KEYBOARD=us ./run',
+    'PASSENGER=bob ./run',
+    'PATH=/usr/bin:/bin ./run',
+    'NODE_ENV=production pnpm build',
+    'HOME=/home/idv ls',
+  ])
+})
+
+test('gap 2: docker login -p VALUE, --password VALUE and --password=VALUE', () => {
+  let out = assertMasked('docker login -u bob -p FAKE_123 registry.example.com', ['FAKE_123'])
+  assert.match(out, /docker login -u bob -p \[MASKED\] registry\.example\.com/, 'user and registry stay')
+  assertMasked('docker login registry.example.com -u bob -p FAKE_123', ['FAKE_123'])
+  assertMasked('docker login -p "FAKE 123" -u bob', ['FAKE 123'])
+  assertMasked('docker login -pFAKE_123 -u bob', ['FAKE_123'])
+  assertMasked('docker login --username bob --password FAKE_123 registry.example.com', ['FAKE_123'])
+  assertMasked('docker login --username bob --password=FAKE_123 registry.example.com', ['FAKE_123'])
+  assertMasked('sudo docker --config /tmp/c login -u bob -p FAKE_123', ['FAKE_123'])
+  assertMasked('podman login -u bob -p FAKE_123 quay.example.com', ['FAKE_123'])
+  out = assertMasked('docker login -u bob -p FAKE_123 && docker run -p 8080:80 img', ['FAKE_123'])
+  assert.match(out, /docker run -p 8080:80 img/, 'a later docker run -p (a port) is not touched')
+  assertUnchanged([
+    'docker run -p 8080:80 img',
+    'docker login -u bob registry.example.com',
+    'echo FAKE_123 | docker login -u bob --password-stdin registry.example.com',
+  ])
+})
+
+test('gap 3: sshpass -p VALUE', () => {
+  let out = assertMasked('sshpass -p FAKE_123 ssh bob@host.example.com uptime', ['FAKE_123'])
+  assert.match(out, /sshpass -p \[MASKED\] ssh bob@host\.example\.com uptime/, 'the ssh part stays')
+  assertMasked("sshpass -p 'FAKE 123' scp f bob@host:/tmp", ['FAKE 123'])
+  assertMasked('sshpass -pFAKE_123 ssh bob@host', ['FAKE_123'])
+  assertMasked('sshpass -v -p FAKE_123 ssh bob@host', ['FAKE_123'])
+  out = assertMasked('sshpass -p FAKE_123 ssh -p 2222 bob@host', ['FAKE_123'])
+  assert.match(out, /ssh -p 2222 bob@host/, 'the ssh port is not a secret')
+  assertUnchanged(['sshpass -e ssh -p 2222 bob@host', 'sshpass -f /root/pw ssh -p 2222 bob@host', 'ssh -p 2222 bob@host'])
+})
+
+test('gap 4: redis-cli -a VALUE and --pass VALUE', () => {
+  let out = assertMasked('redis-cli -h cache.example.com -a FAKE_123 ping', ['FAKE_123'])
+  assert.match(out, /redis-cli -h cache\.example\.com -a \[MASKED\] ping/, 'host and command stay')
+  assertMasked('redis-cli -a FAKE_123 --no-auth-warning ping', ['FAKE_123'])
+  assertMasked('redis-cli -a "FAKE 123" ping', ['FAKE 123'])
+  assertMasked('redis-cli --pass FAKE_123 ping', ['FAKE_123'])
+  assertMasked('redis-cli --pass=FAKE_123 ping', ['FAKE_123'])
+  assertMasked('redis-cli --user bob --pass FAKE_123 ping', ['FAKE_123'])
+  assertMasked('redis-cli -u redis://:FAKE_123@cache.example.com:6379 ping', ['FAKE_123'])
+  assertUnchanged(['redis-cli -h cache.example.com -p 6379 ping', 'redis-cli --scan --pattern "user:*"', 'tar -a x.tgz'])
+})
+
+test('gap 5: a token cut off at the truncation point is masked by its prefix alone', () => {
+  const cut = [
+    ['curl -H "X-Token: ghp_FAKE12', 'ghp_FAKE12'],
+    ['export T=gho_FA', 'gho_FA'],
+    ['git clone https://x.test --token github_pat_FAKE12', 'github_pat_FAKE12'],
+    ['OPENAI=sk-FAKE1', 'sk-FAKE1'],
+    ['echo sk-', 'sk-'],
+    ['echo ghp_', 'ghp_'],
+    ['slack xoxb-1234', 'xoxb-1234'],
+    ['slack xoxp', 'xoxp'],
+    ['aws configure set aws_access_key_id AKIAFAKE', 'AKIAFAKE'],
+    ['echo sk-FAKE1…', 'sk-FAKE1'],
+    ['echo ghp_FAKE12...', 'ghp_FAKE12'],
+    ['echo ghp_FAKE12   ', 'ghp_FAKE12'],
+  ] as const
+  for (const [input, secret] of cut) {
+    const out = assertMasked(input, [secret])
+    assert.ok(out.length < input.length + 20, 'nothing else is changed')
+  }
+  const out = maskSecrets('echo hello && curl -H "X: ghp_FAKE12')
+  assert.match(out, /^echo hello && curl -H "X: \[MASKED\]$/, 'text before the cut stays')
+})
+
+test('gap 5: prefix-like words that are not at the cut are not masked', () => {
+  assertUnchanged([
+    'git commit -m "task-list and desk-top"',
+    'echo risk-free xoxo',
+    'echo mask-me then more',
+    'pnpm add scikit-learn',
+    'grep -r "sk-" src/ --include=*.ts',
+  ])
+})
+
+test('looksSecret sees every new form (so a command head containing one is rejected)', () => {
+  for (const t of [
+    'DB_PASS=FAKE_123 run',
+    'docker login -u bob -p FAKE_123',
+    'sshpass -p FAKE_123 ssh host',
+    'redis-cli -a FAKE_123 ping',
+    'echo ghp_FAKE12',
+  ]) assert.equal(looksSecret(t), true, t)
+})
+
+test('new rules stay linear on hostile input', () => {
+  const inputs = [
+    `${'docker '.repeat(40_000)}`,
+    `docker login ${'-p '.repeat(40_000)}`,
+    `${'sshpass '.repeat(40_000)}`,
+    `${'redis-cli '.repeat(40_000)}`,
+    `docker ${'a'.repeat(200_000)}`,
+    `${'A_'.repeat(100_000)}KEY`,
+    `${'KEY_'.repeat(50_000)}=`,
+    `${'ghp_'.repeat(50_000)} `,
+    `${'sk-'.repeat(50_000)}`,
+    `ghp_${' '.repeat(200_000)}x`,
+    `${'xox '.repeat(50_000)}`,
+  ]
+  const t0 = Date.now()
+  for (const input of inputs) maskSecrets(input)
+  assert.ok(Date.now() - t0 < 4000, `took ${Date.now() - t0} ms`)
+})

@@ -26,6 +26,21 @@ const NAME_KV =
 /** A value: a double-quoted string, a single-quoted string, or a run without spaces and shell separators. */
 const VALUE = `"[^"]*"|'[^']*'|[^\\s"';|&)]+`
 
+/** The `_`-separated name parts that mark an uppercase environment variable as a secret. */
+const ENV_SECRET_PART = '(?:PASSWORD|PASSWD|PASS|SECRET|TOKEN|KEY)'
+
+/**
+ * Known token prefixes with whatever tail is left of them (see the truncation rule in RULES). The tail classes are the
+ * ones of the full-token rules, without the minimum length.
+ */
+const TRUNCATED_TOKEN = [
+  '(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]*',
+  'github_pat_[A-Za-z0-9_]*',
+  'sk-[A-Za-z0-9_-]*',
+  'xox(?:[abprs](?:-[A-Za-z0-9-]*)?)?',
+  'AKIA[0-9A-Z]*',
+].join('|')
+
 type Replacer = string | ((...m: string[]) => string)
 
 const RULES: Array<[RegExp, Replacer]> = [
@@ -42,6 +57,10 @@ const RULES: Array<[RegExp, Replacer]> = [
   [/\bglpat-[A-Za-z0-9_-]{20,}/g, MASK],
   [/\bhf_[A-Za-z0-9]{30,}/g, MASK],
   [/\bnpm_[A-Za-z0-9]{30,}/g, MASK],
+  // A token cut off by truncation (hook args, the command cap): the prefix alone is enough, whatever is left of the
+  // tail, even nothing. Only at the end of the text or right before an ellipsis, so ordinary words that start like a
+  // prefix (`risk-free`, `task-list`) and a prefix in the middle of a command are not touched.
+  [new RegExp(`\\b(?:${TRUNCATED_TOKEN})(?=\\s*$|\u2026|\\.{3})`, 'g'), MASK],
   // Telegram bot token: <8-10 digit bot id>:<35 chars>.
   [/(?<![0-9])[0-9]{8,10}:[A-Za-z0-9_-]{35}(?![A-Za-z0-9_-])/g, MASK],
   // Slack and Discord webhook URLs carry the secret in the path.
@@ -57,7 +76,8 @@ const RULES: Array<[RegExp, Replacer]> = [
   // A bare `Bearer <token>` / `Basic <token>` elsewhere (a `-H` value without the header name, a log line).
   [/\b(Bearer|Basic)\s+(?!\[MASKED)[A-Za-z0-9._~+/=-]{12,}/g, (_m, scheme) => `${scheme} ${MASK}`],
   // Credentials inside a URL: scheme://user:password@host
-  [/(\b[a-z][a-z0-9+.-]*:\/\/[^\s:/@]+:)[^\s@/]+(@)/gi, (_m, head, at) => `${head}${MASK}${at}`],
+  // The user may be empty (`redis://:password@host`).
+  [/(\b[a-z][a-z0-9+.-]*:\/\/[^\s:/@]*:)(?!\[MASKED)[^\s@/]+(@)/gi, (_m, head, at) => `${head}${MASK}${at}`],
   // Flags that take a secret: `--password hunter2`, `--token=abc`, `-token abc`, `--api-key "a b"`. The name must end
   // at the flag's end, so `--token-file path` is not touched by this rule.
   [
@@ -68,6 +88,16 @@ const RULES: Array<[RegExp, Replacer]> = [
   // Only the keyword and a short suffix are matched, never an unbounded run of name characters.
   [
     new RegExp(`(${NAME_KV}[A-Za-z0-9_-]{0,20})(["']?\\s*[:=]\\s*)(?!\\[MASKED|["']?\\[MASKED)(${VALUE}|[^\\s,}]+)`, 'gi'),
+    (_m, name, sep) => `${name}${sep}${MASK}`,
+  ],
+  // Uppercase environment names that say they hold a secret: DB_PASS=..., MYSQL_ROOT_PASSWORD=..., SSH_KEY=...
+  // The keyword must be a whole `_`-separated part of the name (MAX_KEYS, KEYBOARD, PASSENGER stay) and the name
+  // is bounded, so this stays linear.
+  [
+    new RegExp(
+      `(?<![A-Za-z0-9_])((?:[A-Z0-9]{1,20}_){0,5}${ENV_SECRET_PART}(?:_[A-Z0-9]{1,20}){0,3})(=)(?!\\[MASKED|["']\\[MASKED)(${VALUE})`,
+      'g',
+    ),
     (_m, name, sep) => `${name}${sep}${MASK}`,
   ],
 ]
@@ -85,7 +115,34 @@ const TOOL_RULES: Array<[test: RegExp, RegExp, Replacer]> = [
     /(\s(?:-u|--user|--proxy-user|--http-user|--http-password))(\s+|=)(?!\[MASKED)("[^"]*"|'[^']*'|[^\s"']+)/g,
     (_m, flag, sep, value) => (/:/.test(value) || /password/i.test(flag) ? `${flag}${sep}${MASK}` : `${flag}${sep}${value}`),
   ],
+  // docker / podman / nerdctl / buildah / skopeo login: `-p VALUE`, `-pVALUE`, `-p=VALUE` (--password is a flag rule).
+  // Between `login` and `-p` only plain tokens, never a shell separator, so a later `docker run -p 8080:80` is safe.
+  [
+    /\b(?:docker|podman|nerdctl|buildah|skopeo)\b/,
+    shortFlagRule('\\b(?:docker|podman|nerdctl|buildah|skopeo)\\b(?:\\s+[^\\s;|&]+){0,6}?\\s+login\\b(?:\\s+[^\\s;|&]+){0,10}?', '-p'),
+    maskAfterFlag,
+  ],
+  // sshpass -p VALUE. Only sshpass's own options may sit before -p, so `sshpass -e ssh -p 2222 host` keeps its port.
+  [/\bsshpass\b/, shortFlagRule('\\bsshpass\\b(?:\\s+(?:-[evVh]+|-[fdP]\\s*[^\\s;|&]+))*?', '-p'), maskAfterFlag],
+  // redis-cli / valkey-cli -a VALUE (--pass is a flag rule).
+  [
+    /\b(?:redis-cli|valkey-cli)\b/,
+    shortFlagRule('\\b(?:redis-cli|valkey-cli)\\b(?:\\s+[^\\s;|&]+){0,16}?', '-a'),
+    maskAfterFlag,
+  ],
 ]
+
+/**
+ * `<tool prefix> <flag> VALUE`, `<flag>=VALUE` or `<flag>VALUE` (the form getopt/pflag accept). Group 1 is everything
+ * up to and with the flag; the value is replaced. A value that starts with `-` is not taken (`-p -x` is another flag).
+ */
+function shortFlagRule(prefix: string, flag: string): RegExp {
+  return new RegExp(`(${prefix}\\s${flag})(?:(\\s+|=)(?!\\[MASKED)(${VALUE})|(?=[^\\s=-])(?!\\[MASKED)[^\\s;|&]+)`, 'g')
+}
+
+function maskAfterFlag(_m: string, head: string, sep?: string): string {
+  return `${head}${sep ?? ''}${MASK}`
+}
 
 /** Mask secrets in `text`. Idempotent: masking masked text changes nothing. */
 export function maskSecrets(text: string): string {
