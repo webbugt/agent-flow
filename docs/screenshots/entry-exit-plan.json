@@ -1,0 +1,56 @@
+{
+  "_note": "Fleet F3: 3 frames of an exit and 3 of an entry. Run: pnpm shot --task-id t_d3006973 --scenario all --plan docs/screenshots/entry-exit-plan.json --viewports desktop. The animation clock is pinned with window.__AF_FLEET_CLOCK__ (?shot=1 only), so the frame at +N ms is the same on every run. The cloud 'unknown demo' is the last in the grid, so hiding and showing it (timeline checkbox) does not move the other clouds. Every shot first re-shows it: the selection is kept in localStorage between shots.",
+  "shots": [
+    { "name": "exit-1-start", "viewports": ["desktop"], "steps": [
+      { "click": "[data-testid=\"fleet-toggle\"]" }, { "wait": 1500 },
+      { "eval": "(() => { const e = document.querySelector('[aria-label=\"Show unknown demo\"]'); if (e) e.click() })()" }, { "wait": 600 },
+      { "eval": "window.__AF_FLEET_CLOCK__ = 2000000000000" },
+      { "click": "[aria-label=\"Hide unknown demo\"]" }, { "wait": 250 },
+      { "eval": "window.__AF_FLEET_CLOCK__ = 2000000000000 + 60" }, { "wait": 200 }
+    ] },
+    { "name": "exit-2-middle", "viewports": ["desktop"], "steps": [
+      { "click": "[data-testid=\"fleet-toggle\"]" }, { "wait": 1500 },
+      { "eval": "(() => { const e = document.querySelector('[aria-label=\"Show unknown demo\"]'); if (e) e.click() })()" }, { "wait": 600 },
+      { "eval": "window.__AF_FLEET_CLOCK__ = 2000000000000" },
+      { "click": "[aria-label=\"Hide unknown demo\"]" }, { "wait": 250 },
+      { "eval": "window.__AF_FLEET_CLOCK__ = 2000000000000 + 300" }, { "wait": 200 }
+    ] },
+    { "name": "exit-3-end", "viewports": ["desktop"], "steps": [
+      { "click": "[data-testid=\"fleet-toggle\"]" }, { "wait": 1500 },
+      { "eval": "(() => { const e = document.querySelector('[aria-label=\"Show unknown demo\"]'); if (e) e.click() })()" }, { "wait": 600 },
+      { "eval": "window.__AF_FLEET_CLOCK__ = 2000000000000" },
+      { "click": "[aria-label=\"Hide unknown demo\"]" }, { "wait": 250 },
+      { "eval": "window.__AF_FLEET_CLOCK__ = 2000000000000 + 520" }, { "wait": 200 }
+    ] },
+    { "name": "entry-1-start", "viewports": ["desktop"], "steps": [
+      { "click": "[data-testid=\"fleet-toggle\"]" }, { "wait": 1500 },
+      { "eval": "(() => { const e = document.querySelector('[aria-label=\"Show unknown demo\"]'); if (e) e.click() })()" }, { "wait": 600 },
+      { "eval": "window.__AF_FLEET_CLOCK__ = 2000000000000" },
+      { "click": "[aria-label=\"Hide unknown demo\"]" }, { "wait": 150 },
+      { "eval": "window.__AF_FLEET_CLOCK__ = 2000000005000" }, { "wait": 1000 },
+      { "eval": "window.__AF_FLEET_CLOCK__ = 2000000010000" },
+      { "click": "[aria-label=\"Show unknown demo\"]" }, { "wait": 250 },
+      { "eval": "window.__AF_FLEET_CLOCK__ = 2000000010000 + 80" }, { "wait": 200 }
+    ] },
+    { "name": "entry-2-middle", "viewports": ["desktop"], "steps": [
+      { "click": "[data-testid=\"fleet-toggle\"]" }, { "wait": 1500 },
+      { "eval": "(() => { const e = document.querySelector('[aria-label=\"Show unknown demo\"]'); if (e) e.click() })()" }, { "wait": 600 },
+      { "eval": "window.__AF_FLEET_CLOCK__ = 2000000000000" },
+      { "click": "[aria-label=\"Hide unknown demo\"]" }, { "wait": 150 },
+      { "eval": "window.__AF_FLEET_CLOCK__ = 2000000005000" }, { "wait": 1000 },
+      { "eval": "window.__AF_FLEET_CLOCK__ = 2000000010000" },
+      { "click": "[aria-label=\"Show unknown demo\"]" }, { "wait": 250 },
+      { "eval": "window.__AF_FLEET_CLOCK__ = 2000000010000 + 250" }, { "wait": 200 }
+    ] },
+    { "name": "entry-3-end", "viewports": ["desktop"], "steps": [
+      { "click": "[data-testid=\"fleet-toggle\"]" }, { "wait": 1500 },
+      { "eval": "(() => { const e = document.querySelector('[aria-label=\"Show unknown demo\"]'); if (e) e.click() })()" }, { "wait": 600 },
+      { "eval": "window.__AF_FLEET_CLOCK__ = 2000000000000" },
+      { "click": "[aria-label=\"Hide unknown demo\"]" }, { "wait": 150 },
+      { "eval": "window.__AF_FLEET_CLOCK__ = 2000000005000" }, { "wait": 1000 },
+      { "eval": "window.__AF_FLEET_CLOCK__ = 2000000010000" },
+      { "click": "[aria-label=\"Show unknown demo\"]" }, { "wait": 250 },
+      { "eval": "window.__AF_FLEET_CLOCK__ = 2000000010000 + 700" }, { "wait": 200 }
+    ] }
+  ]
+}
