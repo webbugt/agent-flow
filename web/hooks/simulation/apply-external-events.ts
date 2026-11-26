@@ -1,6 +1,29 @@
 import type { SimulationEvent } from '@/lib/agent-types'
 import type { SimulationState } from './types'
 import { snapVisualState } from './snap-visual-state'
+import { pruneRestingTools } from './animate'
+
+/** Message bubbles a snapshot keeps per agent (the newest). */
+export const HISTORY_BUBBLES_PER_AGENT = 3
+
+/**
+ * A snapshot is the settled picture of the recent past, not a replay of it: keep the newest
+ * few tool cards and message bubbles of each agent. Without this every card that finished
+ * within a few seconds of the last history event stays on the canvas, and a backlog whose
+ * events share (nearly) one instant, or a busy run, shows up as a column of dozens of cards.
+ * Only what is drawn is capped: the event log, conversations and timeline keep everything.
+ */
+function compactSnapshot(state: SimulationState): SimulationState {
+  const pruned = pruneRestingTools(state.toolCalls, state.edges)
+  let agents = state.agents
+  for (const [id, agent] of state.agents) {
+    if (agent.messageBubbles.length <= HISTORY_BUBBLES_PER_AGENT) continue
+    if (agents === state.agents) agents = new Map(state.agents)
+    agents.set(id, { ...agent, messageBubbles: agent.messageBubbles.slice(-HISTORY_BUBBLES_PER_AGENT) })
+  }
+  if (pruned.toolCalls === state.toolCalls && agents === state.agents) return state
+  return { ...state, agents, toolCalls: pruned.toolCalls, edges: pruned.edges }
+}
 
 type ProcessFn = (event: SimulationEvent, state: SimulationState) => SimulationState
 
@@ -62,7 +85,7 @@ export function applyExternalEvents(
     } finally {
       opts.setSnapshotMode?.(false)
     }
-    state = snapVisualState(state, t)
+    state = compactSnapshot(snapVisualState(state, t))
     state = { ...state, currentTime: t, maxTimeReached: Math.max(state.maxTimeReached, t) }
     time = Math.max(time, t)
     opts.onHistoryApplied?.(state)
