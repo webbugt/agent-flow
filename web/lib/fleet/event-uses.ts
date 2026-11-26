@@ -215,10 +215,40 @@ export function redactKanbanCommand(command: string, opts: { cut?: boolean } = {
   if (text === null) return null
   const found = scanForKanban(text, 0)
   const call = found.call
-  if (call === null || found.segmentStart === null) return null
-  const shown = `hermes kanban${call.board !== null ? ` --board ${call.board}` : ''}${call.verb !== null ? ` ${call.verb}` : ''}`
-  const rest = text.slice(found.segmentStart).trim()
-  return `${text.slice(0, found.segmentStart)}${shown}${rest === shown ? '' : ' …'}`
+  const structured = call !== null ? found.segmentStart : null
+  const loose = looseKanbanStart(text)
+  // Fail closed: the structured scan only understands a call at the head of a shell segment. Anywhere else (`$(...)`,
+  // backticks, `( )`/`{ }`, `if`/`do` bodies, `timeout`/`uv run`/`xargs`, after a here-doc or a multi-line quote) the text
+  // is cut at the first `hermes ... kanban` found by plain text matching, to the end of the command.
+  const cutAt = structured !== null && loose !== null ? Math.min(structured, loose) : structured ?? loose
+  if (cutAt === null) return null
+  // The board and verb are shown only when the scan read them from the very call that is cut here: from the structured scan
+  // when it found that call, else from the tail that starts at the plain-text match (`$(hermes kanban --board x create ...)`).
+  const read = call !== null && structured !== null && structured <= (loose ?? structured)
+    ? call
+    : loose !== null ? scanForKanban(text.slice(loose), 0).call : null
+  const shown = `hermes kanban${read?.board ? ` --board ${read.board}` : ''}${read?.verb ? ` ${read.verb}` : ''}`
+  const rest = text.slice(cutAt).trim()
+  return `${text.slice(0, cutAt)}${shown}${rest === shown ? '' : ' …'}`
+}
+
+/**
+ * Offset of the first `hermes` that is followed by the word `kanban` on the same (logical) line, or null. Plain text matching:
+ * it does not care about quotes, substitutions or nesting, which is what makes the redaction above fail closed. `hermes` is
+ * matched as a substring (`/usr/bin/hermes`, `hermes_cli`, `$HERMES`); `kanban` as a word, so `HERMES_KANBAN_BOARD=x` is no hit.
+ */
+function looseKanbanStart(text: string): number | null {
+  const hermes = /hermes/gi
+  const kanban = /\bkanban\b/gi
+  let m: RegExpExecArray | null
+  while ((m = hermes.exec(text)) !== null) {
+    kanban.lastIndex = m.index + m[0].length
+    const k = kanban.exec(text)
+    if (k === null) return null
+    // A newline ends the line unless it is escaped by a backslash.
+    if (!/(?<!\\)\n/.test(text.slice(m.index, k.index))) return m.index
+  }
+  return null
 }
 
 /** The text to scan: null when it cannot hold a kanban call; the cut hook text loses its last (possibly incomplete) word. */

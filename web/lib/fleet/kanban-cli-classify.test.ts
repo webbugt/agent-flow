@@ -279,6 +279,44 @@ test('a kanban call with no board, an unresolvable board or nested in bash -c is
   assert.equal(redactKanbanCommand('git pull'), null)
 })
 
+test('fail closed: a kanban call in any shell form reaches the bash inspection cut at `hermes kanban`, without task text', () => {
+  const k = 'hermes kanban --board x'
+  const secrets = [TASK_ID, TITLE, BODY, 'fake-profile']
+  // [command, exact expected inspection text or null when only the leak check applies]
+  const cases: Array<[string, string | null]> = [
+    [`ID=$(${k} create "${TITLE}" --body "${BODY}" --json)`, 'ID=$(hermes kanban --board x create …'],
+    [`cd repo && ID=$(${k} create "${TITLE}" --json)`, 'cd repo && ID=$(hermes kanban --board x create …'],
+    [`echo \`${k} show ${TASK_ID}\``, 'echo `hermes kanban --board x show …'],
+    [`(${k} create "${TITLE}")`, '(hermes kanban --board x create …'],
+    [`{ ${k} create "${TITLE}"; }`, '{ hermes kanban --board x create …'],
+    [`if true; then ${k} comment ${TASK_ID} "${BODY}"; fi`, 'if true; then hermes kanban --board x comment …'],
+    [`for i in 1 2; do ${k} comment ${TASK_ID} "${BODY}"; done`, 'for i in 1 2; do hermes kanban --board x comment …'],
+    [`timeout 30 ${k} show ${TASK_ID}`, 'timeout 30 hermes kanban --board x show …'],
+    [`uv run ${k} show ${TASK_ID}`, 'uv run hermes kanban --board x show …'],
+    [`ls | xargs -I{} ${k} comment {} "${BODY}"`, 'ls | xargs -I{} hermes kanban --board x comment …'],
+    [`cat > /tmp/fake.txt <<'EOF'\nnote\nEOF\n${k} create "${TITLE}" --body "${BODY}"`, `cat > /tmp/fake.txt <<'EOF'\nnote\nEOF\nhermes kanban --board x create …`],
+    [`git commit -m "l1\nl2" && ${k} comment ${TASK_ID} "${BODY}"`, 'git commit -m "l1\nl2" && hermes kanban --board x comment …'],
+    [`/usr/local/bin/hermes -p fake-profile kanban create "${TITLE}"`, null],
+    [`echo $(which hermes) kanban show ${TASK_ID}`, null],
+    [`echo "a\nb"; $HERMES kanban show ${TASK_ID}`, null],
+    [`hermes \\\n  kanban create "${TITLE}"`, null],
+  ]
+  for (const [cmd, exact] of cases) {
+    const out = redactKanbanCommand(cmd)
+    assert.ok(out !== null, `no redaction for: ${cmd}`)
+    for (const secret of secrets) assert.ok(!out.includes(secret), `leaked ${secret} in: ${cmd} -> ${out}`)
+    if (exact !== null) assert.equal(out, exact, cmd)
+    // Through the bash tracker, full delivery and cut hook delivery: nothing of the task text on the wire.
+    for (const cut of [false, true]) {
+      const wire = JSON.stringify(new BashUseTracker().update([session], () => [bashEvent(cmd, 5, 'ff', cut)], NOW))
+      for (const secret of secrets) assert.ok(!wire.includes(secret), `leaked ${secret} (cut hook text: ${cut}) in: ${cmd}`)
+    }
+  }
+  // Not a kanban call: the environment variable name, or a mention without `hermes`.
+  assert.equal(redactKanbanCommand('export HERMES_KANBAN_BOARD=agent-flow'), null)
+  assert.equal(redactKanbanCommand('echo kanban board'), null)
+})
+
 test('a cut hook text of a chained kanban call carries no task text either, and the full delivery replaces it', () => {
   const full = `git pull && hermes kanban --board agent-flow create "${TITLE}" --body "${BODY}" --assignee fake-profile`
   const hook = bashEvent(full, 5, 'chain', true)
