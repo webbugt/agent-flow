@@ -18,7 +18,7 @@ import * as os from 'os'
 import * as path from 'path'
 
 import {
-  ArgError, BUILTIN_PLANS, VIEWPORTS, assertAllowedPort, expandPlan, parseShotArgs, validatePlan,
+  ArgError, BUILTIN_PLANS, HOLD_MS, VIEWPORTS, assertAllowedPort, expandPlan, parseShotArgs, validatePlan,
   type ShotOptions, type ShotPlan, type Step, type Viewport,
 } from './shot-lib'
 import { appendClaudeLiveLines, appendHermesLines, loadScenario, materializeFixtures, resolveScenario, rewriteConfigFixture, type Materialized } from './shot-fixtures'
@@ -299,6 +299,12 @@ async function runStep(page: Page, step: Step, viewport: Viewport): Promise<void
     await page.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: p.x, y: p.y, button: 'left', clickCount: 1 })
     await page.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: p.x, y: p.y, button: 'left', clickCount: 1 })
     if (step.click.startsWith('text:')) await settleAfterSessionChange(page)
+  } else if ('hold' in step) {
+    const p = await resolveTarget(page, step.hold)
+    await page.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: p.x, y: p.y })
+    await page.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: p.x, y: p.y, button: 'left', clickCount: 1 })
+    await sleep(HOLD_MS)
+    await page.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: p.x, y: p.y, button: 'left', clickCount: 1 })
   } else if ('hover' in step) {
     const p = await resolveTarget(page, step.hover)
     // A few small moves: some handlers only react to a move that follows an enter

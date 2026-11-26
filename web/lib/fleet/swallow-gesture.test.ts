@@ -33,19 +33,62 @@ test('swallowGesture stops mousedown, mouseup and click of the press (selection 
 test('swallowGesture stops swallowing after the click, so the next press works', () => {
   const t = new EventTarget(); const { timer, pending } = fakeTimer()
   swallowGesture(t, timer)
-  reachesPage(t, 'mousedown'); reachesPage(t, 'mouseup'); reachesPage(t, 'click')
+  reachesPage(t, 'pointerup'); reachesPage(t, 'mousedown'); reachesPage(t, 'mouseup'); reachesPage(t, 'click')
   assert.equal(pending.size, 0)
   assert.equal(reachesPage(t, 'mousedown'), true)
   assert.equal(reachesPage(t, 'mouseup'), true)
   assert.equal(reachesPage(t, 'click'), true)
 })
 
-test('swallowGesture stops by itself when no click arrives', () => {
+test('swallowGesture has no timer while the press is held', () => {
+  const t = new EventTarget(); const { timer, pending } = fakeTimer()
+  swallowGesture(t, timer)
+  assert.equal(pending.size, 0)
+})
+
+test('swallowGesture: mouseup arriving after SWALLOW_GESTURE_MS while the press is held is still swallowed', () => {
+  const t = new EventTarget(); const { timer, fire } = fakeTimer()
+  swallowGesture(t, timer)
+  fire() // any timer armed at pointerdown would expire here (a 2 s hold)
+  assert.equal(reachesPage(t, 'mouseup'), false)
+  assert.equal(reachesPage(t, 'click'), false)
+  assert.equal(reachesPage(t, 'mousedown'), true) // the click ended the press
+})
+
+test('swallowGesture stops by itself when the press is released and no click arrives', () => {
   const t = new EventTarget(); const { timer, pending, fire } = fakeTimer()
   swallowGesture(t, timer)
+  assert.equal(reachesPage(t, 'pointerup'), true) // pointer events are not swallowed
   assert.equal([...pending.values()][0].ms, SWALLOW_GESTURE_MS)
   fire()
   assert.equal(reachesPage(t, 'mousedown'), true)
+})
+
+test('swallowGesture: pointercancel also starts the fallback timer', () => {
+  const t = new EventTarget(); const { timer, pending, fire } = fakeTimer()
+  swallowGesture(t, timer)
+  reachesPage(t, 'pointercancel')
+  assert.equal(pending.size, 1)
+  fire()
+  assert.equal(reachesPage(t, 'click'), true)
+})
+
+test('swallowGesture: touch order (pointerup, then mousedown/mouseup/click) is swallowed inside the window', () => {
+  const t = new EventTarget(); const { timer } = fakeTimer()
+  swallowGesture(t, timer)
+  reachesPage(t, 'pointerup')
+  assert.equal(reachesPage(t, 'mousedown'), false)
+  assert.equal(reachesPage(t, 'mouseup'), false)
+  assert.equal(reachesPage(t, 'click'), false)
+})
+
+test('swallowGesture: a new pointerdown (release never seen) ends the guard so the next press works', () => {
+  const t = new EventTarget(); const { timer, pending } = fakeTimer()
+  swallowGesture(t, timer)
+  assert.equal(reachesPage(t, 'pointerdown'), true)
+  assert.equal(pending.size, 0)
+  assert.equal(reachesPage(t, 'mousedown'), true)
+  assert.equal(reachesPage(t, 'click'), true)
 })
 
 test('swallowGesture does not swallow other events (keys, wheel, mousemove)', () => {

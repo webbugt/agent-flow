@@ -26,6 +26,8 @@ export const VIEWPORTS: Record<ViewportName, Viewport> = {
 export type Step =
   | { key: string }
   | { click: string }
+  /** Like click, but keeps the button down for HOLD_MS before releasing (a long press). */
+  | { hold: string }
   | { hover: string }
   | { tap: string }
   | { wait: number }
@@ -187,7 +189,10 @@ export function shotFileName(index: number, name: string, viewport: ViewportName
   return `${nn}-${slug(name)}-${viewport}${hasHover(steps) ? '-hover' : ''}.png`
 }
 
-const STEP_KEYS = ['key', 'click', 'hover', 'tap', 'wait', 'waitFor', 'eval', 'press', 'config'] as const
+/** How long a `hold` step keeps the button down. Well past the 600 ms the screensaver guard used to live. ms. */
+export const HOLD_MS = 2000
+
+const STEP_KEYS = ['key', 'click', 'hold', 'hover', 'tap', 'wait', 'waitFor', 'eval', 'press', 'config'] as const
 
 /** Validate a plan read from JSON; returns it typed or throws ArgError. */
 export function validatePlan(raw: unknown): ShotPlan {
@@ -365,6 +370,8 @@ export const BUILTIN_PLANS: Record<string, ShotPlan> = {
       { name: 'screensaver-exit-by-click', viewports: ['desktop'], steps: [{ click: '[data-testid="fleet-toggle"]' }, { wait: 1500 }, { key: 's' }, { wait: 600 }, { eval: SCREENSAVER_ASSERT_NO_UI }, { click: '700,450' }, { wait: 600 }, { eval: SCREENSAVER_ASSERT_UI_SHOWN }] },
       // The click that leaves the mode lands on the map: it must only leave (mousedown, mouseup and click never reach the page: no select, no drag).
       { name: 'screensaver-exit-click-on-node', viewports: ['desktop'], steps: [{ click: '[data-testid="fleet-toggle"]' }, { wait: 1500 }, { key: 's' }, { wait: 600 }, { eval: SCREENSAVER_ASSERT_NO_UI }, { eval: SCREENSAVER_COUNT_PRESS }, { click: '1193,445' }, { wait: 600 }, { eval: SCREENSAVER_ASSERT_UI_SHOWN }, { eval: SCREENSAVER_ASSERT_PRESS_SWALLOWED }, { eval: SCREENSAVER_ASSERT_NO_SELECTION }, { click: '720,250' }, { wait: 300 }, { eval: SCREENSAVER_ASSERT_NEXT_PRESS_PASSES }] },
+      // Same, but the button is held for HOLD_MS (2 s, past the old 600 ms guard) before it is released: the mouseup that ends the long press must be swallowed too.
+      { name: 'screensaver-exit-hold-on-node', viewports: ['desktop'], steps: [{ click: '[data-testid="fleet-toggle"]' }, { wait: 1500 }, { key: 's' }, { wait: 600 }, { eval: SCREENSAVER_ASSERT_NO_UI }, { eval: SCREENSAVER_COUNT_PRESS }, { hold: '1193,445' }, { wait: 600 }, { eval: SCREENSAVER_ASSERT_UI_SHOWN }, { eval: SCREENSAVER_ASSERT_PRESS_SWALLOWED }, { eval: SCREENSAVER_ASSERT_NO_SELECTION }, { click: '720,250' }, { wait: 300 }, { eval: SCREENSAVER_ASSERT_NEXT_PRESS_PASSES }] },
       // reload: on only because the user left it on; then leaving it clears the choice for the next reload
       { name: 'screensaver-survives-reload', viewports: ['desktop'], steps: [{ key: 's' }, { wait: 600 }, { eval: 'setTimeout(() => location.reload(), 0)' }, { wait: 4000 }, { eval: SCREENSAVER_ASSERT_NO_UI }] },
     ],

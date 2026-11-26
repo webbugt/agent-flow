@@ -95,6 +95,8 @@ test('expandPlan numbers files in order and honours --viewports', () => {
 test('validatePlan accepts a good plan and rejects bad ones', () => {
   const ok = validatePlan({ shots: [{ name: 'A b', viewports: ['phone'], steps: [{ hover: '1,2' }, { wait: 10 }] }] })
   assert.equal(ok.shots[0].name, 'a-b')
+  assert.deepEqual(validatePlan({ shots: [{ name: 'h', steps: [{ hold: '1,2' }] }] }).shots[0].steps, [{ hold: '1,2' }])
+  assert.throws(() => validatePlan({ shots: [{ name: 'h', steps: [{ hold: '' }] }] }), ArgError)
   assert.throws(() => validatePlan({}), ArgError)
   assert.throws(() => validatePlan({ shots: [] }), ArgError)
   assert.throws(() => validatePlan({ shots: [{ name: 'a' }, { name: 'A' }] }), /used twice/)
