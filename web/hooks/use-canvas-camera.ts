@@ -3,6 +3,7 @@ import { Agent, ToolCallNode, Discovery, ANIM, NODE } from '@/lib/agent-types'
 import { SHOT_MODE } from '@/lib/shot-mode'
 import { cloudGeometries, type CloudView } from '@/lib/fleet/fleet-cloud-geometry'
 import { zoomAt } from '@/lib/fleet/fleet-camera'
+import { INITIAL_CAMERA_STATE, transition, type CameraAction, type CameraEvent, type CameraInputKind, type CameraState } from '@/lib/fleet/camera-state'
 import { CAMERA } from '@/lib/canvas-constants'
 import { BUBBLE_HOLD, BUBBLE_FADE_OUT, BUBBLE_MAX_W, TOOL_CARD_W, TOOL_CARD_H, DISC_BOUNDS_HALF_W, DISC_BOUNDS_HALF_H } from '@/lib/canvas-constants'
 
@@ -55,6 +56,8 @@ export function useCanvasCamera({
 }: CameraOptions) {
   const transformRef = useRef<Transform>({ x: 0, y: 0, scale: 1 })
   const userHasNavigatedRef = useRef(false)
+  // Camera state machine (intro -> interrupted -> user control); userHasNavigatedRef mirrors its flag.
+  const cameraStateRef = useRef<CameraState>(INITIAL_CAMERA_STATE)
   const targetTransformRef = useRef<Transform | null>(null)
   const panVelocityRef = useRef({ vx: 0, vy: 0, active: false })
 
@@ -181,31 +184,52 @@ export function useCanvasCamera({
     return result
   }, [getDescendantIds, drawPropsRef, simTimeRef, fleetView])
 
-  const doZoomToFit = useCallback(() => {
-    userHasNavigatedRef.current = false
-    const target = computeFitTransform()
-    if (target) targetTransformRef.current = target
+  /** Run a camera event through the state machine and carry out the animation action it asks for. */
+  const dispatch = useCallback((event: CameraEvent): CameraAction => {
+    const { state, action } = transition(cameraStateRef.current, event)
+    cameraStateRef.current = state
+    userHasNavigatedRef.current = state.userNavigated
+    if (action === 'stop') {
+      targetTransformRef.current = null
+    } else if (action === 'snap') {
+      const fit = computeFitTransform()
+      targetTransformRef.current = null
+      if (fit) transformRef.current = fit
+    } else if (action === 'animate') {
+      const fit = computeFitTransform()
+      if (fit) targetTransformRef.current = fit
+    }
+    return action
   }, [computeFitTransform])
 
+  /** User input reached the canvas: the intro stops at once (the next frame already has no target). */
+  const interrupt = useCallback((kind: CameraInputKind) => { dispatch({ type: 'input', kind }) }, [dispatch])
+
+  /** Explicit fit (fit button, double click): during the intro it ends the animation at the destination. */
+  const doZoomToFit = useCallback(() => { dispatch({ type: 'explicit-fit' }) }, [dispatch])
+
+  // Automatic fit (first load, real layout change). The fleet map decides when (shouldRefit) and the
+  // state machine ignores it after an interrupt; the session view's trigger is an explicit button.
   useEffect(() => {
-    if (zoomToFitTrigger && zoomToFitTrigger > 0) doZoomToFit()
-  }, [zoomToFitTrigger, doZoomToFit])
+    if (!zoomToFitTrigger || zoomToFitTrigger <= 0) return
+    if (!fleetView) dispatch({ type: 'reset' })
+    dispatch({ type: 'layout-fit' })
+  }, [zoomToFitTrigger, dispatch, fleetView])
 
   // Re-engage auto-fit when selection changes (not in the fleet map: a click keeps the user's view)
   useEffect(() => {
     if (fleetView) return
-    userHasNavigatedRef.current = false
+    dispatch({ type: 'reset' })
     targetTransformRef.current = null
-  }, [selectedAgentId, fleetView])
+  }, [selectedAgentId, fleetView, dispatch])
 
   /** Zoom by `factor` around the centre of the canvas (on-screen buttons). Counts as user navigation. */
   const zoomBy = useCallback((factor: number) => {
-    userHasNavigatedRef.current = true
-    targetTransformRef.current = null
+    dispatch({ type: 'input', kind: 'zoom-button' })
     panVelocityRef.current = { vx: 0, vy: 0, active: false }
     const { width, height } = drawPropsRef.current.dimensions
     transformRef.current = zoomAt(transformRef.current, width / 2, height / 2, factor, { min: CAMERA.minZoom, max: CAMERA.maxZoom })
-  }, [drawPropsRef])
+  }, [drawPropsRef, dispatch])
 
   const screenToCanvas = useCallback((screenX: number, screenY: number) => {
     const canvas = mainCanvasRef.current
@@ -251,15 +275,18 @@ export function useCanvasCamera({
       if (Math.abs(target.x - nx) < 0.5 && Math.abs(target.y - ny) < 0.5 && Math.abs(target.scale - ns) < 0.001) {
         targetTransformRef.current = null
         transformRef.current = { x: target.x, y: target.y, scale: target.scale }
+        dispatch({ type: 'arrived' })
       } else {
         transformRef.current = { x: nx, y: ny, scale: ns }
       }
     }
-  }, [computeFitTransform])
+  }, [computeFitTransform, dispatch])
 
   return {
     transformRef,
     userHasNavigatedRef,
+    cameraStateRef,
+    interrupt,
     panVelocityRef,
     screenToCanvas,
     doZoomToFit,

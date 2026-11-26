@@ -10,6 +10,7 @@ import {
 import { findCostPillAt } from '@/lib/costs/overlay'
 import { getCostPillRects } from '@/lib/cost-overlay-store'
 import { FLEET_WHEEL_STEP, wheelZoomFactor, zoomAt } from '@/lib/fleet/fleet-camera'
+import type { CameraInputKind } from '@/lib/fleet/camera-state'
 import type { Transform } from './use-canvas-camera'
 
 /** A cost pill under the pointer: the agent and the pill's rectangle in viewport (client) coordinates. */
@@ -39,7 +40,8 @@ interface InteractionOptions {
     discoveries: Discovery[]
   } & InteractionCallbacks>
   transformRef: MutableRefObject<Transform>
-  userHasNavigatedRef: MutableRefObject<boolean>
+  /** Any user input tells the camera, which stops a running intro animation at once. */
+  interrupt: (kind: CameraInputKind) => void
   panVelocityRef: MutableRefObject<{ vx: number; vy: number; active: boolean }>
   simTimeRef: MutableRefObject<number>
   screenToCanvas: (screenX: number, screenY: number) => { x: number; y: number }
@@ -52,7 +54,7 @@ interface InteractionOptions {
 export function useCanvasInteraction({
   drawPropsRef,
   transformRef,
-  userHasNavigatedRef,
+  interrupt,
   panVelocityRef,
   simTimeRef,
   screenToCanvas,
@@ -110,6 +112,7 @@ export function useCanvasInteraction({
     const pos = screenToCanvas(e.clientX, e.clientY)
     const agentId = findAgentAt(pos.x, pos.y)
     if (e.button === 0) {
+      interrupt('press')
       panVelocityRef.current = { vx: 0, vy: 0, active: false }
       setIsDragging(true)
       if (agentId) {
@@ -119,7 +122,7 @@ export function useCanvasInteraction({
         lastPanPosRef.current = { x: e.clientX, y: e.clientY, time: performance.now() }
       }
     }
-  }, [screenToCanvas, findAgentAt, panVelocityRef])
+  }, [screenToCanvas, findAgentAt, panVelocityRef, interrupt])
 
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
     const pos = screenToCanvas(e.clientX, e.clientY)
@@ -137,7 +140,7 @@ export function useCanvasInteraction({
     const dragTarget = dragTargetRef.current
     if (dragging && dragTarget) {
       if (dragTarget.type === 'canvas') {
-        userHasNavigatedRef.current = true
+        interrupt('drag')
         const dx = e.clientX - dragTarget.startX
         const dy = e.clientY - dragTarget.startY
         const t = transformRef.current
@@ -158,7 +161,7 @@ export function useCanvasInteraction({
         }
       }
     }
-  }, [screenToCanvas, findAgentAt, costPillAt, drawPropsRef, userHasNavigatedRef, transformRef, panVelocityRef])
+  }, [screenToCanvas, findAgentAt, costPillAt, drawPropsRef, interrupt, transformRef, panVelocityRef])
 
   const handleMouseUp = useCallback((e: React.MouseEvent) => {
     if (e.button === 2) {
@@ -221,7 +224,7 @@ export function useCanvasInteraction({
   const handleWheelRef = useRef<(e: WheelEvent) => void>(() => {})
   handleWheelRef.current = (e: WheelEvent) => {
     e.preventDefault()
-    userHasNavigatedRef.current = true
+    interrupt(e.ctrlKey ? 'pinch' : 'wheel')
     if (wheelZooms) {
       // Fleet map: wheel, ctrl+wheel and trackpad pinch (ctrl+wheel) all zoom around the pointer; drag pans.
       const rect = mainCanvasRef.current?.getBoundingClientRect()
@@ -249,9 +252,16 @@ export function useCanvasInteraction({
     const canvas = mainCanvasRef.current
     if (!canvas) return
     const handler = (e: WheelEvent) => handleWheelRef.current(e)
+    // A touch (one finger = tap or pan, two = pinch) is user input too. Mouse events are only
+    // synthesized after the touch ends, so the intro has to stop on touchstart.
+    const touchHandler = (e: TouchEvent) => interrupt(e.touches.length > 1 ? 'pinch' : 'press')
     canvas.addEventListener('wheel', handler, { passive: false })
-    return () => canvas.removeEventListener('wheel', handler)
-  }, [mainCanvasRef])
+    canvas.addEventListener('touchstart', touchHandler, { passive: true })
+    return () => {
+      canvas.removeEventListener('wheel', handler)
+      canvas.removeEventListener('touchstart', touchHandler)
+    }
+  }, [mainCanvasRef, interrupt])
 
   const handleDoubleClick = useCallback(() => {
     doZoomToFit()
