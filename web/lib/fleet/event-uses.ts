@@ -27,6 +27,8 @@ import { MAX_FADE_SECONDS, MAX_LINGER_SECONDS, type ResourceKind } from './optio
 import { blockId, type BlockStore, type ResourceBlock } from './resource-block'
 import { isPersonalTag } from './memory-blocks'
 import { identityFromLabel } from './fleet-model'
+import { ASSIGN_RE, SCAN_CHARS, SHELLS, WRAPPERS, bashCommandOf, commandHead, words } from './command-head'
+import { maskSecrets } from './secret-mask'
 
 export type UseKind = Extract<ResourceKind, 'memory' | 'subsystem' | 'kanban'>
 
@@ -48,8 +50,10 @@ export const MAX_USE_NODES = 200
 const MAX_USES = 3000
 const MAX_AGE_MS = (MAX_LINGER_SECONDS + MAX_FADE_SECONDS) * 1000
 const TAG_RE = /^[a-z0-9_.:]{1,80}$/
-const BOARD_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/i
-const VERB_RE = /^[a-z_]{1,24}$/
+export const BOARD_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/i
+export const VERB_RE = /^[a-z_]{1,24}$/
+/** The board of a `hermes kanban` call without `--board`: the legacy default board (`DEFAULT_BOARD_SLUG` in kanban-source.ts, server-only, so copied here and pinned by a test). */
+export const DEFAULT_KANBAN_BOARD = 'default'
 
 /** One use of a block by one session, as the tracker keeps it. No content. */
 export interface EventUse {
@@ -172,6 +176,109 @@ export function usesOfCall(call: { name: string; input: Record<string, unknown> 
   return []
 }
 
+/**
+ * `hermes [global options] kanban [--board <slug>] <verb> ...` in a shell command, as a Kanban use: board slug and verb,
+ * nothing else (a task id, title, body or comment is never read out of the command).
+ *
+ * Rules (kept simple on purpose, this is not a shell parser; it shares the word splitter of command-head.ts):
+ *   - The command is split at `|`, `||`, `&&`, `;`, `&` and newlines. The FIRST segment that is `hermes ... kanban ...` wins;
+ *     later `hermes kanban` segments are not counted. `sudo`/`env`/`time`/... and `VAR=x` before `hermes`, and one level of
+ *     `bash -c '...'`, are looked through. Lines after a here-doc start (`<<`) are not read.
+ *   - Global options before `kanban` are skipped; a known value option (`-p taxis`, `--profile taxis`, `-m x`, ...) takes the next word.
+ *   - `--board <slug>` / `--board=<slug>` counts before or after the verb (hermes wants it before). The verb is the first word
+ *     after `kanban` that is not an option; `request-review` is recorded as `request_review` (the tool-name spelling).
+ *   - No `--board`: the default board (DEFAULT_KANBAN_BOARD). A `--board` whose value is no plain slug (`$B`, a quote, a secret) or
+ *     a verb that is not a verb: not classified at all, the command stays a bash command.
+ *   - `leading`: the kanban call is the command's own head (the first `hermes` segment, and `commandHead` says `hermes`). Only a
+ *     leading call replaces the bash block; `git pull && hermes kanban list` keeps its `git` block and adds the Kanban use.
+ * Non-kanban `hermes` commands (`hermes status`, `hermes chat`) return null.
+ */
+export function kanbanCliUse(command: string): { key: string; action: string; leading: boolean } | null {
+  if (typeof command !== 'string' || !/kanban/.test(command)) return null
+  const found = scanForKanban(command, 0)
+  if (found.use === null) return null
+  return { ...found.use, leading: found.firstHermes === 'kanban' && commandHead(command) === 'hermes' }
+}
+
+interface KanbanScan {
+  /** The first `hermes` segment seen: a kanban call, another command, or none. */
+  firstHermes: 'kanban' | 'other' | null
+  use: { key: string; action: string } | null
+}
+
+/** Hermes global options that take a value as the next word. */
+const HERMES_VALUE_OPTIONS: ReadonlySet<string> = new Set([
+  '-p', '--profile', '-m', '--model', '--provider', '--reasoning', '-t', '--toolsets', '--resume', '--in', '--skills',
+  '-z', '--usage-file', '--cpu-profile',
+])
+
+function scanForKanban(text: string, depth: number): KanbanScan {
+  const out: KanbanScan = { firstHermes: null, use: null }
+  for (const raw of text.slice(0, SCAN_CHARS).split('\n')) {
+    const line = raw.trim()
+    if (line === '' || line.startsWith('#')) continue
+    let segment: string[] = []
+    const flush = () => {
+      if (segment.length > 0) mergeScan(out, scanSegment(segment, depth))
+      segment = []
+    }
+    for (const w of words(line)) {
+      if (w.op) flush()
+      else segment.push(w.text)
+    }
+    flush()
+    if (line.includes('<<')) break
+  }
+  return out
+}
+
+function mergeScan(into: KanbanScan, from: KanbanScan): void {
+  if (into.firstHermes === null) into.firstHermes = from.firstHermes
+  if (into.use === null) into.use = from.use
+}
+
+function scanSegment(tokens: readonly string[], depth: number): KanbanScan {
+  const none: KanbanScan = { firstHermes: null, use: null }
+  let i = 0
+  while (i < tokens.length) {
+    const t = tokens[i]
+    if (ASSIGN_RE.test(t)) { i++; continue }
+    const wrapper = WRAPPERS.get(t)
+    if (wrapper) {
+      i++
+      while (i < tokens.length && tokens[i].startsWith('-')) i += wrapper.includes(tokens[i]) ? 2 : 1
+      continue
+    }
+    break
+  }
+  if (i >= tokens.length) return none
+  const program = tokens[i].replace(/^.*\//, '')
+  if (SHELLS.has(program)) {
+    const flag = tokens[i + 1]
+    const inner = tokens[i + 2]
+    if (depth < 1 && flag !== undefined && inner !== undefined && /^-[a-z]*c[a-z]*$/.test(flag)) return scanForKanban(inner, depth + 1)
+    return none
+  }
+  if (program !== 'hermes') return none
+  let j = i + 1
+  while (j < tokens.length && tokens[j].startsWith('-')) j += !tokens[j].includes('=') && HERMES_VALUE_OPTIONS.has(tokens[j]) ? 2 : 1
+  if (tokens[j] !== 'kanban') return { firstHermes: 'other', use: null }
+  let board: string | null = null
+  let boardGiven = false
+  let verb: string | null = null
+  for (let k = j + 1; k < tokens.length; k++) {
+    const t = tokens[k]
+    if (t === '--board') { boardGiven = true; board = tokens[k + 1] ?? null; k++ }
+    else if (t.startsWith('--board=')) { boardGiven = true; board = t.slice('--board='.length) }
+    else if (t.startsWith('-')) continue
+    else if (verb === null) verb = t.replace(/-/g, '_')
+  }
+  const slug = boardGiven ? board : DEFAULT_KANBAN_BOARD
+  if (slug === null || !BOARD_RE.test(slug) || maskSecrets(slug) !== slug) return { firstHermes: 'kanban', use: null }
+  if (verb === null || !VERB_RE.test(verb)) return { firstHermes: 'kanban', use: null }
+  return { firstHermes: 'kanban', use: { key: slug, action: verb } }
+}
+
 /** The subsystem use of a message event (`platform` is the session's source), or null. Reads `role` and `platform` only. */
 export function usesOfMessage(payload: Record<string, unknown>): { kind: 'subsystem'; key: SubsystemKey; action: string } | null {
   if (payload.role !== 'user') return null
@@ -250,8 +357,15 @@ export class EventUseTracker {
       }
       if (e.type !== 'tool_call_start' && e.type !== 'message') continue
       const found: Array<{ kind: UseKind; key: string; action: string }> = []
-      if (e.type === 'tool_call_start') found.push(...innerCalls(p).flatMap(usesOfCall))
-      else {
+      if (e.type === 'tool_call_start') {
+        found.push(...innerCalls(p).flatMap(usesOfCall))
+        // A shell call `hermes kanban --board <slug> <verb> ...` is a Kanban action (board and verb only).
+        if (p.tool === 'Bash') {
+          const command = bashCommandOf(p)
+          const cli = command !== null ? kanbanCliUse(command) : null
+          if (cli !== null) found.push({ kind: 'kanban', key: cli.key, action: cli.action })
+        }
+      } else {
         const m = usesOfMessage(p)
         if (m) found.push(m)
       }

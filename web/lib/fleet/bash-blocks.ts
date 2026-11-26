@@ -23,7 +23,8 @@
  */
 import { MAX_FADE_SECONDS, MAX_LINGER_SECONDS } from './options-registry'
 import { blockId, type BlockStore, type ResourceBlock } from './resource-block'
-import { commandHead } from './command-head'
+import { bashCommandOf, commandHead } from './command-head'
+import { kanbanCliUse } from './event-uses'
 import { maskSecrets } from './secret-mask'
 import { identityFromLabel } from './fleet-model'
 
@@ -105,17 +106,13 @@ function maskAndCap(raw: string): string {
   return masked.length > MAX_COMMAND_CHARS ? `${masked.slice(0, MAX_COMMAND_CHARS)}…` : masked
 }
 
-/** The command text of a Bash `tool_call_start` payload: the full command when there is one, else the args. */
-export function bashCommandOf(payload: Record<string, unknown>): string | null {
-  const input = payload.inputData
-  const fromInput = input && typeof input === 'object' && !Array.isArray(input) ? str((input as Record<string, unknown>).command) : null
-  const text = fromInput !== null && fromInput.trim() !== '' ? fromInput : str(payload.args)
-  return text !== null && text.trim() !== '' ? text : null
-}
+export { bashCommandOf }
 
 export class BashUseTracker {
   private readonly sessions = new Map<string, SessionState>()
   private readonly uses = new Map<string, UseRec>()
+  /** Keys of calls left out because they are `hermes kanban` calls (no command text kept). */
+  private readonly kanbanCalls = new Set<string>()
   private cache: BashHeadNode[] = []
   private dirty = true
   private builtFor = 0
@@ -144,6 +141,7 @@ export class BashUseTracker {
   private forget(sid: string): void {
     this.sessions.delete(sid)
     for (const [key, u] of this.uses) if (u.sid === sid) this.uses.delete(key)
+    for (const key of this.kanbanCalls) if (key.startsWith(`${sid}|`)) this.kanbanCalls.delete(key)
     this.dirty = true
   }
 
@@ -181,6 +179,17 @@ export class BashUseTracker {
       if (nowMs - at > MAX_AGE_MS) continue
       const toolUseId = str(p.toolUseId)
       const key = toolUseId ? `${session.id}|${toolUseId}` : `${session.id}|#${st.anonymous++}`
+      // A `hermes kanban ...` call is a Kanban action (EventUseTracker records it), not a bash block. The ids of a
+      // suppressed call are remembered, so the other delivery of the same call (hook / transcript, one of them cut
+      // at 80 characters) cannot slip in as a `hermes` use.
+      if (this.kanbanCalls.has(key)) continue
+      const cli = kanbanCliUse(command)
+      if (cli !== null && cli.leading) {
+        this.kanbanCalls.add(key)
+        this.uses.delete(key)
+        this.dirty = true
+        continue
+      }
       const masked = maskAndCap(command)
       const prev = this.uses.get(key)
       if (prev) {
@@ -200,6 +209,11 @@ export class BashUseTracker {
       const oldest = this.uses.keys().next().value
       if (oldest === undefined) break
       this.uses.delete(oldest)
+    }
+    while (this.kanbanCalls.size > MAX_USES) {
+      const oldest = this.kanbanCalls.values().next().value
+      if (oldest === undefined) break
+      this.kanbanCalls.delete(oldest)
     }
   }
 

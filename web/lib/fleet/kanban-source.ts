@@ -35,7 +35,7 @@ export const KNOWN_TASK_STATUSES = [
 
 export const DEFAULT_EVENT_LIMIT = 50
 export const MAX_EVENT_LIMIT = 1000
-const DEFAULT_BOARD_SLUG = 'default'
+export const DEFAULT_BOARD_SLUG = 'default'
 const BUSY_TIMEOUT_MS = 2000
 
 export interface KanbanBoardRef {

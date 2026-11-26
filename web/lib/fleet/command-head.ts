@@ -21,18 +21,18 @@ import { maskSecrets } from './secret-mask'
 export const FALLBACK_HEAD = 'command'
 export const MAX_HEAD_LENGTH = 40
 /** Only this much of a command is looked at, so a huge heredoc costs nothing. */
-const SCAN_CHARS = 4000
+export const SCAN_CHARS = 4000
 const MAX_WORDS = 64
 const MAX_DEPTH = 3
 
 const HEAD_RE = /^[A-Za-z0-9._+][A-Za-z0-9._+-]{0,39}$/
-const ASSIGN_RE = /^[A-Za-z_][A-Za-z0-9_]*=/
-const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh'])
+export const ASSIGN_RE = /^[A-Za-z_][A-Za-z0-9_]*=/
+export const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh'])
 /** A variable, a command substitution, a subshell or a glob in a word: not a program name. */
 const NOT_A_NAME_RE = /[$`(){}<>*?!]/
 
 /** Words that run the next command: skipped, with the options that take a value. */
-const WRAPPERS = new Map<string, readonly string[]>([
+export const WRAPPERS = new Map<string, readonly string[]>([
   ['sudo', ['-u', '-g', '-h', '-p', '-C', '-r', '-t', '-U', '-D', '-R']],
   ['doas', ['-u', '-C']],
   ['env', ['-u', '-C', '-S']],
@@ -47,14 +47,14 @@ const WRAPPERS = new Map<string, readonly string[]>([
 /** Words that prepare the shell; skipped only when `&&`, `||` or `;` leads on to the real command. */
 const PREPARE = new Set(['cd', 'pushd', 'popd', 'export', 'unset', 'source', '.', 'set', 'umask', 'ulimit', 'alias', 'unalias'])
 
-interface Word {
+export interface Word {
   text: string
   /** An unquoted `&&`, `||`, `;`, `|` or `&`. */
   op: boolean
 }
 
 /** Split a command line into words and operators; quotes group, a backslash escapes. Not a shell parser. */
-function words(line: string): Word[] {
+export function words(line: string): Word[] {
   const out: Word[] = []
   let cur = ''
   let has = false
@@ -143,6 +143,16 @@ function headOfText(text: string, depth: number): string | null {
     return headOfLine(line, depth)
   }
   return null
+}
+
+/** The command text of a Bash `tool_call_start` payload: the full command when there is one, else the args. */
+export function bashCommandOf(payload: Record<string, unknown>): string | null {
+  const input = payload.inputData
+  const fromInput = input && typeof input === 'object' && !Array.isArray(input) && typeof (input as Record<string, unknown>).command === 'string'
+    ? ((input as Record<string, unknown>).command as string)
+    : null
+  const text = fromInput !== null && fromInput.trim() !== '' ? fromInput : typeof payload.args === 'string' ? payload.args : null
+  return text !== null && text.trim() !== '' ? text : null
 }
 
 /** The program a shell command runs, or `command` when there is no plain program name to show. */
