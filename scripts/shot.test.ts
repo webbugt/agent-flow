@@ -140,6 +140,21 @@ test('the costs scenario has an API, a subscription, a Copilot, a local-model an
   for (const sc of Object.values(SCENARIOS)) assert.doesNotThrow(() => { for (const id of [...sc.claude, ...sc.hermes]) assert.ok(FIXTURE_IDS.includes(id)) })
 })
 
+test('fleet-multi scenario: 4 profiles with 8 / 5 / 3 / 1 sessions, unique session ids, one state.db per profile', () => {
+  const { claude, hermes } = loadScenario('fleet-multi')
+  assert.equal(claude.length, 0)
+  const per = new Map<string, number>()
+  for (const f of hermes) per.set(f.profile, (per.get(f.profile) ?? 0) + 1)
+  assert.deepEqual([...per.entries()], [['alpha-demo', 8], ['beta-demo', 5], ['gamma-demo', 3], ['delta-demo', 1]])
+  assert.equal(new Set(hermes.map(f => f.sid)).size, hermes.length)
+  assert.ok(hermes.every(f => /^\d{8}_\d{6}_[0-9a-f]{8}$/.test(f.sid)), 'session ids have the Hermes shape')
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'shot-test-'))
+  try {
+    const m = materializeFixtures({ home: path.join(tmp, 'home'), workspace: path.join(tmp, 'ws'), scenario: 'fleet-multi' })
+    assert.equal(m.hermesLogFiles.length, 4)
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }) }
+})
+
 test('fixtures are synthetic: no tokens, keys, e-mail addresses or home paths', () => {
   const blob = JSON.stringify([CLAUDE_SESSIONS, HERMES_SESSIONS, LIMITS_FIXTURES, CONFIG_FIXTURES])
   const bad = [/sk-[A-Za-z0-9]{16,}/, /ghp_[A-Za-z0-9]{16,}/, /gho_[A-Za-z0-9]{16,}/, /Bearer\s+[A-Za-z0-9._-]{16,}/i, /[\w.+-]+@[\w-]+\.[a-z]{2,}/i, /\/home\/[a-z]/, /api[_-]?key/i, /password/i]

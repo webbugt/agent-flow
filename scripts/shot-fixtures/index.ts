@@ -213,6 +213,32 @@ export const HERMES_SESSIONS: HermesSessionFixture[] = [
 ]
 
 /**
+ * Fleet map scenario `fleet-multi`: profiles with MANY sessions each (the real Hermes shape), so the cloud grouping
+ * (spacing between session nodes, halo radius) can be shot. One profile = one state.db with many session rows.
+ * Synthetic: profile names `<x>-demo`, ids `YYYYMMDD_HHMMSS_<8 hex>`, titles from a fixed word list.
+ */
+const MULTI_PROFILES: Array<{ profile: string; count: number }> = [
+  { profile: 'alpha-demo', count: 8 },
+  { profile: 'beta-demo', count: 5 },
+  { profile: 'gamma-demo', count: 3 },
+  { profile: 'delta-demo', count: 1 },
+]
+const MULTI_WORDS = ['Parser cleanup', 'Release notes', 'Cache audit', 'Retry policy', 'Schema draft', 'Index rebuild', 'Lint sweep', 'Docs pass']
+
+export const FLEET_MULTI_SESSIONS: HermesSessionFixture[] = MULTI_PROFILES.flatMap(({ profile, count }, pi) =>
+  Array.from({ length: count }, (_, k): HermesSessionFixture => ({
+    id: `M-${profile}-${k + 1}`,
+    profile,
+    sid: `20261125_09${String(pi).padStart(2, '0')}${String(10 + k).padStart(2, '0')}_${(0xa0000000 + pi * 0x100 + k).toString(16)}`,
+    title: MULTI_WORDS[k % MULTI_WORDS.length],
+    billing: 'subscription',
+    user: `Fixture ${profile} ${k + 1}: synthetic request`,
+    assistant: `Synthetic reply ${k + 1}.`,
+    calls: [{ model: 'claude-opus-5-5', provider: 'claude-subscription-directsdk-experimental', input: 8_000 + 500 * k, output: 400, latencySec: 6 }],
+    tools: ['read_file', 'terminal'],
+  })))
+
+/**
  * Limits file variants (plan section 10). Read by the app since P6a: `materializeFixtures` turns each entry into the
  * file the statusLine shim writes (`{v, at, session_id, model, rate_limits}`), with times relative to "now" so the
  * reading is fresh (L-1, L-2) or old (L-3). The `fable_*` fields belong to P6b (estimated Fable limit) and are not
@@ -319,6 +345,7 @@ export function configFixtureText(doc: unknown): string {
 export const FIXTURE_IDS = [
   ...CLAUDE_SESSIONS.map(s => s.id),
   ...HERMES_SESSIONS.map(s => s.id),
+  ...FLEET_MULTI_SESSIONS.map(s => s.id),
   ...Object.keys(LIMITS_FIXTURES),
   ...Object.keys(CONFIG_FIXTURES),
 ]
@@ -336,6 +363,8 @@ export const SCENARIOS: Record<string, Scenario> = {
   all: { claude: CLAUDE_SESSIONS.map(s => s.id), hermes: HERMES_SESSIONS.map(s => s.id) },
   claude: { claude: ['F-A'], hermes: [] },
   hermes: { claude: [], hermes: HERMES_SESSIONS.map(s => s.id) },
+  // Fleet map: 4 profiles with 8 / 5 / 3 / 1 session nodes (cloud grouping shots).
+  'fleet-multi': { claude: [], hermes: FLEET_MULTI_SESSIONS.map(s => s.id) },
 }
 
 export function resolveScenario(name: string): Scenario {
@@ -353,7 +382,7 @@ export function loadScenario(name: string): { claude: ClaudeSessionFixture[]; he
     return f
   })
   const hermes = sc.hermes.map(id => {
-    const f = HERMES_SESSIONS.find(s => s.id === id)
+    const f = HERMES_SESSIONS.find(s => s.id === id) ?? FLEET_MULTI_SESSIONS.find(s => s.id === id)
     if (!f) throw new Error(`unknown Hermes fixture ${id}`)
     return f
   })
@@ -508,8 +537,11 @@ export function materializeFixtures(opts: {
 
   const hermesRoot = path.join(opts.home, '.hermes')
   const hermesLogFiles: string[] = []
-  for (const f of hermes) {
-    const dir = path.join(hermesRoot, 'profiles', f.profile)
+  // One folder and one state.db per profile; a profile may have several sessions (scenario `fleet-multi`).
+  const byProfile = new Map<string, typeof hermes>()
+  for (const f of hermes) byProfile.set(f.profile, [...(byProfile.get(f.profile) ?? []), f])
+  for (const [profile, fixtures] of byProfile) {
+    const dir = path.join(hermesRoot, 'profiles', profile)
     fs.mkdirSync(path.join(dir, 'logs'), { recursive: true })
     const logFile = path.join(dir, 'logs', 'agent.log')
     fs.writeFileSync(logFile, '')
@@ -519,11 +551,13 @@ export function materializeFixtures(opts: {
     try {
       db.exec('create table sessions (id text primary key, title text, started_at real, source text, display_name text, user_id text)')
       db.exec('create table messages (id integer primary key autoincrement, session_id text, role text, content text, tool_calls text, tool_call_id text, tool_name text, reasoning text, timestamp real)')
-      db.prepare('insert into sessions (id, title, started_at, source, display_name, user_id) values (?, ?, ?, ?, ?, ?)')
-        .run(f.sid, f.title, (now - 60_000) / 1000, 'fixture', f.user, 'fixture-user')
-      const ins = db.prepare('insert into messages (session_id, role, content, timestamp) values (?, ?, ?, ?)')
-      ins.run(f.sid, 'user', f.user, (now - 50_000) / 1000)
-      ins.run(f.sid, 'assistant', f.assistant, (now - 40_000) / 1000)
+      for (const f of fixtures) {
+        db.prepare('insert into sessions (id, title, started_at, source, display_name, user_id) values (?, ?, ?, ?, ?, ?)')
+          .run(f.sid, f.title, (now - 60_000) / 1000, 'fixture', f.user, 'fixture-user')
+        const ins = db.prepare('insert into messages (session_id, role, content, timestamp) values (?, ?, ?, ?)')
+        ins.run(f.sid, 'user', f.user, (now - 50_000) / 1000)
+        ins.run(f.sid, 'assistant', f.assistant, (now - 40_000) / 1000)
+      }
     } finally {
       db.close()
     }
