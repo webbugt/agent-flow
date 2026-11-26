@@ -1,11 +1,13 @@
 'use client'
 
-import { useCallback, useMemo, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { SimulationEvent } from '@/lib/agent-types'
 import type { FleetInstance, FleetSelectionView, SessionLike } from '@/lib/fleet/fleet-model'
 import type { FleetGraph } from '@/lib/fleet/fleet-graph'
 import { FleetPulseTracker } from '@/lib/fleet/fleet-pulses'
+import { fleetNow } from '@/lib/fleet/fleet-clock'
 import { buildFleetScene, FleetReplay, type FleetScene } from './simulation/fleet-scene'
+import { newFleetPresenceTracker, withGhosts } from './simulation/fleet-presence-scene'
 import { createEmptyState, type SimulationState } from './simulation/types'
 
 export interface UseFleetSceneOptions {
@@ -44,26 +46,43 @@ export function useFleetScene(opts: UseFleetSceneOptions) {
   const pulsesRef = useRef<FleetPulseTracker | null>(null)
   if (!pulsesRef.current) pulsesRef.current = new FleetPulseTracker()
   const frameRef = useRef<SimulationState>(EMPTY_SCENE.state)
+  // Entry and exit: what is on the map now, and the ghosts of what just left. Ghosts live in the frame the
+  // canvas draws, not in `scene` (counts and click targets must not see them).
+  const presenceRef = useRef<ReturnType<typeof newFleetPresenceTracker> | null>(null)
+  if (!presenceRef.current) presenceRef.current = newFleetPresenceTracker()
+  // Bumped when the oldest ghost is over, so the scene is rebuilt without it (and the camera fit drops it).
+  const [ghostTick, setGhostTick] = useState(0)
 
-  const scene = useMemo(() => {
-    if (!visible) return EMPTY_SCENE
+  const built = useMemo(() => {
+    if (!visible) return { scene: EMPTY_SCENE, frame: EMPTY_SCENE.state }
     const replay = replayRef.current as FleetReplay
     replay.retain(new Set(sessions.map(s => s.id)))
     // Idempotent for the same links: a second call (strict mode, a re-render) starts no dot twice.
     const pulses = (pulsesRef.current as FleetPulseTracker).update(graph.edges, Date.now())
-    return buildFleetScene({
+    const fresh = buildFleetScene({
       sessions, stateOf: id => replay.advance(id, eventsOf(id)), instances, selection, graph, columns,
       moved: movedRef.current, pulses,
     })
+    const tracker = presenceRef.current as NonNullable<typeof presenceRef.current>
+    return { scene: fresh, frame: withGhosts(fresh.state, tracker, fleetNow()) }
     // tick: the event buffers are refs, so React does not see new events by itself
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visible, sessions, eventsOf, instances, selection, graph, columns, tick])
+  }, [visible, sessions, eventsOf, instances, selection, graph, columns, tick, ghostTick])
+  const scene = built.scene
   // Only when the scene was rebuilt: a re-render must not undo a drag that moved the frame.
   const lastSceneRef = useRef<FleetScene | null>(null)
   if (lastSceneRef.current !== scene) {
     lastSceneRef.current = scene
-    frameRef.current = scene.state
+    frameRef.current = built.frame
   }
+
+  // When the oldest ghost is over, rebuild once so it leaves the frame (and the camera's fit).
+  useEffect(() => {
+    const end = presenceRef.current?.nextExpiry()
+    if (end === null || end === undefined) return
+    const timer = setTimeout(() => setGhostTick(n => n + 1), Math.max(end - fleetNow(), 0) + 30)
+    return () => clearTimeout(timer)
+  }, [built])
 
   /** Drag: the node and its satellites follow the pointer at once; the position survives rebuilds. */
   const moveNode = useCallback((id: string, x: number, y: number) => {

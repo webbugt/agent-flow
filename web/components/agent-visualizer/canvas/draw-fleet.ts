@@ -6,6 +6,7 @@ import { MIN_VISIBLE_OPACITY } from '@/lib/canvas-constants'
 import { edgeAlpha } from '@/lib/fleet/fleet-edge-life'
 import type { CloudGeometry, CloudView } from '@/lib/fleet/fleet-cloud-geometry'
 import { pulseProgress, type FleetPulse } from '@/lib/fleet/fleet-pulses'
+import { cloudScale } from '@/lib/fleet/fleet-presence'
 import { LABEL_WIDTH_PX, LabelPlacer, fitText, labelScreenPx, type Rect } from '@/lib/fleet/fleet-labels'
 import { bezierPoint, computeControlPoints, drawTaperedBezier } from './draw-edges'
 
@@ -40,12 +41,17 @@ export function fleetLinkEnds(
 /** Soft halo around each cloud. Drawn under the links and nodes. */
 export function drawClouds(
   ctx: CanvasRenderingContext2D, clouds: readonly CloudView[], geometries: ReadonlyMap<string, CloudGeometry>, time: number,
+  /** Entry/exit level (0..1) of clouds in transition, by cloud id: the halo is drawn that faint and grows from its centre. */
+  fade?: ReadonlyMap<string, number>,
 ) {
   for (const cloud of clouds) {
-    const g = geometries.get(cloud.id)
-    if (!g) continue
+    const base = geometries.get(cloud.id)
+    if (!base) continue
+    const level = fade?.get(cloud.id) ?? 1
+    const g = level < 1 ? { x: base.x, y: base.y, r: base.r * cloudScale(level) } : base
     const active = cloud.status === 'active'
     ctx.save()
+    ctx.globalAlpha = level
     const grad = ctx.createRadialGradient(g.x, g.y, g.r * 0.15, g.x, g.y, g.r)
     const core = active ? 0.2 + Math.sin(time * ANIM.pulseSpeed * 0.5) * 0.03 : 0.12
     grad.addColorStop(0, cloud.color + alphaHex(core))
@@ -87,7 +93,7 @@ export function drawFleetLinks(
     ctx.save()
     const k = overviewBoost(ctx)
     drawTaperedBezier(ctx, ends.fromX, ends.fromY, cp.cp1x, cp.cp1y, cp.cp2x, cp.cp2y, ends.toX, ends.toY,
-      BEAM.parentChild.startW * k, BEAM.parentChild.endW * k, edge.color ?? COLORS.holoBase, BEAM.activeAlpha * life)
+      BEAM.parentChild.startW * k, BEAM.parentChild.endW * k, edge.color ?? COLORS.holoBase, BEAM.activeAlpha * life * edge.opacity)
     ctx.restore()
   }
 }
@@ -154,6 +160,8 @@ interface LabelJob {
   widthPx?: number
   color: string
   weight: '400' | '600'
+  /** Entry/exit level of the thing the label belongs to (default 1). */
+  alpha?: number
   /** Other spots to try, in order, when the first is taken: above the node, or beside it. */
   alt?: { aboveBottom: number; sideX: number; centreY: number }
 }
@@ -184,7 +192,9 @@ function drawLabelJob(ctx: CanvasRenderingContext2D, placer: LabelPlacer, job: L
   ctx.textAlign = 'center'
   ctx.textBaseline = 'top'
   ctx.fillStyle = job.color
+  ctx.globalAlpha = job.alpha ?? 1
   ctx.fillText(text, (rect.x0 + rect.x1) / 2, rect.y0)
+  ctx.globalAlpha = 1
   return rect
 }
 
@@ -199,6 +209,8 @@ export function drawFleetLabels(
   agents: ReadonlyMap<string, Agent>, selectedId: string | null, hoveredId: string | null,
   /** Screensaver mode passes false: the second line under a resource (its task text) is not drawn. Names and captions stay. */
   showTaskText = true,
+  /** Entry/exit level (0..1) of nodes and clouds in transition, by scene id: their labels fade with them. */
+  fade?: ReadonlyMap<string, number>,
 ) {
   const zoom = currentZoom(ctx)
   const gap = 8 / Math.min(zoom, 1)
@@ -216,7 +228,7 @@ export function drawFleetLabels(
     if (!g) continue
     drawLabelJob(ctx, placer, {
       text: cloud.label, x: g.x, y: g.y + g.r + 6 / Math.min(zoom, 1), nominalPx: 13, minPx: 11, maxPx: 15, weight: '600',
-      color: cloud.color + alphaHex(cloud.status === 'active' ? 0.95 : 0.75),
+      color: cloud.color + alphaHex(cloud.status === 'active' ? 0.95 : 0.75), alpha: fade?.get(cloud.id),
     }, zoom, true)
   }
 
@@ -229,12 +241,12 @@ export function drawFleetLabels(
       text: a.name, x: a.x, y: a.y + radiusOf(a) + gap, nominalPx: 10, weight: '400',
       alt: { aboveBottom: a.y - radiusOf(a) - gap, sideX: a.x + radiusOf(a) + 6 / Math.min(zoom, 1), centreY: a.y },
       widthPx: a.resourceKind ? LABEL_WIDTH_PX.resource : LABEL_WIDTH_PX.session,
-      color: a.id === hoveredId ? COLORS.textPrimary : COLORS.textDim,
+      color: a.id === hoveredId ? COLORS.textPrimary : COLORS.textDim, alpha: fade?.get(a.id),
     }, zoom, force)
     if (showTaskText && rect && a.resourceKind && a.task) {
       drawLabelJob(ctx, placer, {
         text: a.task, x: (rect.x0 + rect.x1) / 2, y: rect.y1 + 3 / zoom, nominalPx: 9, maxPx: 12, weight: '400',
-        widthPx: LABEL_WIDTH_PX.task, color: COLORS.textMuted,
+        widthPx: LABEL_WIDTH_PX.task, color: COLORS.textMuted, alpha: fade?.get(a.id),
       }, zoom, force)
     }
   }

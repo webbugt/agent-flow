@@ -11,6 +11,7 @@ import type {
 import type { SimulationNodeDatum, SimulationLinkDatum } from 'd3-force'
 import type { CloudView } from '@/lib/fleet/fleet-cloud-geometry'
 import type { FleetPulse } from '@/lib/fleet/fleet-pulses'
+import type { PresenceStamp } from '@/lib/fleet/fleet-presence'
 
 export interface SimulationState {
   agents: Map<string, Agent>
@@ -38,6 +39,8 @@ export interface SimulationState {
   clouds?: CloudView[]
   /** Fleet map only: dots travelling along links because of a new interaction. */
   pulses?: FleetPulse[]
+  /** Fleet map only: entry/exit stamps by scene id (nodes, clouds), see lib/fleet/fleet-presence. Absent = everything steady. */
+  presence?: ReadonlyMap<string, PresenceStamp>
 }
 
 /** Create an empty simulation state, optionally preserving specific fields */
