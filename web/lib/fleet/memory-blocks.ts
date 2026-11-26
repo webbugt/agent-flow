@@ -70,16 +70,20 @@ function normaliseTag(tag: string): string {
   return tag.trim().toLowerCase().replace(/-/g, '_')
 }
 
-/** `personal-anything`, `personal_anything`, `PERSONAL-x`. */
+/**
+ * Every tag whose name starts with `personal` (after trim and lowercase): `personal-x`, `personal_x`, `personal.x`,
+ * `personal:x`, `PERSONAL-x`, and also `personalities`. The separator is deliberately not checked: a tag that
+ * merely starts with the word is hidden too (fail closed), so no separator form can slip past the filter.
+ */
 export function isPersonalTag(containerTag: string): boolean {
   // Fail closed: something that is not a string cannot be shown as a public tag.
   if (typeof containerTag !== 'string') return true
-  return /^personal_/.test(normaliseTag(containerTag))
+  return normaliseTag(containerTag).startsWith('personal')
 }
 
 /**
- * Whether a viewer may see the container. Every tag that is not `personal-*` is visible. A `personal-<name>` tag is
- * visible only when `owner` is `<name>` (compared like tags: case and `-` / `_` do not matter). Without an owner
+ * Whether a viewer may see the container. Every tag that is not `personal-*` is visible. A `personal-<name>` (or `personal_<name>`) tag is
+ * visible only when `owner` is `<name>`; any other tag starting with `personal` (`personal.x`, `personal:x`, ...) is hidden from everyone (compared like tags: case and `-` / `_` do not matter). Without an owner
  * (the default) no `personal-*` tag is visible, to anyone.
  *
  * `owner` is a setting of the server, not an identity the browser proves: anyone who can reach /api/fleet gets what

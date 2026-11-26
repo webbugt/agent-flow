@@ -6,6 +6,7 @@ import {
   type ActivityWindowId,
 } from './fleet-activity-filter'
 import { buildFleetGraph } from './fleet-graph'
+import { defaultOptions } from './options-registry'
 import { countsAsActivity, instancesFromSessionEvents, type FleetInstance, type SessionEventLike, type SessionLike } from './fleet-model'
 import type { PublicKanbanBoardNode } from './kanban-source'
 import type { SupermemoryNamespaceNode } from './supermemory-source'
@@ -124,11 +125,16 @@ test('hidden is not stopped: the filter changes visibility only, never status or
 })
 
 test('the fleet graph drops hidden profiles, sessions and resources', () => {
+  // Resource blocks only stay on the map for their kind's linger + fade (kanban 90 s, memory 60 s by default); a long
+  // linger keeps this test about the activity window, not about block lifetime (that is covered in fleet-graph.test.ts).
+  const base = defaultOptions()
+  const options = { ...base, lingerSeconds: { ...base.lingerSeconds, kanban: 3600, memory: 3600 } }
   const run = (window: ActivityWindowId) => {
     const hidden = hiddenByActivity({ window, now: NOW, instances: INSTANCES, kanban: KANBAN, supermemory: MEMORY })
     return buildFleetGraph({
       instances: INSTANCES, kanban: KANBAN, supermemory: MEMORY, now: NOW,
       selection: withActivityFilter({ isSelected: () => true }, hidden),
+      options,
     })
   }
   const g5 = run('5m')

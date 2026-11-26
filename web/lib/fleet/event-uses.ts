@@ -9,7 +9,7 @@
  * CONTENT RULES (binding decisions 4 and 5, and the T0 spike, section 5):
  *   - Memory: the container tag only. The call's arguments (query, content, ids) and its result are never kept: this
  *     module reads `container_tag` out of them and drops the rest. A tag that does not look like a tag is ignored (it
- *     could be free text). `personal-*` tags are never shown here: the browser does not know who the owner is (the
+ *     could be free text). tags starting with `personal` are never shown here: the browser does not know who the owner is (the
  *     owner is a server setting, memory-blocks.ts), so this client-side path fails closed for everybody.
  *   - Subsystems: the subsystem name and a verb (`manage`, `run`, or the gateway platform). Never a job name, id, prompt,
  *     room, sender or message text: only `payload.platform` and `payload.role` of a message are read, never `content`.
@@ -25,6 +25,7 @@
  */
 import { MAX_FADE_SECONDS, MAX_LINGER_SECONDS, type ResourceKind } from './options-registry'
 import { blockId, type BlockStore, type ResourceBlock } from './resource-block'
+import { isPersonalTag } from './memory-blocks'
 import { identityFromLabel } from './fleet-model'
 
 export type UseKind = Extract<ResourceKind, 'memory' | 'subsystem' | 'kanban'>
@@ -158,7 +159,7 @@ export function usesOfCall(call: { name: string; input: Record<string, unknown> 
     if (raw === null) return []
     const tag = normaliseContainerTag(raw)
     // Free text is not a tag; personal-* containers are never shown here (no viewer identity in the browser).
-    if (!TAG_RE.test(tag) || tag.startsWith('personal_')) return []
+    if (!TAG_RE.test(tag) || isPersonalTag(tag)) return []
     return [{ kind: 'memory', key: tag, action: memoryAction }]
   }
   if (call.name === 'cronjob_manage') return [{ kind: 'subsystem', key: 'cron', action: 'manage' }]

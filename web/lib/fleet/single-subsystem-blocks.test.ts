@@ -98,7 +98,18 @@ test('uses: no tag, a free-text tag and every personal-* tag are NOT memory uses
   assert.deepEqual(memory({ query: 'x' }), [], 'unattributed')
   assert.deepEqual(memory({ container_tag: 'a free text that is not a tag, with spaces' }), [])
   for (const t of ['personal-webbugt', 'personal_webbugt', 'PERSONAL-X', ' Personal-Y ']) assert.deepEqual(memory({ container_tag: t }), [], t)
-  assert.equal(memory({ container_tag: 'personalities' }).length, 1, 'only the personal- prefix is hidden')
+  assert.equal(memory({ container_tag: 'my-personal-notes' }).length, 1, 'only a name that STARTS with personal is hidden')
+})
+
+test('uses: personal tags are not memory uses in any separator form (- _ . :), whatever the case', () => {
+  const memory = (tag: string) => usesOfCall({ name: 'supermemory_store', input: { container_tag: tag } })
+  assert.deepEqual(memory('personal-idv'), [], 'hyphen')
+  assert.deepEqual(memory('personal_idv'), [], 'underscore')
+  assert.deepEqual(memory('personal.idv'), [], 'dot')
+  assert.deepEqual(memory('personal:idv'), [], 'colon')
+  assert.deepEqual(memory('Personal.IDV'), [], 'dot, upper case')
+  assert.deepEqual(memory('PERSONAL:idv'), [], 'colon, upper case')
+  assert.deepEqual(memory('personalities'), [], 'starts with personal: hidden (fail closed)')
 })
 
 test('uses: kanban needs a board in the call; it keeps the slug and the verb, never a task id or body', () => {

@@ -87,7 +87,41 @@ test('memory graph node: shown within the memory linger, fades, hides; pin keeps
 
 test('personal tags: recognised whatever the case or separator; other tags are not personal', () => {
   for (const t of ['personal-webbugt', 'personal_webbugt', 'PERSONAL-X', ' personal-y ']) assert.equal(isPersonalTag(t), true, t)
-  for (const t of ['omh_family', 'matrix_org', 'personalities', 'my-personal-notes', 'webbugt_video_memory']) assert.equal(isPersonalTag(t), false, t)
+  for (const t of ['omh_family', 'matrix_org', 'my-personal-notes', 'webbugt_video_memory']) assert.equal(isPersonalTag(t), false, t)
+})
+
+test('personal tags: every separator form is personal (hyphen, underscore, dot, colon), and so is any name starting with personal', () => {
+  assert.equal(isPersonalTag('personal-idv'), true, 'hyphen')
+  assert.equal(isPersonalTag('personal_idv'), true, 'underscore')
+  assert.equal(isPersonalTag('personal.idv'), true, 'dot')
+  assert.equal(isPersonalTag('personal:idv'), true, 'colon')
+  assert.equal(isPersonalTag('Personal.IDV'), true, 'dot, upper case')
+  assert.equal(isPersonalTag(' personal:idv '), true, 'colon, padded')
+  assert.equal(isPersonalTag('personalities'), true, 'starts with personal: hidden (fail closed)')
+})
+
+test('personal tags: personal.idv and personal:idv are hidden from a non-owner, no owner and another owner (client and server filter)', () => {
+  for (const t of ['personal.idv', 'personal:idv', 'personal-idv', 'personal_idv']) {
+    assert.equal(isMemoryTagVisible(t, undefined), false, `${t}: no owner`)
+    assert.equal(isMemoryTagVisible(t, 'sophia'), false, `${t}: another owner`)
+  }
+  assert.equal(isMemoryTagVisible('personal-idv', 'idv'), true, 'owner behaviour unchanged: personal-<owner>')
+  assert.equal(isMemoryTagVisible('personal_idv', 'idv'), true, 'owner behaviour unchanged: personal_<owner>')
+  const nodes = [space('omh_family', 1), space('personal.idv', 1), space('personal:idv', 1), space('personal-idv', 1)]
+  assert.deepEqual(filterPersonalNamespaces(nodes, 'sophia').map(n => n.containerTag), ['omh_family'])
+  assert.deepEqual(filterPersonalNamespaces(nodes).map(n => n.containerTag), ['omh_family'])
+})
+
+test('personal tags: /api/fleet drops personal.idv and personal:idv from the wire (and from the owner: only personal-<owner> / personal_<owner> are owner-visible)', async () => {
+  const spaces = [space('omh_family', 1), space('personal.idv', 1, { taxis: 7 }), space('personal:idv', 1, { taxis: 8 })]
+  const call = async (env: Record<string, string>) => handleFleetRequest(new Request('http://localhost/api/fleet', { headers: { host: '127.0.0.1:3000' } }), {
+    readKanban: () => ({ nodes: [] }), readSupermemory: () => ({ nodes: spaces }), now: () => 1, env,
+  }).text()
+  for (const env of [{}, { [MEMORY_OWNER_ENV]: 'sophia' }, { [MEMORY_OWNER_ENV]: 'idv' }] as Array<Record<string, string>>) {
+    const body = await call(env)
+    assert.ok(!body.includes('personal'), `no personal tag on the wire (env ${JSON.stringify(env)})`)
+    assert.ok(body.includes('omh_family'))
+  }
 })
 
 test('personal tags: visible only to the configured owner; nobody without an owner', () => {
