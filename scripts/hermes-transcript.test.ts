@@ -476,3 +476,92 @@ test('the live feed passes sender, platform and time through to the events', () 
   assert.equal(start.at, 1_700_000_005_000)
   assert.equal(end.at, 1_700_000_006_000)
 })
+
+// ─── Refresh replay: the backlog keeps its real spacing ─────────────────────
+
+function backlogRows(base: number): TranscriptRow[] {
+  // A user message and ten tool calls spread over ten minutes (row times are epoch seconds).
+  const rows: TranscriptRow[] = [row(1, 'user', { content: 'go', timestamp: base })]
+  let id = 2
+  for (let i = 0; i < 10; i++) {
+    const at = base + 60 * (i + 1)
+    rows.push(row(id++, 'assistant', { content: null, timestamp: at, tool_calls: JSON.stringify([{ call_id: `c${i}`, function: { name: 'terminal', arguments: JSON.stringify({ command: `cd /r && step ${i}` }) } }]) }))
+    rows.push(row(id++, 'tool', { tool_call_id: `c${i}`, content: '{"output":"ok","exit_code":0}', timestamp: at + 5 }))
+  }
+  return rows
+}
+
+test('the first read of a session spaces its backlog by the row times, not all at the first-sight instant', () => {
+  const f = watcherFixture('omh-coder')
+  const baseS = 1_800_000_000
+  const rows = backlogRows(baseS)
+  const nowMs = (baseS + 700) * 1000 // seen 100 s after the last row
+  const w = new HermesLogWatcher({
+    profilesRoot: f.profilesRoot, emit: f.emit, lifecycle: f.lifecycle, now: () => nowMs, titleFor: () => 'Long run',
+    transcriptFor: (_db, _sid, after) => (after === undefined ? { rows, lastId: rows.length } : { rows: [], lastId: after }),
+  })
+  w.poll()
+  fs.appendFileSync(f.logFile, TOOL_LINE + '\n')
+  w.poll()
+
+  const feed = f.events.filter(e => e.type === 'message' || e.type === 'tool_call_start' || e.type === 'tool_call_end')
+  assert.equal(feed.length, 1 + 10 + 10)
+  const times = feed.map(e => e.time)
+  assert.deepEqual(times, [...times].sort((a, b) => a - b), 'times follow the rows')
+  assert.ok(new Set(times).size >= 20, `backlog collapsed to ${new Set(times).size} distinct times: ${[...new Set(times)]}`)
+  assert.equal(times[0], 0, 'the first row is the start of the node')
+  assert.ok(times[times.length - 1] <= 700, 'never later than now')
+  assert.ok(times[times.length - 1] >= 600, 'the last tool result sits near the end of the span')
+
+  // The node's time base moved back with it, so its wall-clock start is the first row.
+  const spawn = f.events.find(e => e.type === 'agent_spawn' && (e.payload as { startedAt?: number }).startedAt !== undefined)!
+  assert.equal((spawn.payload as { startedAt: number }).startedAt, baseS * 1000)
+})
+
+test('rows older than the backlog span are placed at the start, and later polls stay stamped at now', () => {
+  const f = watcherFixture('omh-coder')
+  const baseS = 1_800_000_000
+  const nowMs = (baseS + 20 * 3600) * 1000 // the user message is 20 hours old
+  const old: TranscriptRow[] = [row(1, 'user', { content: 'go', timestamp: baseS }), row(2, 'assistant', { content: 'working', timestamp: baseS + 19.5 * 3600 })]
+  let rows = old
+  const w = new HermesLogWatcher({
+    profilesRoot: f.profilesRoot, emit: f.emit, lifecycle: f.lifecycle, now: () => nowMs, titleFor: () => 'Old',
+    transcriptFor: (_db, _sid, after) => {
+      const fresh = rows.filter(r => after === undefined || r.id > after)
+      return { rows: fresh, lastId: fresh.length ? fresh[fresh.length - 1].id : after ?? 0 }
+    },
+  })
+  w.poll()
+  fs.appendFileSync(f.logFile, TOOL_LINE + '\n')
+  w.poll()
+  const times = f.events.filter(e => e.type === 'message').map(e => e.time)
+  assert.equal(times[0], 0)
+  assert.ok(times[1] === 1800, `time base is rebased by at most one hour, got ${times[1]}`)
+})
+
+test('a session first met after the page connected arrives marked as history; later rows are live', () => {
+  const f = watcherFixture('omh-coder')
+  const baseS = 1_800_000_000
+  let rows = backlogRows(baseS)
+  const w = new HermesLogWatcher({
+    profilesRoot: f.profilesRoot, emit: f.emit, lifecycle: f.lifecycle, now: () => (baseS + 700) * 1000, titleFor: () => 'Long run',
+    transcriptFor: (_db, _sid, after) => {
+      const fresh = rows.filter(r => after === undefined || r.id > after)
+      return { rows: fresh, lastId: fresh.length ? fresh[fresh.length - 1].id : after ?? 0 }
+    },
+  })
+  w.poll()
+  fs.appendFileSync(f.logFile, TOOL_LINE + '\n')
+  w.poll()
+  const feed = () => f.events.filter(e => e.type === 'message' || e.type === 'tool_call_start' || e.type === 'tool_call_end')
+  assert.equal(feed().length, 21)
+  assert.ok(feed().every(e => (e as { history?: boolean }).history === true), 'the 300-row backlog is a snapshot for the page, not 21 live events')
+  assert.ok(f.events.filter(e => e.type === 'agent_spawn').every(e => (e as { history?: boolean }).history !== true), 'the node itself is not history')
+
+  rows = [...rows, row(100, 'assistant', { content: 'new reply', timestamp: baseS + 705 })]
+  fs.appendFileSync(f.logFile, TOOL_LINE + '\n')
+  w.poll()
+  const last = feed()[feed().length - 1] as { history?: boolean; payload: { content?: string } }
+  assert.equal(last.payload.content, 'new reply')
+  assert.equal(last.history, undefined, 'a row written after first sight is a live event and animates')
+})

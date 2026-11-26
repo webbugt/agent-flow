@@ -99,3 +99,47 @@ test('events from another session are skipped by the accept filter', () => {
   })
   assert.equal(r.applied.length, 1)
 })
+
+// ─── A reload must not stack the recent past on the canvas ──────────────────
+
+const say = (time: number, i: number, history: boolean): SimulationEvent => ({
+  time, type: 'message', history,
+  payload: { agent: 'Taxis', role: i % 2 ? 'assistant' : 'user', content: `message ${i}` },
+})
+
+/** Dozens of tool calls and messages that all happened within the last few seconds of the history
+ *  (or at one instant: a backlog that lost its times). */
+function burstHistory(spread: number): SimulationEvent[] {
+  const out: SimulationEvent[] = [spawn(true)]
+  for (let i = 0; i < 40; i++) {
+    const t = 500 + i * spread
+    out.push(say(t, i, true), toolStart(t, `b${i}`, true), toolEnd(t, `b${i}`, true))
+  }
+  return out
+}
+
+for (const spread of [0, 0.05]) {
+  test(`a reload with 40 recent tool calls and messages (${spread}s apart) settles as a compact set, not a column`, () => {
+    const r = applyExternalEvents(createEmptyState({ isPlaying: true }), burstHistory(spread), 0.016, process_(ctx()))
+    const cards = [...r.state.toolCalls.values()].filter(t => t.opacity > 0)
+    assert.ok(cards.length <= 4, `expected a few resting cards, got ${cards.length}`)
+    assert.ok(r.state.agents.get('Taxis')!.messageBubbles.length <= 3, 'a few bubbles, not one per message')
+    // the newest ones are the ones kept
+    assert.ok(cards.some(t => t.args === 'cmd b39'))
+    assert.ok(!cards.some(t => t.args === 'cmd b0'))
+    // nothing the detail views read is dropped
+    assert.equal(r.applied.length, 121)
+    assert.equal(r.state.conversations.get('Taxis')!.filter(m => m.type === 'tool_call').length, 40)
+    assert.equal(r.state.timelineEntries.get('Taxis')!.blocks.length >= 40, true)
+    // edges follow the cards
+    const toolEdges = r.state.edges.filter(e => e.type === 'tool')
+    assert.ok(toolEdges.every(e => r.state.toolCalls.has(e.to)), 'no edge to a dropped card')
+  })
+}
+
+test('live events after a compact history still animate in', () => {
+  const first = applyExternalEvents(createEmptyState({ isPlaying: true }), burstHistory(0), 0.016, process_(ctx()))
+  const live = applyExternalEvents(first.state, [toolStart(0, 'live1', false)], first.newTime + 0.5, process_(ctx()))
+  const tc = [...live.state.toolCalls.values()].find(t => t.args === 'cmd live1')!
+  assert.ok(tc && tc.opacity === 0 && tc.state === 'running')
+})

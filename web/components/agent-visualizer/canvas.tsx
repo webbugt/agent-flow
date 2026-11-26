@@ -143,7 +143,7 @@ export function AgentCanvas({
 
   // ─── Camera ─────────────────────────────────────────────────────────────
   const {
-    transformRef, userHasNavigatedRef, panVelocityRef,
+    transformRef, userHasNavigatedRef, interrupt, panVelocityRef,
     screenToCanvas, doZoomToFit, zoomBy, updateCamera,
   } = useCanvasCamera({
     mainCanvasRef, drawPropsRef, simTimeRef, dimensions,
@@ -160,7 +160,7 @@ export function AgentCanvas({
   const {
     isDragging, handlers, updateDragLerp,
   } = useCanvasInteraction({
-    drawPropsRef, transformRef, userHasNavigatedRef, panVelocityRef,
+    drawPropsRef, transformRef, interrupt, panVelocityRef,
     simTimeRef, screenToCanvas, doZoomToFit, mainCanvasRef, wheelZooms: fleetView,
   })
 
