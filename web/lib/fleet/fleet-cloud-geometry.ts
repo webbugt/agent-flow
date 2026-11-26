@@ -6,7 +6,7 @@
 import type { FleetInstanceStatus } from './fleet-model'
 
 /** Extra radius of the halo around the outermost unit, world units. */
-export const HALO_PAD = 30
+export const HALO_PAD = 14
 
 export interface CloudMember {
   /** Scene id of a session node. */

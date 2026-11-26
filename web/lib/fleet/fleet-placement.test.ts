@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import { strict as assert } from 'node:assert'
-import { placeBlob, placeResources, hashString, clearOfCaption, CAPTION_HALF_WIDTH, CAPTION_HEIGHT, type BlobUnit, type PlacementCloud } from './fleet-placement'
+import { placeBlob, placeResources, hashString, BLOB_GAP, clearOfCaption, CAPTION_HALF_WIDTH, CAPTION_HEIGHT, type BlobUnit, type PlacementCloud } from './fleet-placement'
 
 const units = (n: number, r = 80): BlobUnit[] => Array.from({ length: n }, (_, i) => ({ id: `s${i}`, radius: r }))
 
@@ -24,6 +24,44 @@ test('placeBlob: units never overlap, are centred on the centroid, and fit in th
     assert.ok(Math.hypot(pts[i].x, pts[i].y) + 70 <= blob.radius + 1e-6)
     for (let j = i + 1; j < pts.length; j++) assert.ok(Math.hypot(pts[i].x - pts[j].x, pts[i].y - pts[j].y) >= 140, `units ${i} and ${j} apart`)
   }
+})
+
+/** Smallest edge-to-edge gap between two units of a blob (negative = overlap). */
+function minEdgeGap(blob: ReturnType<typeof placeBlob>, us: readonly BlobUnit[]): number {
+  let min = Infinity
+  for (let i = 0; i < us.length; i++) {
+    for (let j = i + 1; j < us.length; j++) {
+      const a = blob.positions.get(us[i].id)!
+      const b = blob.positions.get(us[j].id)!
+      min = Math.min(min, Math.hypot(a.x - b.x, a.y - b.y) - us[i].radius - us[j].radius)
+    }
+  }
+  return min
+}
+
+test('placeBlob: no two units overlap and none is further apart than BLOB_GAP needs (mixed sizes, many seeds and counts)', () => {
+  for (const seed of ['taxis', 'sophia', 'omh-coder', 'a', 'hestia', 'alpha demo']) {
+    for (const n of [2, 3, 4, 5, 8, 13, 21, 34]) {
+      const us: BlobUnit[] = Array.from({ length: n }, (_, i) => ({ id: `s${i}`, radius: [70, 130, 222, 90][i % 4] }))
+      const blob = placeBlob(us, seed)
+      const gap = minEdgeGap(blob, us)
+      assert.ok(gap >= BLOB_GAP - 1e-6, `${seed} n=${n}: smallest gap ${gap}`)
+      // Tight: the closest pair sits right at the gap, not loosely beyond it.
+      assert.ok(gap <= BLOB_GAP + 1, `${seed} n=${n}: smallest gap ${gap} is loose`)
+    }
+  }
+})
+
+test('placeBlob: grouping stays tight (radius per unit does not creep back up)', () => {
+  // radius / (r * sqrt(n)): a perfect hexagonal packing is about 1.1; the old spiral with a 16 gap sat at 1.5-1.6 for 5-8 units.
+  for (const n of [3, 5, 8, 13, 21, 34]) {
+    for (const r of [70, 222]) {
+      const us = Array.from({ length: n }, (_, i) => ({ id: `s${i}`, radius: r }))
+      const blob = placeBlob(us, 'omh-coder')
+      assert.ok(blob.radius <= 1.55 * r * Math.sqrt(n), `n=${n} r=${r}: radius ${blob.radius}`)
+    }
+  }
+  assert.ok(BLOB_GAP <= 8, 'gap between units')
 })
 
 test('placeBlob: a new session joins the blob without moving the existing ones relative to each other', () => {

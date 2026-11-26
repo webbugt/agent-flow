@@ -6,7 +6,8 @@ import { buildFleetGraph } from '@/lib/fleet/fleet-graph'
 import type { PublicKanbanBoardNode } from '@/lib/fleet/kanban-source'
 import type { SupermemoryNamespaceNode } from '@/lib/fleet/supermemory-source'
 import { anonymizeToolInput, createAnonymizePolicy, isAnonymized } from '@/lib/content-privacy'
-import { buildFleetScene, FleetReplay, openTargetOf } from './fleet-scene'
+import { BLOB_GAP } from '@/lib/fleet/fleet-placement'
+import { buildFleetScene, CLOUD_GAP_X, CLOUD_GAP_Y, FleetReplay, openTargetOf } from './fleet-scene'
 import { buildSessionItems, pickDefaultAgentId } from '@/lib/session-detail'
 import { RESTING_TOOLS_PER_AGENT } from './animate'
 
@@ -305,6 +306,51 @@ test('fleet scene: a profile with many sessions shows every session node (no per
   const sophia = [...scene.state.agents.values()].filter(a => a.sessionId === 'hermes-sophia')
   assert.equal(sophia.length, 31) // Report + 30 jobs
   assert.equal(scene.state.clouds!.find(c => c.label === 'sophia')!.members.length, 31)
+})
+
+test('fleet scene: sessions of a cloud sit at least BLOB_GAP apart (no overlap) and clouds keep CLOUD_GAP between their halos', () => {
+  const sessions: SessionLike[] = []
+  const events: Record<string, SimulationEvent[]> = {}
+  const counts: Array<[string, number]> = [['alpha', 8], ['beta', 5], ['gamma', 3], ['delta', 1], ['eps', 13]]
+  for (const [p, n] of counts) {
+    sessions.push(session(p))
+    const ev: SimulationEvent[] = [{ time: 0, type: 'agent_spawn', payload: { name: p, isMain: true, profile: p, group: p, task: p } }]
+    for (let k = 0; k < n; k++) {
+      const node = `${p} · S${k}`
+      ev.push({ time: 0, type: 'agent_spawn', payload: { name: node, parent: p, startedAt: T0 + k * 1000, task: node } })
+      ev.push({ time: 5, type: 'tool_call_start', payload: { agent: node, tool: 'Read', toolUseId: `u${k}`, args: 'a.ts', inputData: { path: 'a.ts' } } })
+      ev.push({ time: 6, type: 'tool_call_end', payload: { agent: node, tool: 'Read', toolUseId: `u${k}`, result: 'ok' } })
+    }
+    events[`hermes-${p}`] = ev
+  }
+  const { scene } = sceneFor({ sessions, events })
+  const clouds = scene.state.clouds!
+  assert.equal(clouds.length, 5)
+  for (const c of clouds) {
+    for (let i = 0; i < c.members.length; i++) {
+      for (let j = i + 1; j < c.members.length; j++) {
+        const a = scene.state.agents.get(c.members[i].id)!
+        const b = scene.state.agents.get(c.members[j].id)!
+        const gap = Math.hypot(a.x - b.x, a.y - b.y) - c.members[i].pad - c.members[j].pad
+        assert.ok(gap >= BLOB_GAP - 1e-6, `${c.label}: nodes ${i}/${j} gap ${gap}`)
+      }
+    }
+  }
+  // Halos of different clouds never overlap.
+  const cl = [...scene.clusters.values()]
+  for (let i = 0; i < cl.length; i++) {
+    for (let j = i + 1; j < cl.length; j++) {
+      const d = Math.hypot(cl[i].x - cl[j].x, cl[i].y - cl[j].y)
+      assert.ok(d >= cl[i].r + cl[j].r, `halos of ${cl[i].identity} and ${cl[j].identity} overlap`)
+    }
+  }
+  assert.ok(CLOUD_GAP_X <= 48 && CLOUD_GAP_Y <= 44, 'grid gaps between halos')
+  // Row neighbours (3 columns: alpha, beta, delta): the cells are as wide as the widest halo of their column, so the gap
+  // between two halos of one row is at least CLOUD_GAP_X.
+  const byId = new Map([...scene.clusters.values()].map(c => [c.identity, c]))
+  const a = byId.get('alpha')!
+  const b = byId.get('beta')!
+  assert.ok(b.x - a.x - a.r - b.r >= CLOUD_GAP_X - 1e-6, `alpha-beta halo gap ${b.x - a.x - a.r - b.r}`)
 })
 
 test('fleet scene: pulses given to the scene reach the canvas state', () => {
