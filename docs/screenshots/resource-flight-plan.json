@@ -1,0 +1,73 @@
+{
+  "_note": "Fleet F2: a pulse leaves the session node that did the interaction (pulse-from-session) and a resource glides to its weighted place (glide-1-start: linked to copilot demo only; glide-2-mid: about 0.9 s after the link moved to unknown demo only; glide-3-after: settled). /api/fleet is faked inside the page (fetch override) with an invented board; the profiles are the fixtures' (sub-demo, copilot-demo, unknown-demo). Run: pnpm shot --task-id t_c7964d1a --scenario all --plan docs/screenshots/resource-flight-plan.json --viewports desktop",
+  "shots": [
+    {
+      "name": "pulse-from-session",
+      "viewports": [
+        "desktop"
+      ],
+      "steps": [
+        {
+          "click": "[data-testid=\"fleet-toggle\"]"
+        },
+        {
+          "wait": 1500
+        },
+        {
+          "eval": "(async () => { const mk = (evs) => ({ kanban: [{ id: 'kanban:flight-demo', type: 'kanban-board', slug: 'flight-demo', name: 'Flight Demo', description: '', archived: false, taskCounts: { running: 1, done: 3 }, totalTasks: 4, recentEvents: evs.map((e, i) => ({ id: e[2], taskId: 't_d' + (i + 1), taskTitle: 'Demo ' + (i + 1), assignee: e[0], kind: e[1], runId: null, at: e[2] })), lastEventAt: Math.max(...evs.map(e => e[2])) }], supermemory: [] }); const n0 = Date.now(); let data = mk([['sub-demo', 'completed', n0 - 30000], ['copilot-demo', 'completed', n0 - 40000]]); const orig = window.fetch.bind(window); let waiters = []; window.fetch = async (u, o) => { if (String(u).includes('/api/fleet')) { waiters.splice(0).forEach(f => f()); return new Response(JSON.stringify(data), { status: 200, headers: { 'content-type': 'application/json' } }) } return orig(u, o) }; const next = () => new Promise(r => waiters.push(r)); await next(); await new Promise(r => setTimeout(r, 1200)); const n = Date.now(); data = mk([['sub-demo', 'claimed', n], ['sub-demo', 'completed', n0 - 30000], ['copilot-demo', 'completed', n0 - 40000]]); await next(); await new Promise(r => setTimeout(r, 650)); })()"
+        }
+      ]
+    },
+    {
+      "name": "glide-1-start",
+      "viewports": [
+        "desktop"
+      ],
+      "steps": [
+        {
+          "click": "[data-testid=\"fleet-toggle\"]"
+        },
+        {
+          "wait": 1500
+        },
+        {
+          "eval": "(async () => { const mk = (evs) => ({ kanban: [{ id: 'kanban:flight-demo', type: 'kanban-board', slug: 'flight-demo', name: 'Flight Demo', description: '', archived: false, taskCounts: { running: 1, done: 3 }, totalTasks: 4, recentEvents: evs.map((e, i) => ({ id: e[2], taskId: 't_d' + (i + 1), taskTitle: 'Demo ' + (i + 1), assignee: e[0], kind: e[1], runId: null, at: e[2] })), lastEventAt: Math.max(...evs.map(e => e[2])) }], supermemory: [] }); let n = Date.now(); let data = mk([['copilot-demo', 'completed', n - 30000], ['copilot-demo', 'claimed', n - 31000], ['copilot-demo', 'completed', n - 32000]]); const orig = window.fetch.bind(window); let waiters = []; window.fetch = async (u, o) => { if (String(u).includes('/api/fleet')) { waiters.splice(0).forEach(f => f()); return new Response(JSON.stringify(data), { status: 200, headers: { 'content-type': 'application/json' } }) } return orig(u, o) }; const next = () => new Promise(r => waiters.push(r)); await next(); await new Promise(r => setTimeout(r, 2500));  })()"
+        }
+      ]
+    },
+    {
+      "name": "glide-2-mid",
+      "viewports": [
+        "desktop"
+      ],
+      "steps": [
+        {
+          "click": "[data-testid=\"fleet-toggle\"]"
+        },
+        {
+          "wait": 1500
+        },
+        {
+          "eval": "(async () => { const mk = (evs) => ({ kanban: [{ id: 'kanban:flight-demo', type: 'kanban-board', slug: 'flight-demo', name: 'Flight Demo', description: '', archived: false, taskCounts: { running: 1, done: 3 }, totalTasks: 4, recentEvents: evs.map((e, i) => ({ id: e[2], taskId: 't_d' + (i + 1), taskTitle: 'Demo ' + (i + 1), assignee: e[0], kind: e[1], runId: null, at: e[2] })), lastEventAt: Math.max(...evs.map(e => e[2])) }], supermemory: [] }); let n = Date.now(); let data = mk([['copilot-demo', 'completed', n - 30000], ['copilot-demo', 'claimed', n - 31000], ['copilot-demo', 'completed', n - 32000]]); const orig = window.fetch.bind(window); let waiters = []; window.fetch = async (u, o) => { if (String(u).includes('/api/fleet')) { waiters.splice(0).forEach(f => f()); return new Response(JSON.stringify(data), { status: 200, headers: { 'content-type': 'application/json' } }) } return orig(u, o) }; const next = () => new Promise(r => waiters.push(r)); await next(); await new Promise(r => setTimeout(r, 2500)); n = Date.now(); data = mk([['unknown-demo', 'completed', n - 30000], ['unknown-demo', 'claimed', n - 31000], ['unknown-demo', 'completed', n - 32000]]); await next(); await new Promise(r => setTimeout(r, 650)); })()"
+        }
+      ]
+    },
+    {
+      "name": "glide-3-after",
+      "viewports": [
+        "desktop"
+      ],
+      "steps": [
+        {
+          "click": "[data-testid=\"fleet-toggle\"]"
+        },
+        {
+          "wait": 1500
+        },
+        {
+          "eval": "(async () => { const mk = (evs) => ({ kanban: [{ id: 'kanban:flight-demo', type: 'kanban-board', slug: 'flight-demo', name: 'Flight Demo', description: '', archived: false, taskCounts: { running: 1, done: 3 }, totalTasks: 4, recentEvents: evs.map((e, i) => ({ id: e[2], taskId: 't_d' + (i + 1), taskTitle: 'Demo ' + (i + 1), assignee: e[0], kind: e[1], runId: null, at: e[2] })), lastEventAt: Math.max(...evs.map(e => e[2])) }], supermemory: [] }); let n = Date.now(); let data = mk([['copilot-demo', 'completed', n - 30000], ['copilot-demo', 'claimed', n - 31000], ['copilot-demo', 'completed', n - 32000]]); const orig = window.fetch.bind(window); let waiters = []; window.fetch = async (u, o) => { if (String(u).includes('/api/fleet')) { waiters.splice(0).forEach(f => f()); return new Response(JSON.stringify(data), { status: 200, headers: { 'content-type': 'application/json' } }) } return orig(u, o) }; const next = () => new Promise(r => waiters.push(r)); await next(); await new Promise(r => setTimeout(r, 2500)); n = Date.now(); data = mk([['unknown-demo', 'completed', n - 30000], ['unknown-demo', 'claimed', n - 31000], ['unknown-demo', 'completed', n - 32000]]); await next(); await new Promise(r => setTimeout(r, 4000)); })()"
+        }
+      ]
+    }
+  ]
+}
