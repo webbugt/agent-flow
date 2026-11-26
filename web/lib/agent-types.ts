@@ -3,6 +3,7 @@
 
 import type { PromptBucket } from './costs/tiers'
 import type { EnergyUsage } from './costs/types'
+import type { BlockLifeView } from './fleet/block-alpha'
 
 export type AgentState = 'idle' | 'thinking' | 'tool_calling' | 'complete' | 'error' | 'paused' | 'waiting_permission'
 
@@ -81,6 +82,8 @@ export interface Agent {
   /** Fleet map only: this node stands for a resource (a Kanban board or a Supermemory namespace),
    *  not an agent. `name` is its label and `task` its second line. */
   resourceKind?: 'kanban' | 'supermemory'
+  /** Fleet map, resource blocks: the block's life. The draw loop fades the node by it on the wall clock. */
+  block?: BlockLifeView
 }
 
 export interface MessageBubble {
@@ -189,6 +192,9 @@ export interface Edge {
   fromCloud?: boolean
   /** resource edges (fleet map): epoch ms of the last use. The link is drawn for a linger window after it, then fades out. */
   lastUsedAt?: number
+  /** resource edges (fleet map): linger and fade of the link in ms. Without them the fixed edge window applies. */
+  lingerMs?: number
+  fadeMs?: number
 }
 
 export interface Particle {

@@ -2,6 +2,7 @@ import { test } from 'node:test'
 import { strict as assert } from 'node:assert'
 import { buildFleetGraph, countByKind, profileKey } from './fleet-graph'
 import { instancesFromSessionEvents, type SessionEventLike, type SessionLike } from './fleet-model'
+import { defaultOptions, type AgentFlowOptions } from './options-registry'
 import type { PublicKanbanBoardNode } from './kanban-source'
 import type { SupermemoryNamespaceNode } from './supermemory-source'
 
@@ -45,7 +46,10 @@ const EVENTS: Record<string, SessionEventLike[]> = {
 }
 const instances = () => instancesFromSessionEvents(SESSIONS, id => EVENTS[id] ?? [])
 
-const KANBAN = [board('agent-flow', [['taxis', NOW - 2 * MIN], ['omh-coder', NOW - 5 * MIN]], 1), board('media', [['sophia', T0]])]
+// A board is drawn only while it is in use (kanban linger 90 s + fade 15 s): 'media' is late in its fade.
+const KANBAN = [board('agent-flow', [['taxis', NOW - 2 * MIN], ['omh-coder', NOW - 5 * MIN]], 1), board('media', [['sophia', NOW - 100_000]])]
+// 'agent-flow' last used 2 min ago: with the default 90 s linger + 15 s fade it is over, so most tests use a long linger.
+const LONG: AgentFlowOptions = { ...defaultOptions(), lingerSeconds: { ...defaultOptions().lingerSeconds, kanban: 3600 } }
 const MEMORY = [space('omh_family', { taxis: 4, 'omh-coder': 2 }), space('webbugt_video_memory', { sophia: 1 })]
 
 test('profileKey ignores case, dashes and spaces; default is Hermes', () => {
@@ -55,7 +59,7 @@ test('profileKey ignores case, dashes and spaces; default is Hermes', () => {
 })
 
 const graph = (over: Partial<Parameters<typeof buildFleetGraph>[0]> = {}) =>
-  buildFleetGraph({ instances: instances(), kanban: KANBAN, supermemory: MEMORY, selection: all, now: NOW, ...over })
+  buildFleetGraph({ instances: instances(), kanban: KANBAN, supermemory: MEMORY, selection: all, now: NOW, options: LONG, ...over })
 
 test('agent clouds: one cloud per profile, one node per session, no hub and no session-to-session links', () => {
   const g = graph()
@@ -85,7 +89,7 @@ test('resources link to the clouds that use them; every edge stores lastUsedAt a
   const edge = (id: string) => g.edges.find(e => e.id === id)!
   assert.equal(edge('cloud:taxis>kanban:agent-flow').lastUsedAt, NOW - 2 * MIN)
   assert.equal(edge('cloud:omh coder>kanban:agent-flow').lastUsedAt, NOW - 5 * MIN)
-  assert.equal(edge('cloud:sophia>kanban:media').lastUsedAt, T0, 'an old link keeps its old time (it is not "active", it is just old)')
+  assert.equal(edge('cloud:sophia>kanban:media').lastUsedAt, NOW - 100_000, 'an old link keeps its old time (it is not "active", it is just old)')
   assert.equal(edge('cloud:taxis>supermemory:omh_family').weight, 4, 'weight = event count')
   assert.equal(edge('cloud:taxis>supermemory:omh_family').lastUsedAt, NOW - MIN)
   assert.ok(g.edges.every(e => Number.isFinite(e.lastUsedAt) && e.events.length > 0))
@@ -143,7 +147,8 @@ test('uncapped sessions: a profile with many sessions shows every one, running f
 test('uncapped resources: many boards and namespaces are all kept; archived and never-used boards stay off', () => {
   const archived = { ...board('old', [['taxis', NOW]]), archived: true } as PublicKanbanBoardNode
   const blank = { ...board('blank', []), totalTasks: 0 } as PublicKanbanBoardNode
-  const boards = Array.from({ length: 30 }, (_, i) => ({ ...board(`b${i}`, i % 2 ? [['taxis', NOW - i * MIN]] : []), totalTasks: 5 }) as PublicKanbanBoardNode)
+  // Every board has a fresh event (a board without one is not in use and is not drawn).
+  const boards = Array.from({ length: 30 }, (_, i) => ({ ...board(`b${i}`, i % 2 ? [['taxis', NOW - i * 1000]] : [['ghost', NOW - i * 1000]]), totalTasks: 5 }) as PublicKanbanBoardNode)
   const spaces = Array.from({ length: 25 }, (_, i) => space(`ns${i}`, i % 2 ? { taxis: 1 } : {}))
   const g = buildFleetGraph({ instances: instances(), selection: all, now: NOW, kanban: [archived, blank, ...boards], supermemory: spaces })
   const ids = g.nodes.filter(n => n.kind === 'kanban').map(n => n.id)

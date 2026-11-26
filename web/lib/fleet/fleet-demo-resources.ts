@@ -45,7 +45,8 @@ export function createDemoResources(now: number): FleetSources {
     kanban: [
       board('agent-flow', 'Agent Flow', now, [['taxis', 'claimed', 25], ['hestia', 'completed', 70], ['taxis', 'completed', 600], ['sophia', 'claimed', 900]], 8),
       board('media', 'Media', now, [['sophia', 'completed', 1800]], 4),
-      board('backlog', 'Backlog', now, [], 5),
+      // A board is only drawn while it is in use, so the unlinked one has a recent event by an actor that is no cloud.
+      board('backlog', 'Backlog', now, [['dispatcher', 'created', 40]], 5),
     ],
     supermemory: [
       space('omh_family', now, [['taxis', 'search', 40], ['sophia', 'store', 130], ['hestia', 'search', 300], ['taxis', 'store', 900]]),

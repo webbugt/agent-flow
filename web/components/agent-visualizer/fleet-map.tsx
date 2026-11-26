@@ -8,6 +8,8 @@ import type { PublicKanbanBoardNode } from "@/lib/fleet/kanban-source"
 import type { SupermemoryNamespaceNode } from "@/lib/fleet/supermemory-source"
 import { buildFleetGraph, EMPTY_GRAPH } from "@/lib/fleet/fleet-graph"
 import { inspectResource } from "@/lib/fleet/fleet-inspect"
+import { EMPTY_PINS, togglePin, type PinSet } from "@/lib/fleet/resource-block"
+import { useOptions } from "@/hooks/use-options"
 import { useFleetScene } from "@/hooks/use-fleet-scene"
 import { openTargetOf, type FleetReplay } from "@/hooks/simulation/fleet-scene"
 import { BUTTON_ZOOM_STEP, shouldRefit, type FitBasis } from "@/lib/fleet/fleet-camera"
@@ -99,9 +101,13 @@ export function FleetMap({
   const freeH = Math.max(size.height - top - bottom, 1)
 
   // Resources and their links to the agents (which boards/namespaces are shown, who uses them).
+  // Kanban boards are resource blocks: they appear on a task event, live for the kanban linger of the options
+  // (live: an edit in the options panel applies at once) and fade; a pinned block stays.
+  const options = useOptions()
+  const [pins, setPins] = useState<PinSet>(EMPTY_PINS)
   const graph = useMemo(
-    () => visible ? buildFleetGraph({ instances, kanban, supermemory, selection, now }) : EMPTY_GRAPH,
-    [visible, instances, kanban, supermemory, selection, now],
+    () => visible ? buildFleetGraph({ instances, kanban, supermemory, selection, now, options, pins }) : EMPTY_GRAPH,
+    [visible, instances, kanban, supermemory, selection, now, options, pins],
   )
   // Clusters per row follow the free area's shape, so a phone gets a tall column, a desktop a wide grid.
   const columns = useMemo(
@@ -231,6 +237,8 @@ export function FleetMap({
       </div>
       {inspection && (
         <FleetInspector inspection={inspection} now={now} top={top} right={insetRight} narrow={narrow}
+          pinned={inspection.kind === 'kanban' && pins.has(inspection.id)}
+          onTogglePin={inspection.kind === 'kanban' ? () => setPins(p => togglePin(p, inspection.id)) : undefined}
           onClose={() => { setInspectId(null); setSelectedId(null) }} />
       )}
       {onToggleTimeline && (

@@ -3,6 +3,7 @@
 import { COLORS } from "@/lib/colors"
 import { ageLabel, type FleetInspection } from "@/lib/fleet/fleet-inspect"
 import { KANBAN_COLOR, SUPERMEMORY_COLOR } from "@/lib/fleet/fleet-colors"
+import { kanbanCountsLine } from "@/lib/fleet/kanban-blocks"
 
 interface FleetInspectorProps {
   inspection: FleetInspection
@@ -12,13 +13,16 @@ interface FleetInspectorProps {
   right: number
   top: number
   narrow: boolean
+  /** Kanban blocks: whether the block is pinned (kept on the map past its linger) and the toggle. */
+  pinned?: boolean
+  onTogglePin?: () => void
 }
 
 /** Space under the top bar that the session summary card (top left) takes, px: the panel starts below it. */
 const SESSION_CARD_CLEARANCE = 52
 
 /** Read-only list of the latest interactions of a Kanban board or Supermemory namespace. */
-export function FleetInspector({ inspection, now, onClose, right, top, narrow }: FleetInspectorProps) {
+export function FleetInspector({ inspection, now, onClose, right, top, narrow, pinned = false, onTogglePin }: FleetInspectorProps) {
   const color = inspection.kind === 'kanban' ? KANBAN_COLOR : SUPERMEMORY_COLOR
   return (
     <div
@@ -42,10 +46,32 @@ export function FleetInspector({ inspection, now, onClose, right, top, narrow }:
         <span style={{ color }}>
           {inspection.kind === 'kanban' ? 'Kanban' : 'Memory'} · {inspection.title}
         </span>
-        <button type="button" aria-label="Close inspector" data-testid="fleet-inspector-close" onClick={onClose} style={{ color: COLORS.textMuted }}>
-          ✕
-        </button>
+        <span className="flex items-center gap-3">
+          {onTogglePin && (
+            <button
+              type="button"
+              data-testid="fleet-inspector-pin"
+              aria-pressed={pinned}
+              title={pinned ? 'Unpin: the block fades after its linger again' : 'Pin: keep this block on the map'}
+              onClick={onTogglePin}
+              style={{ color: pinned ? color : COLORS.textMuted }}
+            >
+              {pinned ? 'Pinned' : 'Pin'}
+            </button>
+          )}
+          <button type="button" aria-label="Close inspector" data-testid="fleet-inspector-close" onClick={onClose} style={{ color: COLORS.textMuted }}>
+            ✕
+          </button>
+        </span>
       </div>
+      {inspection.block && (
+        <div data-testid="fleet-inspector-block" className="px-3 py-1" style={{ borderBottom: `1px solid ${color}22`, color: COLORS.textMuted }}>
+          <div data-testid="fleet-inspector-counts">{kanbanCountsLine(inspection.block)}</div>
+          {inspection.block.kinds.length > 0 && (
+            <div data-testid="fleet-inspector-kinds">{inspection.block.kinds.map(([k, n]) => `${k} ×${n}`).join(' · ')}</div>
+          )}
+        </div>
+      )}
       <div className="overflow-y-auto px-3 py-1" style={{ minHeight: 0 }}>
         {inspection.items.length === 0 && <div className="py-2" style={{ color: COLORS.textMuted }}>No interactions recorded yet.</div>}
         {inspection.items.map((item, i) => (

@@ -9,7 +9,9 @@
  *     A cloud is NOT a node: it only groups its session nodes (soft halo and caption on the map).
  *     There is no hub node and no link between sessions of one profile.
  *   - Sessions: one node per session (agent node) of a profile. Nothing is capped.
- *   - Resources: one node per Kanban board and one per Supermemory namespace.
+ *   - Resources: one node per Kanban board that is in use (a Kanban resource block, see kanban-blocks.ts:
+ *     it appears on a task event, lives for the `kanban` linger of the options, then fades; a pin keeps it)
+ *     and one per Supermemory namespace.
  *   - Links: cloud -> Kanban board when the board's recent events name the profile as assignee;
  *     cloud -> Supermemory namespace when the namespace has events by that profile. Every link
  *     stores `lastUsedAt` (see fleet-edge-life.ts for when it is drawn).
@@ -23,6 +25,13 @@ import {
   type FleetInstance, type FleetInstanceStatus, type FleetSelectionView,
 } from './fleet-model'
 import { KANBAN_COLOR, SUPERMEMORY_COLOR } from './fleet-colors'
+import { defaultOptions, type AgentFlowOptions } from './options-registry'
+import { EMPTY_PINS, resolveLife, type BlockLife, type PinSet } from './resource-block'
+import {
+  buildKanbanBlocks, isKanbanBoardShown, kanbanBlockId, kanbanBlockInfo, kanbanCountsLine, kanbanLifeView,
+  type KanbanBlockInfo,
+} from './kanban-blocks'
+import type { BlockLifeView } from './block-alpha'
 export { KANBAN_COLOR, SUPERMEMORY_COLOR }
 
 export type FleetNodeKind = 'session' | 'kanban' | 'supermemory'
@@ -39,6 +48,10 @@ export interface FleetGraphNode {
   openId?: string
   /** Session nodes: id of the cloud (profile) they belong to. */
   cloudId?: string
+  /** Kanban nodes (resource blocks): board slug, counts and event kinds only. */
+  block?: KanbanBlockInfo
+  /** Kanban nodes: the block's life (last use, linger, fade, pin), so the draw loop fades it on the wall clock. */
+  life?: BlockLifeView
 }
 
 /** The sessions of one profile, drawn as a blob with a halo and the profile name. Not a node. */
@@ -81,6 +94,8 @@ export interface FleetGraphEdge {
   weight: number
   /** The latest interactions behind the link, newest first (what a pulse is made of). */
   events: FleetEdgeEvent[]
+  /** Kanban links follow the `kanban` linger and fade of the options. Without it: the fixed edge window. */
+  life?: BlockLife
 }
 
 export interface FleetGraph {
@@ -125,6 +140,10 @@ export interface FleetGraphInput {
   selection: FleetSelectionView
   /** Epoch ms, to judge whether a resource is in use. */
   now: number
+  /** Linger, fade and show/hide per block kind. Default: the registry defaults. */
+  options?: AgentFlowOptions
+  /** Ids of pinned blocks (`kanban:<slug>`); a pinned block stays visible. Default: none. */
+  pins?: PinSet
 }
 
 function newestFirst(a: FleetEdgeEvent, b: FleetEdgeEvent): number {
@@ -133,6 +152,10 @@ function newestFirst(a: FleetEdgeEvent, b: FleetEdgeEvent): number {
 
 export function buildFleetGraph(input: FleetGraphInput): FleetGraph {
   const { selection: sel, now } = input
+  const options = input.options ?? defaultOptions()
+  const pins = input.pins ?? EMPTY_PINS
+  const kanbanLife = resolveLife('kanban', options)
+  const blocks = buildKanbanBlocks(input.kanban)
   const nodes: FleetGraphNode[] = []
   const clouds: FleetCloud[] = []
   const edges = new Map<string, FleetGraphEdge>()
@@ -140,7 +163,7 @@ export function buildFleetGraph(input: FleetGraphInput): FleetGraph {
   const cloudByKey = new Map<string, FleetCloud>()
 
   /** One link per (cloud, resource); uses by several names of the same profile merge into it. */
-  const addUse = (cloud: FleetCloud, to: string, kind: FleetEdgeKind, weight: number, lastUsedAt: number, events: FleetEdgeEvent[]) => {
+  const addUse = (cloud: FleetCloud, to: string, kind: FleetEdgeKind, weight: number, lastUsedAt: number, events: FleetEdgeEvent[], life?: BlockLife) => {
     const id = `${cloud.id}>${to}`
     const prev = edges.get(id)
     if (prev) {
@@ -148,7 +171,7 @@ export function buildFleetGraph(input: FleetGraphInput): FleetGraph {
       prev.lastUsedAt = Math.max(prev.lastUsedAt, lastUsedAt)
       prev.events = [...prev.events, ...events].sort(newestFirst)
     } else {
-      edges.set(id, { id, from: cloud.id, to, kind, lastUsedAt, weight, events: [...events].sort(newestFirst) })
+      edges.set(id, { id, from: cloud.id, to, kind, lastUsedAt, weight, events: [...events].sort(newestFirst), ...(life ? { life } : {}) })
     }
   }
 
@@ -175,14 +198,18 @@ export function buildFleetGraph(input: FleetGraphInput): FleetGraph {
 
   for (const board of input.kanban ?? []) {
     if (!sel.isSelected(board.id)) continue
-    // Archived or never-used boards are noise on the map (the timeline panel still lists them).
-    if (board.archived || (board.totalTasks === 0 && board.recentEvents.length === 0)) continue
+    // Archived boards are noise on the map (the timeline panel still lists them).
+    if (board.archived) continue
+    // A board is a resource block: drawn only while it is in use (a task event within linger + fade of the
+    // kanban kind), unless pinned, and only while the kanban kind is switched on for the fleet view.
+    if (!isKanbanBoardShown(board, blocks, now, options, pins)) continue
     const running = board.taskCounts.running ?? 0
-    const blocked = board.taskCounts.blocked ?? 0
+    const info = kanbanBlockInfo(board)
+    const block = blocks.get(kanbanBlockId(board.slug))!
     nodes.push({
-      id: board.id, kind: 'kanban', label: board.name || board.slug,
-      sublabel: `${board.totalTasks} tasks${running ? ` · ${running} run` : ''}${blocked ? ` · ${blocked} blk` : ''}`,
+      id: board.id, kind: 'kanban', label: board.slug, sublabel: kanbanCountsLine(info),
       color: KANBAN_COLOR, status: running > 0 ? 'active' : 'idle',
+      block: info, life: kanbanLifeView(block, options, pins),
     })
     // Who uses the board: assignees of its recent events.
     const used = new Map<string, FleetEdgeEvent[]>()
@@ -196,7 +223,7 @@ export function buildFleetGraph(input: FleetGraphInput): FleetGraph {
     for (const [key, events] of used) {
       const cloud = cloudByKey.get(key)
       if (!cloud) continue
-      addUse(cloud, board.id, 'kanban', events.length, Math.max(...events.map(e => e.at)), events)
+      addUse(cloud, board.id, 'kanban', events.length, Math.max(...events.map(e => e.at)), events, kanbanLife)
     }
   }
 

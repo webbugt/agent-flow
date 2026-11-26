@@ -7,6 +7,7 @@ import { alphaHex, formatTokens } from '@/lib/utils'
 import { truncateText, drawHexagon, CLAUDE_SPARK_D, OPENAI_LOGO_D, OPENAI_LOGO_VIEWBOX } from './draw-misc'
 import { getAgentGlowSprite } from './render-cache'
 import { KANBAN_COLOR, SUPERMEMORY_COLOR } from '@/lib/fleet/fleet-colors'
+import { blockViewAlpha } from '@/lib/fleet/block-alpha'
 
 let _claudeSparkPath: Path2D | null = null
 export function getClaudeSparkPath() {
@@ -333,6 +334,21 @@ function drawStatsOverlay(ctx: CanvasRenderingContext2D, agent: Agent, r: number
   ctx.fillText(`${agent.toolCalls} tools \u00B7 ${agent.timeAlive.toFixed(1)}s`, agent.x, sy + STATS_OVERLAY.textPaddingY)
 }
 
+/** A small filled dot with a ring on the corner of a pinned resource block. */
+function drawPinMark(ctx: CanvasRenderingContext2D, x: number, y: number, color: string) {
+  ctx.beginPath()
+  ctx.arc(x, y, 5, 0, Math.PI * 2)
+  ctx.fillStyle = COLORS.nodeInterior
+  ctx.fill()
+  ctx.strokeStyle = color
+  ctx.lineWidth = 1.5
+  ctx.stroke()
+  ctx.beginPath()
+  ctx.arc(x, y, 2.2, 0, Math.PI * 2)
+  ctx.fillStyle = color
+  ctx.fill()
+}
+
 /**
  * Fleet map: a resource node (Kanban board = rounded square, Supermemory namespace = diamond),
  * in the same holographic style as the agent hexagons: glow sprite, dark interior, ring, label.
@@ -340,6 +356,7 @@ function drawStatsOverlay(ctx: CanvasRenderingContext2D, agent: Agent, r: number
 function drawResourceNode(ctx: CanvasRenderingContext2D, agent: Agent, isHovered: boolean, isSelected: boolean, time: number, drawLabels: boolean) {
   const color = agent.resourceKind === 'kanban' ? KANBAN_COLOR : SUPERMEMORY_COLOR
   const r = NODE.radiusSub
+  if (agent.block?.pinned) drawPinMark(ctx, agent.x + r * 0.95, agent.y - r * 0.95, color)
   const active = agent.state !== 'idle' && agent.state !== 'complete'
   const glowR = r + AGENT_DRAW.glowPadding
   const glowAlpha = isHovered || isSelected ? 0.35 : active ? 0.2 : 0.1
@@ -389,11 +406,15 @@ export function drawAgents(
   time: number,
   /** False on the fleet map: its labels are drawn afterwards by drawFleetLabels (sized for the screen). */
   drawLabels = true,
+  /** Wall clock (epoch ms): a resource block fades by its own linger/fade, not by the animation time. */
+  wallNow = Date.now(),
 ) {
   for (const [id, agent] of agents) {
     if (agent.resourceKind) {
+      const life = agent.block ? blockViewAlpha(agent.block, wallNow) : 1
+      if (life <= 0) continue
       ctx.save()
-      ctx.globalAlpha = agent.opacity
+      ctx.globalAlpha = agent.opacity * life
       drawResourceNode(ctx, agent, id === hoveredAgentId, id === selectedAgentId, time, drawLabels)
       ctx.restore()
       continue

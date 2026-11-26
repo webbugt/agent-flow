@@ -225,6 +225,7 @@ function resourceAgent(node: FleetGraph['nodes'][number], x: number, y: number):
     toolCalls: 0, timeAlive: 0, x, y, vx: 0, vy: 0, pinned: true, isMain: false,
     task: node.sublabel, spawnTime: 0, opacity: 1, scale: 1, messageBubbles: [],
     resourceKind: node.kind === 'kanban' ? 'kanban' : 'supermemory',
+    ...(node.life ? { block: node.life } : {}),
   }
 }
 
@@ -345,6 +346,7 @@ export function buildFleetScene(input: FleetSceneInput): FleetScene {
     if (!centers.has(e.from) || !agents.has(e.to)) continue
     edges.push({
       id: e.id, from: e.from, to: e.to, type: 'resource', opacity: 1, fromCloud: true, lastUsedAt: e.lastUsedAt,
+      ...(e.life ? { lingerMs: e.life.lingerMs, fadeMs: e.life.fadeMs } : {}),
       color: e.kind === 'kanban' ? KANBAN_COLOR : SUPERMEMORY_COLOR,
     })
   }
