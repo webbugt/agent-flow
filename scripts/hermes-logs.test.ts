@@ -471,6 +471,9 @@ test('a profile that was live and then finished is not idle (it stays a normal c
   const s = w.getActiveSessions().find(x => x.id === 'hermes-taxis')!
   assert.equal(s.status, 'completed')
   assert.equal(s.idle, undefined)
+  // The quiet-timeout completion is marked, so the fleet activity filter does not count it as an event.
+  const quiet = c.events.filter(e => e.event.type === 'agent_complete' && e.event.payload.reason === 'quiet')
+  assert.equal(quiet.length, 1)
 })
 
 // ─── P2: provider, latency and prompt-size buckets through the watcher ──────

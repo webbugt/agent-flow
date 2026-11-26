@@ -36,6 +36,13 @@ export interface FleetInstance {
   endTime?: number
   status: FleetInstanceStatus
   markers: FleetMarker[]
+  /**
+   * Epoch ms of the newest event seen for this instance (tool call, message, spawn, completion).
+   * `agent_idle` and the quiet-timeout completion do not count. When present it decides on its own
+   * (endTime is then not an activity time: it may be a quiet timeout). Absent: derive it from
+   * startTime, endTime and markers (see fleet-activity-filter).
+   */
+  lastEventAt?: number
 }
 
 export interface FleetGroup {
@@ -131,6 +138,7 @@ export function instancesFromSessions(sessions: readonly SessionLike[]): FleetIn
     endTime: s.status === 'completed' ? s.lastActivityTime : undefined,
     status: s.idle ? 'idle' : s.status,
     markers: [],
+    lastEventAt: s.lastActivityTime,
   }))
 }
 
@@ -166,13 +174,40 @@ interface NodeDraft {
   idle?: boolean
   model?: string
   markers: FleetMarker[]
+  /** Epoch ms of the newest event that names this node (not `agent_idle`: that is the absence of activity). */
+  lastEventAt?: number
+}
+
+/** Events that count as activity of a node, for the latest-activity filter. */
+const ACTIVITY_EVENT_TYPES: ReadonlySet<string> = new Set([
+  'agent_spawn', 'agent_complete', 'tool_call_start', 'tool_call_end', 'message', 'permission_requested',
+])
+
+/**
+ * Does this event show that the node did something? `agent_idle` and the relay's quiet-timeout
+ * completion (`agent_complete` with `reason: 'quiet'`) mark the ABSENCE of activity and do not count;
+ * a real completion (subagent finished, history restored) does.
+ */
+export function countsAsActivity(type: string, payload?: Record<string, unknown>): boolean {
+  if (!ACTIVITY_EVENT_TYPES.has(type)) return false
+  return !(type === 'agent_complete' && payload?.reason === 'quiet')
 }
 
 /** Agent nodes of one session, rebuilt from its buffered events. Only nodes with an epoch time base (`startedAt`) can be placed. */
 function nodesFromEvents(sessionId: string, events: readonly SessionEventLike[]): NodeDraft[] {
   const nodes = new Map<string, NodeDraft>()
+  /** Record the event as the node's newest activity (the node's time base is set by its spawn). */
+  const touch = (node: NodeDraft | undefined, e: SessionEventLike) => {
+    if (!node || !countsAsActivity(e.type, e.payload) || typeof e.time !== 'number') return
+    const at = node.base + e.time * 1000
+    if (Number.isFinite(at) && (node.lastEventAt === undefined || at > node.lastEventAt)) node.lastEventAt = at
+  }
   for (const e of events) {
     const p = e.payload ?? {}
+    if (e.type !== 'agent_spawn') {
+      const ref = typeof p.agent === 'string' ? p.agent : typeof p.name === 'string' ? p.name : undefined
+      touch(ref === undefined ? undefined : nodes.get(ref), e)
+    }
     if (e.type === 'agent_spawn') {
       if (p.isMain === true || typeof p.name !== 'string' || typeof p.startedAt !== 'number') continue
       let node = nodes.get(p.name)
@@ -186,6 +221,7 @@ function nodesFromEvents(sessionId: string, events: readonly SessionEventLike[])
         nodes.set(p.name, node)
       }
       if (typeof p.model === 'string') node.model = p.model
+      touch(node, e)
     } else if (e.type === 'agent_complete') {
       const node = typeof p.name === 'string' ? nodes.get(p.name) : undefined
       if (node) {
@@ -241,6 +277,7 @@ export function instancesFromSessionEvents(
         endTime: n.end,
         status: n.idle ? 'idle' : n.end === undefined ? 'active' : 'completed',
         markers: n.markers.slice(-MAX_MARKERS_PER_INSTANCE),
+        lastEventAt: n.lastEventAt,
       })
     }
   }
