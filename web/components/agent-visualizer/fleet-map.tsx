@@ -53,6 +53,8 @@ const NARROW_WIDTH = 720
 const noop = () => {}
 /** Touch-friendly: at least 36 px on a phone. */
 const ZOOM_BUTTON_PX = 40
+/** Top edge of the activity filter: 8 px below the free area, and never above 8 px under the top bar's published bottom edge. */
+const ACTIVITY_FILTER_TOP = (mapTop: number): string => `max(${mapTop + 8}px, calc(var(--af-top-bar-bottom, 0px) + 8px))`
 
 /**
  * The Fleet node map. It draws with the same canvas as the single-session view: every agent
@@ -250,7 +252,8 @@ export function FleetMap({
         <div
           data-testid="fleet-activity-filter"
           className="absolute flex flex-col items-end gap-1 font-mono text-xs"
-          style={{ right: insetRight + 12, top: top + 8, zIndex: 6, maxWidth: 'calc(100% - 24px)' }}
+          // Under the top bar, wherever it really ends (the bar publishes --af-top-bar-bottom; it is taller than insetTop and wraps on a phone).
+          style={{ right: insetRight + 12, top: ACTIVITY_FILTER_TOP(top), zIndex: 6, maxWidth: 'calc(100% - 24px)' }}
         >
           <select
             data-testid="fleet-activity-select"

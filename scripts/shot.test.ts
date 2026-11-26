@@ -278,3 +278,10 @@ test('F-I mixes billing kinds in one session: the main agent reports usage, the 
   assert.equal(configFixtureText('raw {'), 'raw {', 'a string fixture is written as is')
   assert.equal(configFixtureText({ a: 1 }), '{\n  "a": 1\n}\n')
 })
+
+test('the screensaver plan checks the fleet activity filter does not overlap the top bar controls', () => {
+  const shot = BUILTIN_PLANS.screensaver.shots.find(s => s.name === 'fleet-normal-view')!
+  const evals = (shot.steps ?? []).flatMap(s => ('eval' in s ? [s.eval] : []))
+  assert.ok(evals.some(e => e.includes('fleet-activity-filter') && e.includes('top-bar') && e.includes('getBoundingClientRect')), 'rect-overlap assert on the filter and the top bar buttons')
+  assert.deepEqual(shot.viewports, ['desktop', 'phone'])
+})

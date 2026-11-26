@@ -279,6 +279,30 @@ const SCREENSAVER_ASSERT_UI_SHOWN = `(() => {
   return true
 })()`
 
+/**
+ * Fleet view layout: the activity filter (fleet-map) must not overlap any control of the top bar (it used to cover the
+ * lower half of Fleet / Screensaver / mute). Compares the bounding rects of the filter and of every interactive element
+ * in the bar; touching edges do not count as an overlap.
+ */
+const FLEET_ASSERT_FILTER_CLEAR_OF_TOP_BAR = `(() => {
+  const filter = document.querySelector('[data-testid="fleet-activity-filter"]')
+  if (!filter) throw new Error('the activity filter is not shown in the fleet view')
+  const bar = document.querySelector('[data-testid="top-bar"]')
+  if (!bar) throw new Error('the top bar is not shown')
+  const f = filter.getBoundingClientRect()
+  if (f.width <= 0 || f.height <= 0) throw new Error('the activity filter has no size')
+  const hit = []
+  for (const el of bar.querySelectorAll('button, a[href], select, input, [role="button"], [role="tab"]')) {
+    const r = el.getBoundingClientRect()
+    if (r.width <= 0 || r.height <= 0) continue
+    if (f.left < r.right && f.right > r.left && f.top < r.bottom && f.bottom > r.top) {
+      hit.push((el.getAttribute('data-testid') || el.getAttribute('aria-label') || (el.textContent || '').trim().slice(0, 20) || el.tagName.toLowerCase()) + ' [' + [r.left, r.top, r.right, r.bottom].map(Math.round).join(',') + ']')
+    }
+  }
+  if (hit.length) throw new Error('the activity filter [' + [f.left, f.top, f.right, f.bottom].map(Math.round).join(',') + '] overlaps top bar controls: ' + hit.join(' | '))
+  return true
+})()`
+
 /** After leaving the screensaver by clicking ON a node: the node must not have been selected or inspected, and the fleet map is still the view. */
 const SCREENSAVER_ASSERT_NO_SELECTION = `(() => {
   const found = []
@@ -363,7 +387,7 @@ export const BUILTIN_PLANS: Record<string, ShotPlan> = {
   // starts with the screensaver off (the harness clears the stored choice once per page), so shots do not depend on each other.
   screensaver: {
     shots: [
-      { name: 'fleet-normal-view', viewports: ['desktop', 'phone'], steps: [{ click: '[data-testid="fleet-toggle"]' }, { wait: 1500 }, { eval: SCREENSAVER_ASSERT_UI_SHOWN }] },
+      { name: 'fleet-normal-view', viewports: ['desktop', 'phone'], steps: [{ click: '[data-testid="fleet-toggle"]' }, { wait: 1500 }, { eval: SCREENSAVER_ASSERT_UI_SHOWN }, { eval: FLEET_ASSERT_FILTER_CLEAR_OF_TOP_BAR }] },
       { name: 'screensaver-key-s', viewports: ['desktop', 'phone'], steps: [{ click: '[data-testid="fleet-toggle"]' }, { wait: 1500 }, { key: 's' }, { wait: 800 }, { eval: SCREENSAVER_ASSERT_NO_UI }] },
       { name: 'screensaver-button', viewports: ['desktop', 'phone'], steps: [{ click: '[data-testid="fleet-toggle"]' }, { wait: 1500 }, { click: '[data-testid="screensaver-toggle"]' }, { wait: 800 }, { eval: SCREENSAVER_ASSERT_NO_UI }] },
       { name: 'screensaver-exit-by-key', viewports: ['desktop'], steps: [{ click: '[data-testid="fleet-toggle"]' }, { wait: 1500 }, { key: 's' }, { wait: 600 }, { eval: SCREENSAVER_ASSERT_NO_UI }, { key: 'x' }, { wait: 600 }, { eval: SCREENSAVER_ASSERT_UI_SHOWN }] },
