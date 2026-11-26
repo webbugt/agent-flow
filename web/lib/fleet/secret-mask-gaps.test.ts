@@ -120,6 +120,57 @@ test('gap 5: prefix-like words that are not at the cut are not masked', () => {
   ])
 })
 
+test('rework: any whitespace run, a tab, or a backslash line continuation before -p / -a is masked', () => {
+  const forms: Array<[string, string]> = [
+    ['double space', '  '],
+    ['many spaces', '     '],
+    ['tab', '\t'],
+    ['tab and space', ' \t '],
+    ['backslash newline indent', ' \\\n  '],
+    ['backslash CRLF tab', ' \\\r\n\t'],
+    ['bare newline', '\n'],
+  ]
+  for (const [name, gap] of forms) {
+    let out = assertMasked(`docker login -u bob${gap}-p FAKE_123 registry.example.com`, ['FAKE_123'])
+    assert.match(out, /registry\.example\.com$/, `docker ${name}: the registry stays`)
+    assertMasked(`docker login -u bob${gap}-p "FAKE 123" registry.example.com`, ['FAKE 123'])
+    assertMasked(`sshpass${gap}-p FAKE_123 ssh bob@host.example.com uptime`, ['FAKE_123'])
+    assertMasked(`sshpass -v${gap}-p FAKE_123 ssh bob@host.example.com`, ['FAKE_123'])
+    out = assertMasked(`redis-cli -h cache.example.com${gap}-a FAKE_123 ping`, ['FAKE_123'])
+    assert.match(out, / ping$/, `redis ${name}: the command stays`)
+    assertMasked(`redis-cli${gap}-a FAKE_123 ping`, ['FAKE_123'])
+  }
+})
+
+test('rework: sshpass keeps the ssh port after its password, and docker run / redis -p stay, in every whitespace form', () => {
+  for (const gap of ['  ', '\t', ' \\\n  ']) {
+    const out = assertMasked(`sshpass${gap}-p FAKE_123${gap}ssh${gap}-p 2222 bob@host`, ['FAKE_123'])
+    assert.ok(out.includes('-p 2222'), `ssh port stays: ${out}`)
+  }
+  assertUnchanged([
+    'sshpass  -e ssh  -p 2222 bob@host',
+    'docker  run  -p 8080:80 img',
+    'docker run \\\n  -p 8080:80 img',
+    'redis-cli  -h cache.example.com  -p 6379 ping',
+  ])
+})
+
+test('rework: REDISCLI_AUTH and MYSQL_PWD are masked; SSH_AUTH_SOCK, PWD, OLDPWD and AUTHOR are not', () => {
+  let out = assertMasked('REDISCLI_AUTH=FAKE_123 redis-cli ping', ['FAKE_123'])
+  assert.match(out, /^REDISCLI_AUTH=\[MASKED\] redis-cli ping$/)
+  out = assertMasked('MYSQL_PWD=FAKE_123 mysql -u root db', ['FAKE_123'])
+  assert.match(out, /^MYSQL_PWD=\[MASKED\] mysql -u root db$/)
+  assertMasked('export MYSQL_PWD="FAKE 123" && mysqldump db', ['FAKE 123'])
+  assertMasked('docker run -e REDISCLI_AUTH=FAKE_123 redis', ['FAKE_123'])
+  assertUnchanged([
+    'SSH_AUTH_SOCK=/tmp/ssh-XXXX/agent.1 ssh host',
+    'export SSH_AUTH_SOCK=/run/user/1000/keyring/ssh',
+    'PWD=/home/idv ls',
+    'OLDPWD=/tmp ls',
+    'AUTHOR=bob git log',
+  ])
+})
+
 test('looksSecret sees every new form (so a command head containing one is rejected)', () => {
   for (const t of [
     'DB_PASS=FAKE_123 run',
@@ -143,6 +194,10 @@ test('new rules stay linear on hostile input', () => {
     `${'sk-'.repeat(50_000)}`,
     `ghp_${' '.repeat(200_000)}x`,
     `${'xox '.repeat(50_000)}`,
+    `docker login -u bob${' '.repeat(200_000)}x`,
+    `sshpass${' \\\n'.repeat(100_000)}x`,
+    `redis-cli${'\t'.repeat(200_000)}-b`,
+    `docker login ${'a  '.repeat(60_000)}`,
   ]
   const t0 = Date.now()
   for (const input of inputs) maskSecrets(input)

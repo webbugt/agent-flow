@@ -26,8 +26,11 @@ const NAME_KV =
 /** A value: a double-quoted string, a single-quoted string, or a run without spaces and shell separators. */
 const VALUE = `"[^"]*"|'[^']*'|[^\\s"';|&)]+`
 
-/** The `_`-separated name parts that mark an uppercase environment variable as a secret. */
-const ENV_SECRET_PART = '(?:PASSWORD|PASSWD|PASS|SECRET|TOKEN|KEY)'
+/**
+ * The `_`-separated name parts that mark an uppercase environment variable as a secret, plus two exact names whose
+ * parts are too common alone (`AUTH` is in SSH_AUTH_SOCK, `PWD` is the working directory).
+ */
+const ENV_SECRET_PART = '(?:PASSWORD|PASSWD|PASS|SECRET|TOKEN|KEY|REDISCLI_AUTH|MYSQL_PWD)'
 
 /**
  * Known token prefixes with whatever tail is left of them (see the truncation rule in RULES). The tail classes are the
@@ -122,8 +125,9 @@ const TOOL_RULES: Array<[test: RegExp, RegExp, Replacer]> = [
     shortFlagRule('\\b(?:docker|podman|nerdctl|buildah|skopeo)\\b(?:\\s+[^\\s;|&]+){0,6}?\\s+login\\b(?:\\s+[^\\s;|&]+){0,10}?', '-p'),
     maskAfterFlag,
   ],
-  // sshpass -p VALUE. Only sshpass's own options may sit before -p, so `sshpass -e ssh -p 2222 host` keeps its port.
-  [/\bsshpass\b/, shortFlagRule('\\bsshpass\\b(?:\\s+(?:-[evVh]+|-[fdP]\\s*[^\\s;|&]+))*?', '-p'), maskAfterFlag],
+  // sshpass -p VALUE. Only sshpass's own options (and a `\` line continuation) may sit before -p, so
+  // `sshpass -e ssh -p 2222 host` keeps its port.
+  [/\bsshpass\b/, shortFlagRule('\\bsshpass\\b(?:\\s+(?:-[evVh]+|-[fdP]\\s*[^\\s;|&]+|\\\\(?=\\s)))*?', '-p'), maskAfterFlag],
   // redis-cli / valkey-cli -a VALUE (--pass is a flag rule).
   [
     /\b(?:redis-cli|valkey-cli)\b/,
@@ -133,11 +137,12 @@ const TOOL_RULES: Array<[test: RegExp, RegExp, Replacer]> = [
 ]
 
 /**
- * `<tool prefix> <flag> VALUE`, `<flag>=VALUE` or `<flag>VALUE` (the form getopt/pflag accept). Group 1 is everything
- * up to and with the flag; the value is replaced. A value that starts with `-` is not taken (`-p -x` is another flag).
+ * `<tool prefix> <flag> VALUE`, `<flag>=VALUE` or `<flag>VALUE` (the form getopt/pflag accept). The whitespace before
+ * the flag is a run (`\s+`: double space, tab, `\` + newline + indent). Group 1 is everything up to and with the
+ * flag; the value is replaced. A value that starts with `-` is not taken (`-p -x` is another flag).
  */
 function shortFlagRule(prefix: string, flag: string): RegExp {
-  return new RegExp(`(${prefix}\\s${flag})(?:(\\s+|=)(?!\\[MASKED)(${VALUE})|(?=[^\\s=-])(?!\\[MASKED)[^\\s;|&]+)`, 'g')
+  return new RegExp(`(${prefix}\\s+${flag})(?:(\\s+|=)(?!\\[MASKED)(${VALUE})|(?=[^\\s=-])(?!\\[MASKED)[^\\s;|&]+)`, 'g')
 }
 
 function maskAfterFlag(_m: string, head: string, sep?: string): string {
