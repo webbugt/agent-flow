@@ -31,6 +31,9 @@ import {
   HOOK_SERVER_NOT_STARTED, WORKSPACE_HASH_LENGTH,
 } from '../extension/src/constants'
 import { setLogLevel } from '../extension/src/logger'
+import { CostsConfigLoader, costsConfigMessage } from '../extension/src/costs-config'
+import { LimitsObserver, limitsUpdateMessage } from '../extension/src/limits-observer'
+import { defaultInstallerEnv } from '../extension/src/statusline-installer'
 import type { TelemetryClient } from './telemetry'
 import { buildHistoryBatch } from './history-batch'
 
@@ -147,10 +150,13 @@ function elapsed(sessionId?: string): number {
 function emitContextUpdate(agentName: string, session: WatchedSession, sessionId?: string) {
   const bd = session.contextBreakdown
   const total = bd.systemPrompt + bd.userMessages + bd.toolResults + bd.reasoning + bd.subagentResults
+  // Billed usage the ledger collected for this agent: without it the standalone app can only show a context-size estimate
+  // (the VS Code watcher's own emitContextUpdate has always included it).
+  const spend = session.spendByAgent.get(agentName)
   broadcastEvent({
     time: elapsed(sessionId),
     type: 'context_update',
-    payload: { agent: agentName, tokens: total, breakdown: { ...bd } },
+    payload: { agent: agentName, tokens: total, breakdown: { ...bd }, ...(spend ? { spend: { ...spend } } : {}) },
     sessionId,
   })
 }
@@ -381,6 +387,8 @@ export interface Relay {
   anonymize: AnonymizePolicy
   /** Handle an incoming SSE connection */
   handleSSE: (req: http.IncomingMessage, res: http.ServerResponse) => void
+  /** Write the user or project costs.json (settings drawer); the watcher then publishes it. Throws on refusal. */
+  writeCostsConfig: (layer: 'user' | 'project', doc: unknown, base: string) => { path: string; fingerprint?: string }
   /** Clean up all resources */
   dispose: () => void
 }
@@ -502,6 +510,25 @@ export async function createRelay(options: RelayOptions): Promise<Relay> {
     codexWatcher.start()
   }
 
+  // ─── Costs config ─────────────────────────────────────────────────────────
+  // ~/.agent-flow/costs.json (+ <workspace>/.agent-flow/costs.json), hot reloaded and pushed to every SSE client
+  // as a `costs-config` message. The page validates and merges it (web/lib/costs/layers.ts).
+  const costsLoader = new CostsConfigLoader({ workspaceDirs: () => [workspace] })
+  costsLoader.onChange(costs => broadcast(JSON.stringify(costsConfigMessage(costs))))
+  costsLoader.start()
+
+  // ─── Observed Claude limits (P6a) ─────────────────────────────────────────
+  // Read-only here: ~/.agent-flow/limits/claude.json is pushed as a `limits-update` message. Installing the
+  // statusLine wrapper edits ~/.claude/settings.json, so it is only offered from the VS Code extension
+  // (canConfigure: false makes the page show the command to run instead of a button).
+  const limitsObserver = new LimitsObserver({
+    env: () => defaultInstallerEnv({ nodePath: process.execPath, workspaceDirs: [workspace] }),
+    // Harness only: lets the screenshot of the opt-in prompt show the VS Code variant (with the install button).
+    canConfigure: process.env.AGENT_FLOW_SHOT_LIMITS_CONFIGURABLE === '1',
+  })
+  limitsObserver.onChange(limits => broadcast(JSON.stringify(limitsUpdateMessage(limits))))
+  limitsObserver.start()
+
   const telemetry = options.telemetry
   const sessionStart = Date.now()
   let relayDisposed = false
@@ -534,6 +561,7 @@ export async function createRelay(options: RelayOptions): Promise<Relay> {
 
   return {
     anonymize,
+    writeCostsConfig: (layer, doc, base) => costsLoader.writeConfig(layer, doc, base),
     handleSSE(req: http.IncomingMessage, res: http.ServerResponse) {
       res.writeHead(200, {
         'Content-Type': 'text/event-stream',
@@ -548,6 +576,10 @@ export async function createRelay(options: RelayOptions): Promise<Relay> {
         sseClients.delete(res)
         log(`[sse] Client disconnected (${sseClients.size} total)`)
       })
+
+      // Costs config first (also on a resumed stream: it is small and the page may have restarted)
+      sendSSE(res, costsConfigMessage(costsLoader.snapshot()))
+      sendSSE(res, limitsUpdateMessage(limitsObserver.snapshot()))
 
       // Send current session list (Claude + Codex)
       const sessionList: SessionInfo[] = []
@@ -618,6 +650,8 @@ export async function createRelay(options: RelayOptions): Promise<Relay> {
       }
       codexWatcher?.dispose()
       hermesLogs?.dispose()
+      costsLoader.dispose()
+      limitsObserver.dispose()
     },
   }
 }

@@ -107,6 +107,8 @@ export function drawEdges(
   time: number,
 ) {
   for (const edge of edges) {
+    // Cloud-to-resource links of the Fleet map are drawn by drawFleetLinks (linger and fade).
+    if (edge.fromCloud) continue
     const fromAgent = agents.get(edge.from)
     if (!fromAgent || fromAgent.opacity < MIN_VISIBLE_OPACITY) continue
 

@@ -9,6 +9,8 @@ import type {
   SimulationEvent,
 } from '@/lib/agent-types'
 import type { SimulationNodeDatum, SimulationLinkDatum } from 'd3-force'
+import type { CloudView } from '@/lib/fleet/fleet-cloud-geometry'
+import type { FleetPulse } from '@/lib/fleet/fleet-pulses'
 
 export interface SimulationState {
   agents: Map<string, Agent>
@@ -32,6 +34,10 @@ export interface SimulationState {
    * single-profile view, which fades finished nodes and tool calls out.
    */
   keepFinished?: boolean
+  /** Fleet map only: agent clouds (halo and profile caption around a profile's session nodes). */
+  clouds?: CloudView[]
+  /** Fleet map only: dots travelling along links because of a new interaction. */
+  pulses?: FleetPulse[]
 }
 
 /** Create an empty simulation state, optionally preserving specific fields */

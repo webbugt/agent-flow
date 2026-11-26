@@ -80,7 +80,27 @@ export interface SupermemoryNamespaceNode {
   daily: SupermemoryDailyCounts[]
   /** Epoch ms of the newest event in the window, or null. */
   lastEventAt: number | null
+  /** Epoch ms of each profile's newest event in the window (same keys as `byProfile`). */
+  lastByProfile: Record<string, number>
+  /**
+   * The latest individual events in the window, newest first, at most `recentLimit`
+   * (default SUPERMEMORY_RECENT_LIMIT). Time, profile and action only: never the call content.
+   */
+  recent: SupermemoryRecentEvent[]
 }
+
+/** One Supermemory call, as shown in the node inspector. */
+export interface SupermemoryRecentEvent {
+  /** Epoch ms. */
+  at: number
+  /** Hermes profile (`default` = the root state.db). */
+  profile: string
+  action: SupermemoryAction
+}
+
+/** Events kept per namespace in `recent`. */
+export const SUPERMEMORY_RECENT_LIMIT = 50
+export const MAX_RECENT_LIMIT = 500
 
 export interface SupermemorySourceInfo {
   /** Profile name (`default` for the root state.db). */
@@ -111,6 +131,8 @@ export interface SupermemorySourceOptions {
   now?: number
   /** Extra namespaces to always emit as nodes (normalised). */
   extraNamespaces?: string[]
+  /** Latest events kept per namespace in `recent` (1..MAX_RECENT_LIMIT). Default SUPERMEMORY_RECENT_LIMIT. */
+  recentLimit?: number
 }
 
 /**
@@ -314,7 +336,19 @@ function emptyNode(tag: string): SupermemoryNamespaceNode {
     byProfile: {},
     daily: [],
     lastEventAt: null,
+    lastByProfile: {},
+    recent: [],
   }
+}
+
+function clampRecent(n: number | undefined): number {
+  if (n === undefined || !Number.isFinite(n)) return SUPERMEMORY_RECENT_LIMIT
+  return Math.max(1, Math.min(MAX_RECENT_LIMIT, Math.floor(n)))
+}
+
+/** Newest first; ties broken by profile then action so the order never depends on read order. */
+function newestFirst(a: SupermemoryRecentEvent, b: SupermemoryRecentEvent): number {
+  return b.at - a.at || a.profile.localeCompare(b.profile) || a.action.localeCompare(b.action)
 }
 
 /** Reads every namespace as a separate node. Never throws for an unreadable DB: it lands in `sources[].error`. */
@@ -357,6 +391,8 @@ export function readSupermemoryFleet(opts: SupermemorySourceOptions = {}): Super
       node.total++
       ;(node.byProfile[e.profile] ??= emptyCounts())[e.action]++
       if (node.lastEventAt === null || e.at > node.lastEventAt) node.lastEventAt = e.at
+      if ((node.lastByProfile[e.profile] ?? -Infinity) < e.at) node.lastByProfile[e.profile] = e.at
+      node.recent.push({ at: e.at, profile: e.profile, action: e.action })
       const day = utcDay(e.at)
       let dm = dailyMaps.get(e.tag)
       if (!dm) dailyMaps.set(e.tag, (dm = new Map()))
@@ -369,6 +405,8 @@ export function readSupermemoryFleet(opts: SupermemorySourceOptions = {}): Super
   for (const [tag, dm] of dailyMaps) {
     nodes.get(tag)!.daily = [...dm.values()].sort((a, b) => a.day.localeCompare(b.day))
   }
+  const recentLimit = clampRecent(opts.recentLimit)
+  for (const node of nodes.values()) node.recent = node.recent.sort(newestFirst).slice(0, recentLimit)
 
   // Known namespaces first (fixed order), then others alphabetically.
   const known: string[] = SUPERMEMORY_NAMESPACES.slice()

@@ -34,7 +34,7 @@ function space(tag: string, days: Array<[string, number]>): SupermemoryNamespace
   const total = days.reduce((n, d) => n + d[1], 0)
   return {
     id: `supermemory:${tag}`, type: 'supermemory-namespace', containerTag: tag,
-    counts: { store: total, search: 0, forget: 0 }, total, byProfile: {}, daily, lastEventAt: null,
+    counts: { store: total, search: 0, forget: 0 }, total, byProfile: {}, daily, lastEventAt: null, lastByProfile: {}, recent: [],
   }
 }
 

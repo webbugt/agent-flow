@@ -171,14 +171,19 @@ function isAgentFlowHook(entry) {
 
 /**
  * Read a settings file. Missing reads as {}. A file that exists but can't be
- * parsed returns { error } so we never overwrite the user's settings.
+ * parsed returns { error } so we never overwrite the user's settings. A symlink
+ * whose target is missing (or that loops) is an error too: writing would replace
+ * the link with a regular file. Mirrors extension/src/hook-entries.ts.
  */
 function readSettings(settingsPath) {
   let raw
   try {
     raw = fs.readFileSync(settingsPath, 'utf-8')
   } catch (err) {
-    if (err.code === 'ENOENT') return { settings: {} }
+    if (err.code === 'ENOENT') {
+      if (isDanglingLink(settingsPath)) return { error: danglingLinkMessage(settingsPath) }
+      return { settings: {} }
+    }
     return { error: err.message }
   }
   if (raw.trim() === '') return { settings: {} }
@@ -193,11 +198,39 @@ function readSettings(settingsPath) {
   }
 }
 
-function writeJsonAtomic(filePath, value) {
+function isDanglingLink(p) {
+  try { return fs.lstatSync(p).isSymbolicLink() } catch { return false }
+}
+
+function danglingLinkMessage(p) {
+  return `${p} is a symbolic link that cannot be followed (missing target or a loop); fix the link first`
+}
+
+/**
+ * Write JSON via temp file + rename. A symlinked file is written THROUGH (the
+ * link stays a link), a link that cannot be followed is refused (throws), the
+ * existing mode is kept (new files are 0600), and the temp file is exclusive
+ * and removed on failure. Mirrors writeJsonAtomic in extension/src/hook-entries.ts.
+ */
+function writeJsonAtomic(requestedPath, value) {
+  let filePath = requestedPath
+  let isLink = false
+  try { isLink = fs.lstatSync(requestedPath).isSymbolicLink() } catch { /* missing file: create it at the requested path */ }
+  if (isLink) {
+    try { filePath = fs.realpathSync(requestedPath) } catch { throw new Error(danglingLinkMessage(requestedPath)) }
+  }
+  let mode = 0o600
+  try { mode = fs.statSync(filePath).mode & 0o777 } catch { /* new file */ }
   fs.mkdirSync(path.dirname(filePath), { recursive: true })
-  const tmpPath = `${filePath}.${process.pid}.tmp`
-  fs.writeFileSync(tmpPath, JSON.stringify(value, null, 2) + '\n')
-  fs.renameSync(tmpPath, filePath)
+  const tmpPath = `${filePath}.${process.pid}.${Math.random().toString(36).slice(2, 8)}.tmp`
+  try {
+    fs.writeFileSync(tmpPath, JSON.stringify(value, null, 2) + '\n', { mode, flag: 'wx' })
+    fs.chmodSync(tmpPath, mode) // the umask can narrow the create mode; chmod is exact
+    fs.renameSync(tmpPath, filePath)
+  } catch (err) {
+    try { fs.unlinkSync(tmpPath) } catch { /* nothing to clean */ }
+    throw err
+  }
 }
 
 /** Returns true if hooks were written, false if the settings file was left alone. */

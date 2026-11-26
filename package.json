@@ -12,6 +12,9 @@
     "build:webview": "pnpm --filter agent-flow-web run build:webview",
     "build:all": "pnpm run build:webview && pnpm run build:extension",
     "build:app": "node app/build.js",
+    "shot": "tsx scripts/shot.ts",
+    "shot:diff": "tsx scripts/shot-diff.ts",
+    "shot:smoke": "tsx scripts/shot.ts --task-id smoke --plan builtin:overlay",
     "test": "node --import tsx --test \"scripts/**/*.test.ts\" \"app/src/**/*.test.ts\" && tsx --tsconfig web/tsconfig.json --test \"web/hooks/**/*.test.ts\" \"web/lib/**/*.test.ts\""
   },
   "devDependencies": {

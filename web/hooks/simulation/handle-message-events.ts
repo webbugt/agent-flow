@@ -1,4 +1,5 @@
-import type { ContextBreakdown, SpendTotals } from '@/lib/agent-types'
+import type { ContextBreakdown, SpendTotals, TokenCounts } from '@/lib/agent-types'
+import type { EnergyUsage } from '@/lib/costs/types'
 import type { ConversationMessage } from './types'
 import { appendConversation, asString, asNumber, MAX_BUBBLES } from './types'
 import type { MutableEventState } from './process-event'
@@ -67,18 +68,92 @@ export function handleMessage(
   })
 }
 
-/** Validate the billed-usage totals sent with a context update. */
-function parseSpend(raw: unknown): SpendTotals | undefined {
+const BUCKET_KEYS = ['le100000', 'le200000', 'le272000', 'gt272000'] as const
+const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
+
+function parseCounts(raw: unknown): TokenCounts | undefined {
   if (!raw || typeof raw !== 'object') return undefined
   const r = raw as Record<string, unknown>
-  const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
   return {
     inputTokens: num(r.inputTokens),
     outputTokens: num(r.outputTokens),
     cacheReadTokens: num(r.cacheReadTokens),
     cacheWrite5mTokens: num(r.cacheWrite5mTokens),
     cacheWrite1hTokens: num(r.cacheWrite1hTokens),
+  }
+}
+
+const MAX_ENERGY_HOURS = 24 * 400
+
+/** Hour-bucketed local-model busy time (P5). Keys must be integer hour indexes; every field a finite non-negative number. */
+export function parseEnergy(raw: unknown): EnergyUsage | undefined {
+  if (!raw || typeof raw !== 'object') return undefined
+  const src = (raw as Record<string, unknown>).byHour
+  if (!src || typeof src !== 'object') return undefined
+  const byHour: EnergyUsage['byHour'] = {}
+  let n = 0
+  for (const [k, v] of Object.entries(src as Record<string, unknown>)) {
+    if (!/^\d{1,9}$/.test(k) || !v || typeof v !== 'object' || ++n > MAX_ENERGY_HOURS) continue
+    const e = v as Record<string, unknown>
+    byHour[k] = {
+      busySec: num(e.busySec), callSec: num(e.callSec), calls: num(e.calls),
+      untimedCalls: num(e.untimedCalls), untimedInTok: num(e.untimedInTok), untimedOutTok: num(e.untimedOutTok),
+    }
+    for (const f of Object.keys(byHour[k]) as Array<keyof EnergyUsage['byHour'][string]>) if (byHour[k][f] < 0) byHour[k][f] = 0
+  }
+  return n > 0 ? { v: 1, byHour } : undefined
+}
+
+const MAX_TIME_KEYS = 6000
+const TIME_KEY_RE = /^(\d{1,9})\|([^|]{1,80})\|([^|]{1,160})\|(le100000|le200000|le272000|gt272000)$/
+
+/** 10-minute usage buckets (P6b): keys must be `<slot>|<provider>|<model>|<bucket>`, counts finite and non-negative. */
+export function parseByTime(raw: unknown): NonNullable<SpendTotals['byTime']> | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined
+  const out: NonNullable<SpendTotals['byTime']> = Object.create(null)
+  let n = 0
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    if (!TIME_KEY_RE.test(k) || ++n > MAX_TIME_KEYS) continue
+    const c = parseCounts(v)
+    if (!c) continue
+    for (const f of Object.keys(c) as Array<keyof TokenCounts>) if (c[f] < 0) c[f] = 0
+    out[k] = c
+  }
+  return n > 0 ? { ...out } : undefined
+}
+
+/**
+ * Validate the billed-usage totals sent with a context update: flat counts, model, and (P2) the
+ * provider, the per-prompt-size buckets and the call/latency counters. Unknown bucket keys are dropped.
+ */
+export function parseSpend(raw: unknown): SpendTotals | undefined {
+  const counts = parseCounts(raw)
+  if (!counts) return undefined
+  const r = raw as Record<string, unknown>
+  let byBucket: SpendTotals['byBucket']
+  if (r.byBucket && typeof r.byBucket === 'object') {
+    const src = r.byBucket as Record<string, unknown>
+    for (const key of BUCKET_KEYS) {
+      const c = parseCounts(src[key])
+      if (c) (byBucket ??= {})[key] = c
+    }
+  }
+  const optNum = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : undefined)
+  const calls = optNum(r.calls)
+  const timedCalls = optNum(r.timedCalls)
+  const latencySeconds = optNum(r.latencySeconds)
+  const energy = parseEnergy(r.energy)
+  const byTime = parseByTime(r.byTime)
+  return {
+    ...counts,
+    ...(byTime ? { byTime } : {}),
+    ...(energy ? { energy } : {}),
     model: typeof r.model === 'string' ? r.model : undefined,
+    ...(typeof r.provider === 'string' && r.provider ? { provider: r.provider } : {}),
+    ...(byBucket ? { byBucket } : {}),
+    ...(calls !== undefined ? { calls } : {}),
+    ...(timedCalls !== undefined ? { timedCalls } : {}),
+    ...(latencySeconds !== undefined ? { latencySeconds } : {}),
   }
 }
 

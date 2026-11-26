@@ -99,3 +99,71 @@ test("isAlreadySetup ignores other tools' loopback hooks", () => {
   quietly(() => configureHooks(file, HOOK_CMD))
   assert.equal(isAlreadySetup(file, hookScript), true)
 })
+
+// ─── symlinked settings.json, dangling links, file mode ──────────────────────
+
+function modeOf(f: string): number { return fs.statSync(f).mode & 0o777 }
+
+function linkedSettings(content: unknown, targetMode?: number) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-flow-setup-link-'))
+  fs.mkdirSync(path.join(dir, 'dotfiles'))
+  fs.mkdirSync(path.join(dir, '.claude'))
+  const target = path.join(dir, 'dotfiles', 'settings.json')
+  fs.writeFileSync(target, JSON.stringify(content, null, 2))
+  if (targetMode !== undefined) fs.chmodSync(target, targetMode)
+  const link = path.join(dir, '.claude', 'settings.json')
+  fs.symlinkSync('../dotfiles/settings.json', link) // relative, like stow
+  return { dir, target, link }
+}
+
+test('configureHooks writes through a symlinked settings.json: the link stays, the target changes', () => {
+  const { target, link } = linkedSettings({ permissions: { allow: ['Bash(ls)'] } })
+  assert.equal(quietly(() => configureHooks(link, HOOK_CMD)), true)
+  assert.ok(fs.lstatSync(link).isSymbolicLink())
+  assert.equal(fs.readlinkSync(link), '../dotfiles/settings.json')
+  assert.ok(fs.lstatSync(target).isFile())
+  const saved = read(target)
+  assert.deepEqual(saved.permissions, { allow: ['Bash(ls)'] })
+  assert.equal(saved.hooks.SessionStart.length, 1)
+  assert.deepEqual(read(link), saved)
+})
+
+test('configureHooks refuses a dangling symlinked settings.json and leaves it alone', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-flow-setup-dangling-'))
+  fs.mkdirSync(path.join(dir, '.claude'))
+  const link = path.join(dir, '.claude', 'settings.json')
+  fs.symlinkSync('../gone/settings.json', link)
+  assert.equal(quietly(() => configureHooks(link, HOOK_CMD)), false)
+  assert.ok(fs.lstatSync(link).isSymbolicLink())
+  assert.equal(fs.readlinkSync(link), '../gone/settings.json')
+  assert.equal(fs.existsSync(path.join(dir, 'gone')), false)
+  assert.deepEqual(fs.readdirSync(path.join(dir, '.claude')), ['settings.json'])
+  // and ensureSetup's detector treats it as "not set up" rather than throwing
+  const hookScript = path.join(dir, 'hook.js')
+  fs.writeFileSync(hookScript, '')
+  assert.equal(isAlreadySetup(link, hookScript), false)
+})
+
+test('configureHooks keeps a 0600 settings.json at 0600 (regular file and through a link)', () => {
+  const file = tmpSettings({ env: { A: '1' } })
+  fs.chmodSync(file, 0o600)
+  assert.equal(quietly(() => configureHooks(file, HOOK_CMD)), true)
+  assert.equal(modeOf(file), 0o600)
+
+  const { target, link } = linkedSettings({ env: { A: '1' } }, 0o600)
+  assert.equal(quietly(() => configureHooks(link, HOOK_CMD)), true)
+  assert.equal(modeOf(target), 0o600)
+  assert.ok(fs.lstatSync(link).isSymbolicLink())
+})
+
+test('configureHooks keeps a 0644 settings.json at 0644 and creates a missing one as 0600', () => {
+  const file = tmpSettings({ env: { A: '1' } })
+  fs.chmodSync(file, 0o644)
+  quietly(() => configureHooks(file, HOOK_CMD))
+  assert.equal(modeOf(file), 0o644)
+
+  const fresh = tmpSettings()
+  const old = process.umask(0o000)
+  try { quietly(() => configureHooks(fresh, HOOK_CMD)) } finally { process.umask(old) }
+  assert.equal(modeOf(fresh), 0o600)
+})

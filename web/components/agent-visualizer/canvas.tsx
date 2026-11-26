@@ -1,10 +1,12 @@
 'use client'
 
 import { useRef, useEffect, useState, useCallback } from 'react'
-import { Agent, Particle, Edge, Discovery, DepthParticle } from '@/lib/agent-types'
+import { Agent, Particle, Edge, Discovery, DepthParticle, NODE } from '@/lib/agent-types'
 import type { SimulationState } from '@/hooks/simulation/types'
 import { getStateColor } from '@/lib/colors'
 import { ANIM_SPEED, PERF_OVERLAY, PERF_OVERLAY_ENABLED } from '@/lib/canvas-constants'
+import { cloudGeometries } from '@/lib/fleet/fleet-cloud-geometry'
+import { LABEL_MIN_PX } from '@/lib/fleet/fleet-labels'
 import { BloomRenderer } from './bloom-renderer'
 import { createDepthParticles, updateDepthParticles, drawBackground } from './background-layer'
 import {
@@ -14,6 +16,7 @@ import {
   drawAgents,
   drawMessageBubblesWorld,
   drawEdges, getActiveEdgeIds,
+  drawClouds, drawFleetLabels, drawFleetLinks, drawPulses,
   drawParticles, buildEdgeMap,
   drawToolCalls,
   drawDiscoveries, drawDiscoveryConnections,
@@ -21,7 +24,15 @@ import {
   detectStateChanges as detectStateChangesPure,
 } from './canvas/index'
 import { useCanvasCamera } from '@/hooks/use-canvas-camera'
-import { useCanvasInteraction } from '@/hooks/use-canvas-interaction'
+import { useCanvasInteraction, type CostPillHit } from '@/hooks/use-canvas-interaction'
+import { SHOT_MODE, registerShotHook, type ShotRect } from '@/lib/shot-mode'
+import { costPillRect, agentCostOf } from './canvas/draw-cost'
+import { CostTooltip } from './cost-tooltip'
+import { setCostPillRects } from '@/lib/cost-overlay-store'
+
+function unregisterAll(...fns: Array<() => void>): () => void {
+  return () => { for (const f of fns) f() }
+}
 
 interface CanvasProps {
   /** Ref to simulation state — read every frame without React re-renders */
@@ -41,16 +52,41 @@ interface CanvasProps {
   onDiscoveryClick?: (discoveryId: string | null) => void
   selectedDiscoveryId?: string | null
   showCostOverlay?: boolean
+  /**
+   * Fleet map mode: the plain wheel zooms, a click on a node keeps the camera where it is.
+   * `controlsRef` is filled with the on-screen button actions.
+   */
+  fleetView?: boolean
+  controlsRef?: React.MutableRefObject<CanvasControls | null>
+}
+
+/** Camera actions for on-screen buttons. */
+export interface CanvasControls {
+  zoomBy: (factor: number) => void
+  fit: () => void
+  /** True once the user zoomed or panned (auto-fit is off until the next explicit fit). */
+  hasNavigated: () => boolean
 }
 
 export function AgentCanvas({
   simulationRef,
   selectedAgentId, hoveredAgentId, showStats, showHexGrid, zoomToFitTrigger, pauseAutoFit,
-  onAgentClick, onAgentHover, onAgentDrag, onContextMenu, onToolCallClick, selectedToolCallId, onDiscoveryClick, selectedDiscoveryId, showCostOverlay,
+  onAgentClick, onAgentHover, onAgentDrag, onContextMenu, onToolCallClick, selectedToolCallId, onDiscoveryClick, selectedDiscoveryId, showCostOverlay, fleetView = false, controlsRef,
 }: CanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const mainCanvasRef = useRef<HTMLCanvasElement>(null)
   const [dimensions, setDimensions] = useState({ width: 800, height: 600 })
+  // Cost pill tooltip: hover shows it, a click or tap pins it (touch)
+  const [pillHover, setPillHover] = useState<CostPillHit | null>(null)
+  const [pillPinned, setPillPinned] = useState<CostPillHit | null>(null)
+  const onCostPill = useCallback((hit: CostPillHit | null, how: 'hover' | 'tap') => {
+    if (how === 'hover') setPillHover(hit)
+    else setPillPinned(prev => (hit === null || prev?.agentId === hit.agentId ? null : hit))
+  }, [])
+  useEffect(() => {
+    if (showCostOverlay) return
+    setPillHover(null); setPillPinned(null); setCostPillRects([])
+  }, [showCostOverlay])
   const animationRef = useRef<number>(0)
   const timeRef = useRef(0)
   const simTimeRef = useRef(0)
@@ -92,11 +128,12 @@ export function AgentCanvas({
   const makeDrawProps = (prev?: { isDragging: boolean }) => ({
     agents: sim.agents, toolCalls: sim.toolCalls,
     particles: sim.particles, edges: sim.edges, discoveries: sim.discoveries,
+    clouds: sim.clouds,
     selectedAgentId, hoveredAgentId, showStats, showHexGrid,
     showCostOverlay, selectedToolCallId, selectedDiscoveryId,
     simTime: sim.currentTime, pauseAutoFit, dimensions,
     onAgentDrag, onAgentClick, onAgentHover, onContextMenu,
-    onToolCallClick, onDiscoveryClick,
+    onToolCallClick, onDiscoveryClick, onCostPill,
     isDragging: prev?.isDragging ?? false,
   })
   const drawPropsRef = useRef(makeDrawProps())
@@ -105,18 +142,24 @@ export function AgentCanvas({
   // ─── Camera ─────────────────────────────────────────────────────────────
   const {
     transformRef, userHasNavigatedRef, panVelocityRef,
-    screenToCanvas, doZoomToFit, updateCamera,
+    screenToCanvas, doZoomToFit, zoomBy, updateCamera,
   } = useCanvasCamera({
     mainCanvasRef, drawPropsRef, simTimeRef, dimensions,
-    agentCount: sim.agents.size, zoomToFitTrigger, selectedAgentId,
+    agentCount: sim.agents.size, zoomToFitTrigger, selectedAgentId, fleetView,
   })
+
+  useEffect(() => {
+    if (!controlsRef) return
+    controlsRef.current = { zoomBy, fit: doZoomToFit, hasNavigated: () => userHasNavigatedRef.current }
+    return () => { controlsRef.current = null }
+  }, [controlsRef, zoomBy, doZoomToFit, userHasNavigatedRef])
 
   // ─── Interaction ────────────────────────────────────────────────────────
   const {
     isDragging, handlers, updateDragLerp,
   } = useCanvasInteraction({
     drawPropsRef, transformRef, userHasNavigatedRef, panVelocityRef,
-    simTimeRef, screenToCanvas, doZoomToFit, mainCanvasRef,
+    simTimeRef, screenToCanvas, doZoomToFit, mainCanvasRef, wheelZooms: fleetView,
   })
 
   // Keep drawPropsRef in sync with interaction state
@@ -197,7 +240,8 @@ export function AgentCanvas({
       } = drawPropsRef.current
       const transform = transformRef.current
 
-      const deltaTime = lastFrameTimeRef.current ? (timestamp - lastFrameTimeRef.current) / 1000 : ANIM_SPEED.defaultDeltaTime
+      // ?shot=1 (screenshot harness): a fixed clock, so the picture does not depend on timing
+      const deltaTime = SHOT_MODE ? 0 : lastFrameTimeRef.current ? (timestamp - lastFrameTimeRef.current) / 1000 : ANIM_SPEED.defaultDeltaTime
       lastFrameTimeRef.current = timestamp
       timeRef.current += deltaTime
       if (simTime != null) simTimeRef.current = simTime
@@ -220,6 +264,8 @@ export function AgentCanvas({
 
       // Detect state changes → visual effects
       detectStateChanges()
+      // Screenshot mode: transient effects would stay at age 0 forever with a fixed clock
+      if (SHOT_MODE) effectsRef.current.length = 0
 
       // Update effects (mutate in place to avoid GC pressure)
       {
@@ -265,14 +311,22 @@ export function AgentCanvas({
         edgeLookupCacheRef.current = { particles, edges, activeEdgeIds, edgeMap }
       }
 
+      // Fleet map only: clouds (halo + profile caption) under everything, then the cloud-to-resource links.
+      const fleet = simulationRef.current
+      const cloudGeoms = fleet.clouds && fleet.clouds.length > 0 ? cloudGeometries(fleet.clouds, agents) : null
+      const wallNow = Date.now()
+      if (cloudGeoms && fleet.clouds) drawClouds(ctx, fleet.clouds, cloudGeoms, timeRef.current)
       drawDiscoveryConnections(ctx, discoveries, agents)
       drawEdges(ctx, edges, agents, toolCalls, activeEdgeIds, timeRef.current)
-      drawToolCalls(ctx, toolCalls, timeRef.current, selectedToolCallId)
+      if (cloudGeoms) drawFleetLinks(ctx, edges, agents, cloudGeoms, wallNow)
+      drawToolCalls(ctx, toolCalls, timeRef.current, selectedToolCallId, cloudGeoms ? LABEL_MIN_PX - 2 : 0)
       drawDiscoveries(ctx, discoveries, agents, selectedDiscoveryId)
-      drawAgents(ctx, agents, selectedAgentId, hoveredAgentId, showStats, timeRef.current)
+      drawAgents(ctx, agents, selectedAgentId, hoveredAgentId, showStats, timeRef.current, !cloudGeoms)
+      if (cloudGeoms && fleet.clouds) drawFleetLabels(ctx, fleet.clouds, cloudGeoms, agents, selectedAgentId, hoveredAgentId)
       drawMessageBubblesWorld(ctx, agents, simTimeRef.current)
       if (showCostOverlay) drawCostLabels(ctx, agents, toolCalls)
       drawParticles(ctx, particles, edgeMap, agents, toolCalls, timeRef.current)
+      if (cloudGeoms && fleet.pulses) drawPulses(ctx, fleet.pulses, edges, agents, cloudGeoms, wallNow)
       drawEffects(ctx, effectsRef.current)
 
       if (selectedAgentId) {
@@ -332,6 +386,50 @@ export function AgentCanvas({
 
   drawRef.current = draw
 
+  // ─── Screenshot harness hooks (only with ?shot=1, see lib/shot-mode.ts) ───
+  const shotCameraRef = useRef({ sig: '', at: 0 })
+  useEffect(() => {
+    if (!SHOT_MODE) return
+    const canvasOrigin = () => mainCanvasRef.current?.getBoundingClientRect() ?? null
+    const findAgent = (name: string): Agent | undefined => {
+      const agents = drawPropsRef.current.agents
+      if (name === 'first') return agents.values().next().value
+      return agents.get(name) ?? Array.from(agents.values()).find(a => a.name === name)
+    }
+    const offs = unregisterAll(
+      registerShotHook('agentNames', () => Array.from(drawPropsRef.current.agents.values()).map(a => a.name)),
+      registerShotHook('agentRect', (name): ShotRect | null => {
+        const a = findAgent(name); const o = canvasOrigin()
+        if (!a || !o) return null
+        const t = transformRef.current
+        const r = (a.isMain ? NODE.radiusMain : NODE.radiusSub) * t.scale
+        return { x: o.left + t.x + a.x * t.scale - r, y: o.top + t.y + a.y * t.scale - r, w: 2 * r, h: 2 * r }
+      }),
+      registerShotHook('pillRect', (name): ShotRect | null => {
+        const o = canvasOrigin(); const ctx = mainCanvasRef.current?.getContext('2d')
+        if (!o || !ctx) return null
+        // 'first' = the first agent that has a cost pill (the main node often has none)
+        const a = name === 'first'
+          ? Array.from(drawPropsRef.current.agents.values()).find(x => costPillRect(ctx, x) !== null)
+          : findAgent(name)
+        if (!a) return null
+        const p = costPillRect(ctx, a)
+        if (!p) return null
+        const t = transformRef.current
+        return { x: o.left + t.x + p.x * t.scale, y: o.top + t.y + p.y * t.scale, w: p.w * t.scale, h: p.h * t.scale }
+      }),
+      registerShotHook('settled', () => {
+        const t = transformRef.current
+        const sig = `${t.x.toFixed(2)},${t.y.toFixed(2)},${t.scale.toFixed(4)}`
+        const now = performance.now()
+        if (sig !== shotCameraRef.current.sig) { shotCameraRef.current = { sig, at: now }; return false }
+        return now - shotCameraRef.current.at >= 400
+      }),
+    )
+    return offs
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- refs only; registered once
+  }, [])
+
   useEffect(() => {
     const loop = (timestamp: number) => drawRef.current(timestamp)
     animationRef.current = requestAnimationFrame(loop)
@@ -347,6 +445,12 @@ export function AgentCanvas({
         {...handlers}
         className="w-full h-full"
       />
+      {showCostOverlay && (() => {
+        const shown = pillPinned ?? pillHover
+        const agent = shown ? simulationRef.current.agents.get(shown.agentId) : undefined
+        if (!shown || !agent) return null
+        return <CostTooltip cost={agentCostOf(agent)} anchor={shown} pinned={pillPinned !== null} onClose={() => setPillPinned(null)} />
+      })()}
     </div>
   )
 }

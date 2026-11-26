@@ -6,9 +6,112 @@ import { startClaudeRuntime } from './claude-runtime'
 import { startCodexRuntime } from './codex-runtime'
 import { promptHookSetupIfNeeded, configureClaudeHooks, isDisable1MContext } from './hooks-config'
 import { createLogger } from './logger'
+import { CostsConfigLoader, CostsConflictError, type CostsScalars } from './costs-config'
+import { LimitsObserver } from './limits-observer'
+import { defaultInstallerEnv, inspectStatusLine, installStatusLine, uninstallStatusLine, type ActionResult, type InstallerEnv } from './statusline-installer'
+import { resolveNodePath } from './discovery'
 import type { AgentRuntime, AgentRuntimeMode } from './session-runtime'
 
 const log = createLogger('Extension')
+
+// ─── Costs config (PLAN v2 P3) ─────────────────────────────────────────────
+
+let costsLoader: CostsConfigLoader | undefined
+
+/** The VS Code scalar settings the user actually set (defaults are not a layer). */
+function readCostsScalars(): CostsScalars {
+  const cfg = vscode.workspace.getConfiguration('agentVisualizer.costs')
+  const userSet = <T>(key: string): T | undefined => {
+    const i = cfg.inspect<T>(key)
+    return i?.workspaceFolderValue ?? i?.workspaceValue ?? i?.globalValue
+  }
+  return {
+    enabled: cfg.get<boolean>('enabled', true),
+    displayCurrency: userSet<string>('displayCurrency'),
+    unit: userSet<string>('unit'),
+    unknownModelPolicy: userSet<string>('unknownModelPolicy'),
+    configPath: cfg.get<string>('configPath', ''),
+  }
+}
+
+function startCostsConfig(context: vscode.ExtensionContext): CostsConfigLoader {
+  const loader = new CostsConfigLoader({
+    workspaceDirs: () => (vscode.workspace.workspaceFolders ?? []).map(f => f.uri.fsPath),
+    scalars: readCostsScalars,
+  })
+  loader.onChange(costs => VisualizerPanel.getCurrent()?.postMessage({ type: 'costs-config', costs }))
+  loader.start()
+  context.subscriptions.push(
+    { dispose: () => loader.dispose() },
+    vscode.workspace.onDidChangeConfiguration(e => { if (e.affectsConfiguration('agentVisualizer.costs')) loader.reload() }),
+    vscode.workspace.onDidChangeWorkspaceFolders(() => loader.reload()),
+    vscode.commands.registerCommand('agentVisualizer.openCostsConfig', () => openCostsConfig(loader)),
+  )
+  return loader
+}
+
+/** Open ~/.agent-flow/costs.json (creating a minimal one when it does not exist) in an editor. */
+async function openCostsConfig(loader: CostsConfigLoader): Promise<void> {
+  try {
+    const file = loader.ensureUserFile()
+    const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(file))
+    await vscode.window.showTextDocument(doc, { viewColumn: vscode.ViewColumn.One, preserveFocus: false })
+  } catch (err) {
+    log.error('Failed to open the costs config:', err instanceof Error ? err.message : err)
+    vscode.window.showErrorMessage(`Agent Flow: cannot open the costs config. ${err instanceof Error ? err.message : ''}`)
+  }
+}
+
+// ─── Observed Claude limits (PLAN v2 P6a) ──────────────────────────────────
+
+let limitsObserver: LimitsObserver | undefined
+
+function installerEnv(): InstallerEnv {
+  return defaultInstallerEnv({
+    nodePath: resolveNodePath(),
+    workspaceDirs: (vscode.workspace.workspaceFolders ?? []).map(f => f.uri.fsPath),
+  })
+}
+
+/**
+ * Install / remove the chained statusLine wrapper. Both ask first: it edits ~/.claude/settings.json, which is the
+ * person's file, so nothing happens on a click alone. A refusal is a normal answer, not an error.
+ */
+async function runStatusLineAction(action: 'install' | 'uninstall'): Promise<ActionResult | { ok: false; refused: true; code: 'cancelled'; message: string }> {
+  const install = action === 'install'
+  // Install on an existing install = upgrade of the legacy command / repair of the recorded node: only Agent Flow's own files and the command change.
+  const existing = install ? inspectStatusLine(installerEnv()) : null
+  const reinstall = existing?.state === 'installed' || (existing?.state === 'broken' && existing.code === 'io-error')
+  const detail = reinstall
+    ? 'The wrapper stays installed. Only its command in ~/.claude/settings.json changes (it now starts through a small launcher script that finds node itself, so a node upgrade does not stop the readings) and Agent Flow\'s own files are refreshed. Your original statusLine, the backup and every other setting stay as they are.'
+    : install
+    ? 'Agent Flow will wrap the statusLine in ~/.claude/settings.json. Your own status line keeps running unchanged. Only the usage percentages and reset times of each limit window (5-hour, weekly and any other the meter reports), the session id, the model id and a timestamp are saved to ~/.agent-flow/limits/claude.json, plus a short history of those readings in claude-history.json next to it. No prompts or transcripts are stored. A backup is written to settings.json.agent-flow.bak. "Remove Claude statusLine wrapper" restores your original.'
+    : 'Your original statusLine is put back in ~/.claude/settings.json (same content) and the saved limits file and its history file are deleted.'
+  const choice = await vscode.window.showWarningMessage(
+    reinstall ? 'Upgrade / repair the Agent Flow statusLine wrapper?' : install ? 'Observe Claude usage limits through a chained statusLine wrapper?' : 'Remove the Agent Flow statusLine wrapper?',
+    { modal: true, detail },
+    reinstall ? 'Upgrade wrapper' : install ? 'Install wrapper' : 'Remove wrapper',
+  )
+  if (!choice) return { ok: false, refused: true, code: 'cancelled', message: 'Cancelled. Nothing was changed.' }
+  const result = install ? installStatusLine(installerEnv()) : uninstallStatusLine(installerEnv())
+  limitsObserver?.refresh()
+  if (result.ok) void vscode.window.showInformationMessage(`Agent Flow: ${result.message}`)
+  else void vscode.window.showWarningMessage(`Agent Flow: ${result.message}`)
+  return result
+}
+
+function startLimitsObserver(context: vscode.ExtensionContext): LimitsObserver {
+  const observer = new LimitsObserver({ env: installerEnv, canConfigure: true })
+  observer.onChange(limits => VisualizerPanel.getCurrent()?.postMessage({ type: 'limits-update', limits }))
+  observer.start()
+  context.subscriptions.push(
+    { dispose: () => observer.dispose() },
+    vscode.workspace.onDidChangeWorkspaceFolders(() => observer.refresh()),
+    vscode.commands.registerCommand('agentVisualizer.configureClaudeStatusLine', () => runStatusLineAction('install')),
+    vscode.commands.registerCommand('agentVisualizer.removeClaudeStatusLine', () => runStatusLineAction('uninstall')),
+  )
+  return observer
+}
 
 type ConfiguredRuntimeMode = AgentRuntimeMode | 'auto'
 
@@ -46,6 +149,9 @@ async function startRuntimes(
 
 export async function activate(context: vscode.ExtensionContext) {
   log.info('Extension activated')
+
+  costsLoader = startCostsConfig(context)
+  limitsObserver = startLimitsObserver(context)
 
   const mode = readConfiguredMode()
   log.info(`Runtime mode: ${mode}`)
@@ -178,6 +284,9 @@ function wirePanel(panel: VisualizerPanel): void {
         panel.markReady()
         // Clear stale webview state from any previous panel instance
         panel.postMessage({ type: 'reset', reason: 'panel-reopened' })
+        // Costs config first, so the first session render already prices with it
+        if (costsLoader) panel.postMessage({ type: 'costs-config', costs: costsLoader.snapshot() })
+        if (limitsObserver) panel.postMessage({ type: 'limits-update', limits: limitsObserver.refresh() })
         // Send environment-derived config (e.g. CLAUDE_CODE_DISABLE_1M_CONTEXT)
         if (isDisable1MContext()) {
           panel.postMessage({ type: 'config', config: { disable1MContext: true } })
@@ -206,6 +315,37 @@ function wirePanel(panel: VisualizerPanel): void {
       case 'open-file':
         handleOpenFile(message.filePath, message.line)
         break
+
+      case 'open-costs-config':
+        if (costsLoader) void openCostsConfig(costsLoader)
+        break
+
+      case 'statusline-action': {
+        const requestId = typeof message.requestId === 'string' ? message.requestId.slice(0, 64) : ''
+        if (message.action !== 'install' && message.action !== 'uninstall') break
+        const action = message.action
+        void runStatusLineAction(action).then(r => {
+          panel.postMessage({ type: 'statusline-action-result', requestId, action, ok: r.ok, message: r.message })
+        })
+        break
+      }
+
+      case 'write-costs-config': {
+        const requestId = typeof message.requestId === 'string' ? message.requestId.slice(0, 64) : ''
+        const reply = (ok: boolean, extra: { error?: string; conflict?: boolean; fingerprint?: string } = {}) =>
+          panel.postMessage({ type: 'costs-config-write-result', requestId, ok, ...extra })
+        if (!costsLoader) { reply(false, { error: 'costs config is not available' }); break }
+        if (message.layer !== 'user' && message.layer !== 'project') { reply(false, { error: 'unknown layer' }); break }
+        // The page must say which version of the file it edited, so a write can never replace a newer one unseen.
+        if (typeof message.base !== 'string' || message.base === '' || message.base.length > 128) { reply(false, { error: 'the save did not say which version of the file it was based on' }); break }
+        try {
+          const written = costsLoader.writeConfig(message.layer, message.doc, message.base)
+          reply(true, { fingerprint: written.fingerprint })
+        } catch (err) {
+          reply(false, { error: err instanceof Error ? err.message : 'write failed', ...(err instanceof CostsConflictError ? { conflict: true } : {}) })
+        }
+        break
+      }
 
       case 'log': {
         const webviewLog = createLogger('Webview')
@@ -273,6 +413,10 @@ async function handleOpenFile(filePath: string, line?: number): Promise<void> {
 
 export function deactivate(): void {
   disconnectEventSource()
+  costsLoader?.dispose()
+  costsLoader = undefined
+  limitsObserver?.dispose()
+  limitsObserver = undefined
   for (const r of runtimes) r.dispose()
   runtimes = []
 }

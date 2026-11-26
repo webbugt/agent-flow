@@ -7,12 +7,16 @@
  */
 
 export type { AgentEvent, SessionInfo, ConnectionStatus } from './bridge-types'
-import type { AgentEvent, SessionInfo, ConnectionStatus } from './bridge-types'
+import type { AgentEvent, SessionInfo, ConnectionStatus, CostsSaveResult } from './bridge-types'
+import type { CostsConfigPayload } from './costs/layers'
+import type { StatusLineActionResult } from './costs/observed-types'
 
 type InitCallback = () => void
 type EventCallback = (event: AgentEvent) => void
 type StatusCallback = (status: ConnectionStatus, source: string) => void
 type ConfigCallback = (config: Partial<{ mode: string; autoPlay: boolean; showMockData: boolean; disable1MContext: boolean }>) => void
+type CostsCallback = (costs: CostsConfigPayload) => void
+type LimitsCallback = (limits: unknown) => void
 type SessionCallback = (type: 'list' | 'started' | 'ended' | 'updated' | 'reset', data: SessionInfo[] | SessionInfo | string | { sessionId: string; label: string }) => void
 
 class VSCodeBridge {
@@ -25,6 +29,16 @@ class VSCodeBridge {
   private statusListeners: StatusCallback[] = []
   private configListeners: ConfigCallback[] = []
   private sessionListeners: SessionCallback[] = []
+  private costsListeners: CostsCallback[] = []
+  /** Latest `costs-config` message; a late subscriber gets it at once. */
+  private lastCosts: CostsConfigPayload | null = null
+  private limitsListeners: LimitsCallback[] = []
+  /** Latest `limits-update` message; a late subscriber gets it at once. */
+  private lastLimits: unknown = null
+  private actionSeq = 0
+  private pendingActions = new Map<string, (r: StatusLineActionResult) => void>()
+  private writeSeq = 0
+  private pendingWrites = new Map<string, (r: CostsSaveResult) => void>()
 
   constructor() {
     if (typeof window !== 'undefined') {
@@ -74,6 +88,43 @@ class VSCodeBridge {
           cb(data.config)
         }
         break
+
+      case 'costs-config': {
+        const c = data.costs
+        // Shape check only; the content is validated by resolveCostsLayers.
+        if (!c || c.version !== 1 || !Array.isArray(c.layers) || typeof c.seq !== 'number') break
+        this.lastCosts = c as CostsConfigPayload
+        for (const cb of [...this.costsListeners]) cb(this.lastCosts)
+        break
+      }
+
+      case 'limits-update': {
+        // Shape check only; web/lib/limits-runtime.ts validates the content.
+        if (!data.limits || typeof data.limits !== 'object') break
+        this.lastLimits = data.limits
+        for (const cb of [...this.limitsListeners]) cb(data.limits)
+        break
+      }
+
+      case 'statusline-action-result': {
+        const pending = this.pendingActions.get(String(data.requestId))
+        if (pending) {
+          this.pendingActions.delete(String(data.requestId))
+          pending({ ok: data.ok === true, message: typeof data.message === 'string' ? data.message.slice(0, 600) : '' })
+        }
+        break
+      }
+
+      case 'costs-config-write-result': {
+        const pending = this.pendingWrites.get(String(data.requestId))
+        if (pending) {
+          this.pendingWrites.delete(String(data.requestId))
+          pending(data.ok === true
+            ? { ok: true, ...(typeof data.fingerprint === 'string' ? { fingerprint: data.fingerprint } : {}) }
+            : { ok: false, error: typeof data.error === 'string' ? data.error : 'write failed', ...(data.conflict === true ? { conflict: true } : {}) })
+        }
+        break
+      }
 
       case 'reset':
         for (const cb of this.sessionListeners) {
@@ -146,10 +197,61 @@ class VSCodeBridge {
     return this.subscribe(this.sessionListeners, callback)
   }
 
+  /** Subscribe to costs-config messages. Fires at once with the latest one when there is one. */
+  onCostsConfig(callback: CostsCallback): () => void {
+    const off = this.subscribe(this.costsListeners, callback)
+    if (this.lastCosts) callback(this.lastCosts)
+    return off
+  }
+
+  /** Subscribe to limits-update messages. Fires at once with the latest one when there is one. */
+  onLimitsUpdate(callback: LimitsCallback): () => void {
+    const off = this.subscribe(this.limitsListeners, callback)
+    if (this.lastLimits) callback(this.lastLimits)
+    return off
+  }
+
   // ─── Send commands to extension ──────────────────────────────────────────
 
   openFile(filePath: string, line?: number): void {
     this.postToExtension({ type: 'open-file', filePath, line })
+  }
+
+  /**
+   * Opt-in: ask the extension host to install / remove the chained Claude statusLine wrapper. The host shows its own
+   * confirmation first, then answers (a refusal or a cancel comes back as `ok: false` with the reason).
+   * Resolves `ok: false` outside VS Code: the relay never edits ~/.claude/settings.json.
+   */
+  requestStatusLineAction(action: 'install' | 'uninstall', timeoutMs = 120_000): Promise<StatusLineActionResult> {
+    if (!this._isVSCode) return Promise.resolve({ ok: false, message: 'This can only be done from the VS Code extension.' })
+    return new Promise(resolve => {
+      const requestId = `s${++this.actionSeq}-${Date.now().toString(36)}`
+      const timer = setTimeout(() => {
+        if (this.pendingActions.delete(requestId)) resolve({ ok: false, message: 'The extension did not answer.' })
+      }, timeoutMs)
+      this.pendingActions.set(requestId, r => { clearTimeout(timer); resolve(r) })
+      this.postToExtension({ type: 'statusline-action', requestId, action })
+    })
+  }
+
+  /** Ask the host to open the costs file in an editor (no-op outside VS Code). */
+  openCostsConfig(): void {
+    this.postToExtension({ type: 'open-costs-config' })
+  }
+
+  /**
+   * Save the costs document through the extension host (the settings drawer). Resolves when the host answers;
+   * the new config then arrives as a normal `costs-config` message. Rejects nothing: failures come back as `{ ok: false, error }`.
+   */
+  writeCostsConfig(layer: 'user' | 'project', doc: unknown, base: string, timeoutMs = 10_000): Promise<CostsSaveResult> {
+    return new Promise(resolve => {
+      const requestId = `w${++this.writeSeq}-${Date.now().toString(36)}`
+      const timer = setTimeout(() => {
+        if (this.pendingWrites.delete(requestId)) resolve({ ok: false, error: 'the extension did not answer' })
+      }, timeoutMs)
+      this.pendingWrites.set(requestId, r => { clearTimeout(timer); resolve(r) })
+      this.postToExtension({ type: 'write-costs-config', requestId, layer, doc, base })
+    })
   }
 
   private postToExtension(message: Record<string, unknown>): void {
@@ -178,6 +280,9 @@ class VSCodeBridge {
     this.statusListeners = []
     this.configListeners = []
     this.sessionListeners = []
+    this.limitsListeners = []
+    this.costsListeners = []
+    this.lastCosts = null
   }
 }
 

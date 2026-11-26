@@ -4,7 +4,9 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { CARD, Z, type Agent } from '@/lib/agent-types'
 import { COLORS, getStateColor } from '@/lib/colors'
 import { formatModelName, formatTokens } from '@/lib/utils'
-import { agentSpendUsd } from './canvas/draw-cost'
+import { agentSpend } from './canvas/draw-cost'
+import { formatDisplayMoney } from '@/lib/costs/active'
+import { useActiveCostsVersion } from '@/hooks/use-costs-config'
 import { TranscriptMessage } from './transcript-message'
 import { ToolCallDetail } from './tool-call-detail'
 import { CloseButton, SlidingPanel, stopPropagationHandlers } from './shared-ui'
@@ -12,7 +14,7 @@ import { useAutoScroll } from '@/hooks/use-auto-scroll'
 import { useViewportWidth } from '@/hooks/use-viewport-width'
 import type { ConversationMessage } from '@/hooks/simulation/types'
 import {
-  buildSessionItems, pickDefaultAgentId, sessionDetailWidth, formatClock, formatCostUsd, formatOrigin,
+  buildSessionItems, pickDefaultAgentId, sessionDetailWidth, formatClock, formatOrigin,
   type SessionItem,
 } from '@/lib/session-detail'
 
@@ -108,6 +110,7 @@ function ToolRow({ item, open, onToggle }: { item: ToolItem; open: boolean; onTo
  */
 export function SessionDetailPanel({ visible, agents, conversations, agentId, sessionLabel, onSelectAgent, onClose }: SessionDetailPanelProps) {
   const viewportWidth = useViewportWidth(CARD.sessionDetail.width)
+  useActiveCostsVersion() // re-render when the costs config changes (money is formatted below)
   const [query, setQuery] = useState('')
   const [showSearch, setShowSearch] = useState(false)
   const [openAll, setOpenAll] = useState(false)
@@ -138,7 +141,7 @@ export function SessionDetailPanel({ visible, agents, conversations, agentId, se
 
   if (!visible) return null
 
-  const spend = agent ? agentSpendUsd(agent) : undefined
+  const spend = agent ? agentSpend(agent) : undefined
   const stateColor = agent ? getStateColor(agent.state) : COLORS.textMuted
   const lastUser = [...conversation].reverse().find(m => m.type === 'user' && (m.sender || m.platform))
   const origin = formatOrigin(lastUser?.sender, lastUser?.platform)
@@ -148,10 +151,10 @@ export function SessionDetailPanel({ visible, agents, conversations, agentId, se
   let profileNodes = 0
   for (const a of agents.values()) {
     if (a.isMain) continue
-    profileUsd += agentSpendUsd(a).usd
+    profileUsd += agentSpend(a).amount
     profileNodes++
   }
-  const profileEstimate = [...agents.values()].some(a => !a.isMain && agentSpendUsd(a).estimate)
+  const profileEstimate = [...agents.values()].some(a => !a.isMain && agentSpend(a).estimate)
 
   const isOpen = (id: string) => openAll !== toggled.has(id)
   const toggle = (id: string) => setToggled(prev => {
@@ -234,7 +237,7 @@ export function SessionDetailPanel({ visible, agents, conversations, agentId, se
               <Stat label="MODEL" value={agent.model ? formatModelName(agent.model) : 'unknown'} title={agent.model} color={agent.model ? undefined : COLORS.textMuted} />
               <Stat
                 label={spend?.estimate ? 'COST (EST.)' : 'COST'}
-                value={spend ? formatCostUsd(spend.usd, spend.estimate) : '—'}
+                value={spend ? formatDisplayMoney(spend.amount, spend.estimate) : '—'}
                 title={spend?.estimate ? 'Estimate from context size: this session has no billed usage yet' : 'From the billed token usage of this session'}
               />
               <Stat label="CONTEXT" value={`${formatTokens(agent.tokensUsed)} / ${formatTokens(agent.tokensMax)}`} />
@@ -246,7 +249,7 @@ export function SessionDetailPanel({ visible, agents, conversations, agentId, se
                 title="Billed input (with cache) and output tokens"
               />
               <Stat label="FROM" value={origin || '—'} title="Sender and platform of the latest user message" />
-              <Stat label="PROFILE TOTAL" value={profileNodes > 0 ? `${formatCostUsd(profileUsd, profileEstimate)} · ${profileNodes}` : '—'} title="All sessions of this profile in view" />
+              <Stat label="PROFILE TOTAL" value={profileNodes > 0 ? `${formatDisplayMoney(profileUsd, profileEstimate)} · ${profileNodes}` : '—'} title="All sessions of this profile in view" />
             </div>
           )}
         </div>

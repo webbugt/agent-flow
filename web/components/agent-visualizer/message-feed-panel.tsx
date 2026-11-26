@@ -7,6 +7,12 @@ import type { ConversationMessage } from '@/hooks/simulation/types'
 import { useClickOutside } from '@/hooks/use-click-outside'
 import { useVirtualList } from '@/hooks/use-virtual-list'
 
+/**
+ * Top offset: 3rem as before, or just under the top bar when that bar has wrapped to more rows (phone, many session
+ * tabs, the cost unit / prices buttons). The top bar publishes its bottom edge as --af-top-bar-bottom.
+ */
+const BELOW_TOP_BAR = 'max(3rem, calc(var(--af-top-bar-bottom, 0px) + 8px))'
+
 interface MessageFeedPanelProps {
   conversations: Map<string, ConversationMessage[]>
   agents: Map<string, Agent>
@@ -196,8 +202,8 @@ export function MessageFeedPanel({
 
     return (
       <div
-        className="absolute top-12 max-sm:top-24 cursor-pointer transition-all hover:scale-[1.02]"
-        style={{ left: 12, zIndex: Z.info, pointerEvents: 'auto' }}
+        className="absolute cursor-pointer transition-all hover:scale-[1.02]"
+        style={{ top: BELOW_TOP_BAR, left: 12, zIndex: Z.info, pointerEvents: 'auto' }}
         onClick={() => setExpanded(true)}
       >
         <div className="glass-card px-3 py-2 flex items-center gap-2" style={{ maxWidth: 320 }}>
@@ -218,8 +224,8 @@ export function MessageFeedPanel({
   return (
     <div
       ref={panelRef}
-      className="absolute top-12 max-sm:top-24"
-      style={{ left: 12, zIndex: Z.info, pointerEvents: 'auto' }}
+      className="absolute"
+      style={{ top: BELOW_TOP_BAR, left: 12, zIndex: Z.info, pointerEvents: 'auto' }}
       onClick={(e) => e.stopPropagation()}
     >
       <div className="glass-card flex flex-col" style={{ width: 320, maxHeight: 420 }}>

@@ -1,0 +1,376 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/patoles/agent-flow/extension/costs.schema.json",
+  "title": "Agent Flow costs.json",
+  "description": "Costs config for Agent Flow: ~/.agent-flow/costs.json (user) and <workspace>/.agent-flow/costs.json (project override, cannot set configPath). For editor autocomplete only: the authoritative validation is web/lib/costs/validate.ts, where unknown keys are warnings and the keys __proto__, constructor and prototype are rejected at any depth.",
+  "type": "object",
+  "propertyNames": { "not": { "enum": ["__proto__", "constructor", "prototype"] } },
+  "additionalProperties": false,
+  "properties": {
+    "$schema": { "type": "string" },
+    "schemaVersion": { "const": 1, "description": "This build reads 1." },
+    "currency": {
+      "type": "object",
+      "propertyNames": { "not": { "enum": ["__proto__", "constructor", "prototype"] } },
+      "additionalProperties": false,
+      "properties": {
+        "display": { "$ref": "#/$defs/currency" },
+        "fx": {
+          "type": "object",
+          "description": "Units of CODE per 1 USD: fx.EUR = 0.92 means 1 USD = 0.92 EUR. Rates are never fetched. USD, when given, must be 1.",
+          "propertyNames": { "pattern": "^[A-Z]{3}$", "not": { "enum": ["__proto__", "constructor", "prototype"] } },
+          "additionalProperties": { "type": "number", "exclusiveMinimum": 0, "maximum": 1000000 }
+        },
+        "fxAsOf": { "type": ["string", "null"], "pattern": "^\\d{4}-\\d{2}-\\d{2}$", "description": "Date of the exchange rates, YYYY-MM-DD." }
+      }
+    },
+    "display": {
+      "type": "object",
+      "propertyNames": { "not": { "enum": ["__proto__", "constructor", "prototype"] } },
+      "additionalProperties": false,
+      "properties": {
+        "unit": { "enum": ["auto", "money", "kwh", "tokens"] },
+        "decimals": { "oneOf": [{ "const": "auto" }, { "type": "integer", "minimum": 0, "maximum": 8 }] },
+        "subscriptionValue": { "enum": ["show", "hide"] }
+      }
+    },
+    "pricing": {
+      "type": "object",
+      "propertyNames": { "not": { "enum": ["__proto__", "constructor", "prototype"] } },
+      "additionalProperties": false,
+      "properties": {
+        "multiplier": { "type": "number", "exclusiveMinimum": 0, "maximum": 10 },
+        "unknownModel": {
+          "type": "object",
+          "description": "Policy \"global-rate\" needs globalRate.",
+          "propertyNames": { "not": { "enum": ["__proto__", "constructor", "prototype"] } },
+          "additionalProperties": false,
+          "properties": {
+            "policy": { "enum": ["provider-default", "global-rate", "unpriced", "zero"] },
+            "globalRate": {
+              "oneOf": [
+                { "type": "null" },
+                {
+                  "type": "object",
+                  "propertyNames": { "not": { "enum": ["__proto__", "constructor", "prototype"] } },
+                  "additionalProperties": false,
+                  "required": ["input", "output"],
+                  "properties": {
+                    "input": { "type": "number", "minimum": 0, "maximum": 10000 },
+                    "output": { "type": "number", "minimum": 0, "maximum": 10000 }
+                  }
+                }
+              ]
+            }
+          }
+        },
+        "providers": {
+          "type": "object",
+          "maxProperties": 100,
+          "propertyNames": { "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$", "not": { "enum": ["__proto__", "constructor", "prototype"] } },
+          "additionalProperties": { "$ref": "#/$defs/provider" }
+        },
+        "models": {
+          "type": "array",
+          "maxItems": 500,
+          "items": { "$ref": "#/$defs/rule" }
+        }
+      }
+    },
+    "energy": {
+      "type": "object",
+      "propertyNames": { "not": { "enum": ["__proto__", "constructor", "prototype"] } },
+      "additionalProperties": false,
+      "properties": {
+        "profiles": {
+          "type": "object",
+          "maxProperties": 50,
+          "propertyNames": { "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$", "not": { "enum": ["__proto__", "constructor", "prototype"] } },
+          "additionalProperties": { "$ref": "#/$defs/energyProfile" }
+        },
+        "tariff": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/tariff" }] }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "propertyNames": { "not": { "enum": ["__proto__", "constructor", "prototype"] } },
+      "additionalProperties": false,
+      "properties": {
+        "claude": { "$ref": "#/$defs/claudeLimits" },
+        "codex": { "description": "Not supported; ignored with a warning." }
+      }
+    }
+  },
+  "$defs": {
+    "currency": {
+      "type": "string",
+      "pattern": "^[A-Z]{3}$",
+      "description": "ISO 4217 code, e.g. EUR. A non-USD code needs currency.fx.<CODE>."
+    },
+    "rate": {
+      "type": "object",
+      "description": "Price per 1M tokens in the rule's currency (USD by default). Omitted cache rates are derived from input.",
+      "propertyNames": { "not": { "enum": ["__proto__", "constructor", "prototype"] } },
+      "additionalProperties": false,
+      "required": ["input", "output"],
+      "properties": {
+        "input": { "type": "number", "minimum": 0, "maximum": 10000, "description": "Uncached input." },
+        "output": { "type": "number", "minimum": 0, "maximum": 10000 },
+        "cacheRead": { "type": "number", "minimum": 0, "maximum": 10000 },
+        "cacheWrite5m": { "type": "number", "minimum": 0, "maximum": 10000 },
+        "cacheWrite1h": { "type": "number", "minimum": 0, "maximum": 10000 }
+      }
+    },
+    "tier": {
+      "type": "object",
+      "propertyNames": { "not": { "enum": ["__proto__", "constructor", "prototype"] } },
+      "additionalProperties": false,
+      "required": ["rate"],
+      "properties": {
+        "maxPromptTokens": {
+          "enum": [100000, 200000, 272000],
+          "description": "Inclusive upper bound of the prompt size. Must be a TIER_BOUNDARIES member (100000, 200000, 272000); strictly increasing; omit it on the last tier, which is the only open-ended one."
+        },
+        "rate": { "$ref": "#/$defs/rate" }
+      }
+    },
+    "tiers": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 8,
+      "items": { "$ref": "#/$defs/tier" },
+      "description": "Prompt-size tiers. Use either rate or tiers, not both."
+    },
+    "billing": { "enum": ["api", "subscription", "credits", "local", "free", "unknown"] },
+    "provider": {
+      "type": "object",
+      "propertyNames": { "not": { "enum": ["__proto__", "constructor", "prototype"] } },
+      "additionalProperties": false,
+      "not": { "required": ["rate", "tiers"] },
+      "properties": {
+        "billing": { "$ref": "#/$defs/billing" },
+        "priceLike": { "enum": ["anthropic", "copilot"], "description": "Catalog sheet that prices this provider's models." },
+        "plan": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "energyProfile": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "implicitCacheWrite": { "type": "boolean" },
+        "rate": { "$ref": "#/$defs/rate" },
+        "tiers": { "$ref": "#/$defs/tiers" },
+        "currency": { "$ref": "#/$defs/currency" }
+      }
+    },
+    "rule": {
+      "type": "object",
+      "propertyNames": { "not": { "enum": ["__proto__", "constructor", "prototype"] } },
+      "additionalProperties": false,
+      "required": ["match"],
+      "not": { "required": ["rate", "tiers"] },
+      "properties": {
+        "match": {
+          "type": "object",
+          "description": "Glob match (* and ?, case-insensitive, no regex). At least one of provider and model.",
+          "propertyNames": { "not": { "enum": ["__proto__", "constructor", "prototype"] } },
+          "additionalProperties": false,
+          "minProperties": 1,
+          "properties": {
+            "provider": { "type": "string", "minLength": 1, "maxLength": 200 },
+            "model": { "type": "string", "minLength": 1, "maxLength": 200, "description": "\".\" and \"-\" match each other." }
+          }
+        },
+        "billing": { "$ref": "#/$defs/billing" },
+        "energyProfile": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "modifiers": {
+          "type": "object",
+          "propertyNames": { "not": { "enum": ["__proto__", "constructor", "prototype"] } },
+          "additionalProperties": false,
+          "properties": {
+            "fast": { "type": "number", "exclusiveMinimum": 0, "maximum": 10 },
+            "dataResidency": { "type": "number", "exclusiveMinimum": 0, "maximum": 10 },
+            "batch": { "type": "number", "exclusiveMinimum": 0, "maximum": 10 }
+          }
+        },
+        "rate": { "$ref": "#/$defs/rate" },
+        "tiers": { "$ref": "#/$defs/tiers" },
+        "currency": { "$ref": "#/$defs/currency" }
+      }
+    },
+    "weekday": { "enum": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] },
+    "hhmm": { "type": "string", "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$", "description": "HH:MM, 00:00-23:59." },
+    "energyProfile": {
+      "type": "object",
+      "propertyNames": { "not": { "enum": ["__proto__", "constructor", "prototype"] } },
+      "additionalProperties": false,
+      "required": ["powerW"],
+      "properties": {
+        "powerW": {
+          "type": "object",
+          "description": "Watts; load must be >= idle.",
+          "propertyNames": { "not": { "enum": ["__proto__", "constructor", "prototype"] } },
+          "additionalProperties": false,
+          "required": ["idle", "load"],
+          "properties": {
+            "idle": { "type": "number", "minimum": 0, "maximum": 100000 },
+            "load": { "type": "number", "minimum": 0, "maximum": 100000 }
+          }
+        },
+        "throughput": {
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "propertyNames": { "not": { "enum": ["__proto__", "constructor", "prototype"] } },
+              "additionalProperties": false,
+              "required": ["genTokPerSec", "prefillTokPerSec"],
+              "properties": {
+                "genTokPerSec": { "type": "number", "exclusiveMinimum": 0, "maximum": 10000000 },
+                "prefillTokPerSec": { "type": "number", "exclusiveMinimum": 0, "maximum": 10000000 }
+              }
+            }
+          ]
+        },
+        "pue": { "type": "number", "minimum": 1, "maximum": 5 },
+        "attribution": { "enum": ["marginal", "total"] },
+        "measured": { "type": "null", "description": "Reserved for measured power; ignored." }
+      }
+    },
+    "tariff": {
+      "type": "object",
+      "propertyNames": { "not": { "enum": ["__proto__", "constructor", "prototype"] } },
+      "additionalProperties": false,
+      "required": ["flatPerKWh"],
+      "properties": {
+        "currency": { "$ref": "#/$defs/currency" },
+        "flatPerKWh": { "type": "number", "minimum": 0, "maximum": 1000 },
+        "timeOfDay": {
+          "type": "array",
+          "maxItems": 50,
+          "description": "Windows must not overlap; midnight-wrapping windows continue on the next weekday.",
+          "items": {
+            "type": "object",
+            "propertyNames": { "not": { "enum": ["__proto__", "constructor", "prototype"] } },
+            "additionalProperties": false,
+            "required": ["days", "from", "to", "perKWh"],
+            "properties": {
+              "days": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/weekday" } },
+              "from": { "$ref": "#/$defs/hhmm" },
+              "to": { "type": "string", "pattern": "^(([01][0-9]|2[0-3]):[0-5][0-9]|24:00)$", "description": "HH:MM, 00:00-24:00; must differ from \"from\"." },
+              "perKWh": { "type": "number", "minimum": 0, "maximum": 1000 }
+            }
+          }
+        },
+        "tz": { "type": ["string", "null"], "description": "IANA time zone, e.g. Europe/Zagreb." }
+      }
+    },
+    "budget": {
+      "type": "object",
+      "propertyNames": { "not": { "enum": ["__proto__", "constructor", "prototype"] } },
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "budgetUsdEquiv": { "type": ["number", "null"], "exclusiveMinimum": 0, "maximum": 1000000000 }
+      }
+    },
+    "claudeLimits": {
+      "type": "object",
+      "propertyNames": { "not": { "enum": ["__proto__", "constructor", "prototype"] } },
+      "additionalProperties": false,
+      "properties": {
+        "plan": { "enum": ["pro", "max5x", "ultra", "custom", "api", null] },
+        "planLabel": { "type": ["string", "null"], "minLength": 1, "maxLength": 60 },
+        "planMultiplierOfPro": { "type": ["number", "null"], "exclusiveMinimum": 0, "maximum": 1000 },
+        "fiveHour": { "$ref": "#/$defs/budget" },
+        "weekly": {
+          "type": "object",
+          "propertyNames": { "not": { "enum": ["__proto__", "constructor", "prototype"] } },
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "budgetUsdEquiv": { "type": ["number", "null"], "exclusiveMinimum": 0, "maximum": 1000000000 },
+            "resetsAt": {
+              "oneOf": [
+                { "type": "null" },
+                {
+                  "type": "object",
+                  "propertyNames": { "not": { "enum": ["__proto__", "constructor", "prototype"] } },
+                  "additionalProperties": false,
+                  "required": ["dow", "time", "tz"],
+                  "properties": {
+                    "dow": { "$ref": "#/$defs/weekday" },
+                    "time": { "$ref": "#/$defs/hhmm" },
+                    "tz": { "type": "string", "description": "IANA time zone." }
+                  }
+                }
+              ]
+            }
+          }
+        },
+        "fable": {
+          "type": "object",
+          "propertyNames": { "not": { "enum": ["__proto__", "constructor", "prototype"] } },
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "budgetUsdEquiv": { "type": ["number", "null"], "exclusiveMinimum": 0, "maximum": 1000000000 },
+            "shareOfWeekly": {
+              "description": "A number in (0, 1] or {lo, point, hi} with lo <= point <= hi.",
+              "oneOf": [
+                { "type": "number", "exclusiveMinimum": 0, "maximum": 1 },
+                {
+                  "type": "object",
+                  "propertyNames": { "not": { "enum": ["__proto__", "constructor", "prototype"] } },
+                  "additionalProperties": false,
+                  "properties": {
+                    "lo": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 },
+                    "point": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 },
+                    "hi": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 }
+                  }
+                }
+              ]
+            },
+            "relativeWeight": {
+              "type": "object",
+              "description": "lo <= hi.",
+              "propertyNames": { "not": { "enum": ["__proto__", "constructor", "prototype"] } },
+              "additionalProperties": false,
+              "properties": {
+                "lo": { "type": "number", "exclusiveMinimum": 0, "maximum": 100 },
+                "hi": { "type": "number", "exclusiveMinimum": 0, "maximum": 100 }
+              }
+            },
+            "anchors": {
+              "type": "array",
+              "maxItems": 200,
+              "items": {
+                "type": "object",
+                "propertyNames": { "not": { "enum": ["__proto__", "constructor", "prototype"] } },
+                "additionalProperties": false,
+                "required": ["at", "observedPct"],
+                "properties": {
+                  "at": { "type": "string", "format": "date-time", "description": "ISO 8601 timestamp of the reading." },
+                  "observedPct": { "type": "number", "minimum": 0, "maximum": 100 }
+                }
+              }
+            }
+          }
+        },
+        "weights": {
+          "type": "object",
+          "propertyNames": { "not": { "enum": ["__proto__", "constructor", "prototype"] } },
+          "additionalProperties": false,
+          "properties": {
+            "fable": { "type": "number", "minimum": 0, "maximum": 100 },
+            "mythos": { "type": "number", "minimum": 0, "maximum": 100 },
+            "opus": { "type": "number", "minimum": 0, "maximum": 100 },
+            "sonnet": { "type": "number", "minimum": 0, "maximum": 100 },
+            "haiku": { "type": "number", "minimum": 0, "maximum": 100 }
+          }
+        },
+        "sources": { "type": "array", "minItems": 1, "items": { "enum": ["statusline", "estimate"] } },
+        "countProviders": {
+          "type": "array",
+          "maxItems": 100,
+          "items": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$" }
+        }
+      }
+    }
+  }
+}

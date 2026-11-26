@@ -1,6 +1,9 @@
 // Agent Visualizer Types — Holographic Edition v2
 // Now with actual information visibility
 
+import type { PromptBucket } from './costs/tiers'
+import type { EnergyUsage } from './costs/types'
+
 export type AgentState = 'idle' | 'thinking' | 'tool_calling' | 'complete' | 'error' | 'paused' | 'waiting_permission'
 
 // Context window composition — the key insight
@@ -12,14 +15,32 @@ export interface ContextBreakdown {
   subagentResults: number // results from child agents
 }
 
-/** Cumulative billed token counts for one agent (from the transcript's usage) */
-export interface SpendTotals {
+/** Token counts of one kind of usage (the flat part of `SpendTotals`). Mirror of extension/src/protocol.ts. */
+export interface TokenCounts {
   inputTokens: number
   outputTokens: number
   cacheReadTokens: number
   cacheWrite5mTokens: number
   cacheWrite1hTokens: number
+}
+
+/** Cumulative billed token counts for one agent (from the transcript's usage). Mirror of extension/src/protocol.ts. */
+export interface SpendTotals extends TokenCounts {
   model?: string
+  /** Provider id of the latest call (`anthropic`, or the Hermes `provider=` value) */
+  provider?: string
+  /** The same totals split by per-request prompt size; the buckets sum to the flat totals */
+  byBucket?: Partial<Record<PromptBucket, TokenCounts>>
+  /** 10-minute buckets `<slot>|<provider>|<model>|<prompt bucket>` of the last 8 days (plan-limit estimate, P6b) */
+  byTime?: Record<string, TokenCounts>
+  /** API calls counted into these totals */
+  calls?: number
+  /** Calls that reported a latency */
+  timedCalls?: number
+  /** Sum of the reported per-call latencies, in seconds */
+  latencySeconds?: number
+  /** Hour-bucketed busy time of a local model; priced with the current config (web/lib/costs/energy.ts) */
+  energy?: EnergyUsage
 }
 
 export interface Agent {
@@ -164,6 +185,10 @@ export interface Edge {
   active?: boolean
   /** resource edges: beam colour (the resource's own colour) */
   color?: string
+  /** resource edges (fleet map): the link starts at this cloud's halo instead of at an agent (`from` is the cloud id). */
+  fromCloud?: boolean
+  /** resource edges (fleet map): epoch ms of the last use. The link is drawn for a linger window after it, then fades out. */
+  lastUsedAt?: number
 }
 
 export interface Particle {

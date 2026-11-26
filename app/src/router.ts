@@ -6,6 +6,7 @@ import type * as http from 'http'
 
 import { serveStatic } from './static'
 import { handleFleetHttp, isFleetPath, type FleetRouteOptions } from './fleet-route'
+import { handleCostsWrite, isCostsPath, type CostsWriter } from './costs-route'
 import { BUILD_INFO, type BuildInfo } from './build-info'
 import { isLoopbackHost } from '../../extension/src/request-guard'
 
@@ -33,6 +34,8 @@ export interface RouterDeps {
   handleSSE: (req: http.IncomingMessage, res: http.ServerResponse) => void
   fleet?: FleetRouteOptions
   buildInfo?: BuildInfo
+  /** Writes the costs config (settings drawer). Absent = POST /costs-config answers 503. */
+  costs?: CostsWriter
 }
 
 export function createRequestListener(deps: RouterDeps): http.RequestListener {
@@ -52,6 +55,15 @@ export function createRequestListener(deps: RouterDeps): http.RequestListener {
 
     if (isHealthPath(req.url)) {
       return handleHealth(req, res, deps.buildInfo)
+    }
+
+    // Costs config write (settings drawer): same-site JSON POST only, see costs-route.ts
+    if (isCostsPath(req.url)) {
+      void handleCostsWrite(req, res, deps.costs).catch(() => {
+        if (!res.headersSent) res.writeHead(500, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ ok: false, error: 'costs config write failed' }))
+      })
+      return
     }
 
     // Read-only Kanban / Supermemory fleet data (loopback-only unless opted in)

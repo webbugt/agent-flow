@@ -26,3 +26,10 @@ export interface SessionInfo {
 }
 
 export type ConnectionStatus = 'connected' | 'disconnected' | 'watching'
+
+/** Answer to a settings-drawer save (see costs-write.ts). */
+export type CostsSaveResult =
+  /** `fingerprint`: version of the file just written, the base of the next save. */
+  | { ok: true; fingerprint?: string }
+  /** `conflict`: the file changed since the drawer loaded it, nothing was written. */
+  | { ok: false; error: string; conflict?: boolean }

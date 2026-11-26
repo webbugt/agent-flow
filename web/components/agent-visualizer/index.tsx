@@ -1,12 +1,16 @@
 "use client"
 
-import { useState, useCallback, useMemo, useEffect, useLayoutEffect, useRef } from "react"
+import { useState, useCallback, useMemo, useEffect, useLayoutEffect, useRef, useSyncExternalStore } from "react"
 import { useAgentSimulation } from "@/hooks/use-agent-simulation"
 import { useVSCodeBridge } from "@/hooks/use-vscode-bridge"
 import { useSelectionState } from "@/hooks/use-selection-state"
 import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts"
 import { AgentCanvas } from "./canvas"
-import { agentSpendUsd } from "./canvas/draw-cost"
+import { agentCostOf } from "./canvas/draw-cost"
+import { effectiveCosts } from "@/lib/costs/active"
+import { buildTopBarCost, describeSources } from "@/lib/costs/overlay"
+import { getOverlayUnit, overlayUnitVersion, subscribeOverlayUnit } from "@/lib/cost-overlay-store"
+import { CostsSettingsDrawer } from "./costs-settings-drawer"
 import { ControlBar } from "./control-bar"
 import { AgentDetailCard } from "./agent-detail-card"
 import { GlassContextMenu } from "./glass-context-menu"
@@ -16,6 +20,8 @@ import { FileAttentionPanel } from "./file-attention-panel"
 import { TimelinePanel } from "./timeline-panel"
 import { FleetTimelinePanel } from "./fleet-timeline-panel"
 import { FleetMap } from "./fleet-map"
+import { createDemoResources, addDemoEvent, addDemoNodes, type DemoEventKind } from "@/lib/fleet/fleet-demo-resources"
+import { loadTimelineVisible, saveTimelineVisible, mapInsetBottom } from "@/lib/fleet/fleet-timeline-pref"
 import { useFleetSelection } from "@/hooks/use-fleet-selection"
 import { useFleetSources } from "@/hooks/use-fleet-sources"
 import { createFleetFixtureSessions } from "@/lib/fleet/fleet-fixture-events"
@@ -27,10 +33,15 @@ import { OpenFileProvider } from "./tool-content-renderer"
 import { stopPropagationHandlers } from "./shared-ui"
 import { CARD, TimelineEvent, TIMING } from "@/lib/agent-types"
 import { COLORS } from "@/lib/colors"
+import { registerShotHook, markShotReady } from "@/lib/shot-mode"
 
 import { MOCK_DURATION } from "@/lib/mock-scenario"
 import { MessageFeedPanel } from "./message-feed-panel"
 import { TopBar } from "./top-bar"
+import { CostsConfigBanner } from "./costs-config-banner"
+import { LimitsPanelHost } from "./limits-panel"
+import { useCostsConfig } from "@/hooks/use-costs-config"
+import { useLimitsFeed } from "@/hooks/use-limits"
 import { useAudioEffects } from "@/hooks/use-audio-effects"
 import { useViewportWidth } from "@/hooks/use-viewport-width"
 import { detailInset } from "@/lib/session-detail"
@@ -79,6 +90,12 @@ export function AgentVisualizer() {
   const [showCostOverlay, setShowCostOverlay] = useState(false)
   const [showTimeline, setShowTimeline] = useState(false)
   const [showFleet, setShowFleet] = useState(false)
+  // Fleet timeline panel: shown by default; the choice is kept in localStorage (read after mount, so SSR matches).
+  const [fleetTimelineVisible, setFleetTimelineVisible] = useState(true)
+  useEffect(() => { setFleetTimelineVisible(loadTimelineVisible(window.localStorage)) }, [])
+  const toggleFleetTimeline = useCallback(() => {
+    setFleetTimelineVisible(prev => { saveTimelineVisible(window.localStorage, !prev); return !prev })
+  }, [])
   const [showFileAttention, setShowFileAttention] = useState(false)
   const [showTranscript, setShowTranscript] = useState(false)
   // Session detail: the whole conversation + tool calls of ONE Hermes session (agent node)
@@ -96,6 +113,31 @@ export function AgentVisualizer() {
   const fleetSelection = useFleetSelection()
   const fleetSources = useFleetSources(showFleet && !bridge.useMockData)
   const fleetFixture = useMemo(() => createFleetFixture(Date.now()), [])
+  // Demo: invented boards and namespaces, plus a new event now and then, so the map shows placement, link linger and pulses.
+  const [demoSources, setDemoSources] = useState(() => createDemoResources(Date.now()))
+  const demoSeqRef = useRef(0)
+  useEffect(() => {
+    if (!bridge.useMockData || !showFleet) return
+    // The sequence number is taken outside the state updater: React may run an updater twice (Strict Mode).
+    const emit = (kind: DemoEventKind) => {
+      const seq = demoSeqRef.current++
+      const at = Date.now()
+      setDemoSources(prev => addDemoEvent(prev, kind, at, seq))
+    }
+    // A poll that brings new nodes (a new board and a new namespace): the user's zoom must survive it.
+    const poll = () => {
+      const seq = demoSeqRef.current++
+      const at = Date.now()
+      setDemoSources(prev => addDemoNodes(prev, at, seq))
+    }
+    // Handle for the demo only (screenshots, manual checks): `__fleetDemo.emit('kanban' | 'memory')`, `__fleetDemo.poll()`.
+    const w = window as unknown as { __fleetDemo?: { emit: (kind: DemoEventKind) => void; poll: () => void } }
+    w.__fleetDemo = { emit, poll }
+    const timer = setInterval(() => emit(demoSeqRef.current % 2 ? 'kanban' : 'memory'), 20_000)
+    return () => { clearInterval(timer); delete w.__fleetDemo }
+  }, [bridge.useMockData, showFleet])
+  const fleetKanban = bridge.useMockData ? demoSources.kanban : fleetSources.kanban
+  const fleetMemory = bridge.useMockData ? demoSources.supermemory : fleetSources.supermemory
   // The fleet reads EVERY session of every profile (also closed tabs) and each agent node
   // inside them, never just the open tab. Their events are buffered in refs, so a slow tick
   // refreshes the instances while the panel is open.
@@ -152,6 +194,25 @@ export function AgentVisualizer() {
 
   const [isReviewing, setIsReviewing] = useState(false)
   const { isMuted, seekingRef, handleToggleMute } = useAudioEffects(agents, toolCalls, isReviewing)
+
+  // Screenshot harness (?shot=1 only, see lib/shot-mode.ts): freeze the simulation, open a panel by name
+  useEffect(() => {
+    const offFreeze = registerShotHook('freeze', () => { pause(); markShotReady() })
+    const offPanel = registerShotHook('setPanel', (name: string) => {
+      setShowFileAttention(name === 'files')
+      setShowTranscript(name === 'transcript')
+      setShowCostOverlay(name === 'cost')
+      setShowSessionDetail(name === 'session')
+    })
+    const offSeek = registerShotHook('seekEnd', () => {
+      // The last message event (else the last event), not maxTimeReached, which also counts the wall time
+      // the page has been playing: speech bubbles expire 12 s after their event, so this keeps them shown
+      const log = frameRef.current.eventLog
+      const last = [...log].reverse().find(e => e.type === 'message') ?? log[log.length - 1]
+      pause(); seekToTime(last ? last.time : 0)
+    })
+    return () => { offFreeze(); offPanel(); offSeek() }
+  }, [pause, seekToTime, frameRef])
 
   // Auto-play on mount
   useEffect(() => {
@@ -287,10 +348,26 @@ export function AgentVisualizer() {
     return sum
   }, [agents])
 
-  const totalCostUsd = useMemo(() => {
-    let sum = 0
-    for (const a of agents.values()) sum += agentSpendUsd(a).usd
-    return sum
+  const costsStatus = useCostsConfig()
+  useLimitsFeed()
+  const [showCostSettings, setShowCostSettings] = useState(false)
+  const costUnit = useSyncExternalStore(subscribeOverlayUnit, overlayUnitVersion, overlayUnitVersion)
+  // Top bar cost: split by billing kind (billed / list-equiv / estimated), in the unit in effect. Follows a config change.
+  const costText = useMemo(() => {
+    const items = Array.from(agents.values()).filter(a => a.tokensUsed > 0 || a.spend).map(a => ({ name: a.name, cost: agentCostOf(a), tokens: a.tokensUsed }))
+    return buildTopBarCost(items, getOverlayUnit(), effectiveCosts())
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agents, costsStatus.resolution, costUnit])
+  const costSources = useMemo(() => describeSources(costsStatus.sources), [costsStatus.sources])
+  // The plan limits are one meter for the whole account: the LIMITS panel reads the ledger of EVERY session, not only the open tab.
+  const limitSessionIds = useMemo(
+    () => (bridge.useMockData ? [] : fleetSessions(bridgeSessions, getDismissedSessions()).map(s => s.id)),
+    [bridge.useMockData, bridgeSessions, getDismissedSessions],
+  )
+  const seenProviders = useMemo(() => {
+    const out = new Set<string>()
+    for (const a of agents.values()) if (a.spend?.provider) out.add(a.spend.provider)
+    return Array.from(out)
   }, [agents])
 
   const selectedAgent = selection.selectedAgentId ? agents.get(selection.selectedAgentId) : null
@@ -542,22 +619,24 @@ export function AgentVisualizer() {
         eventsOf={mapEventsOf}
         tick={fleetTick}
         instances={fleetInstances}
-        kanban={bridge.useMockData ? undefined : fleetSources.kanban}
-        supermemory={bridge.useMockData ? undefined : fleetSources.supermemory}
+        kanban={fleetKanban}
+        supermemory={fleetMemory}
         selection={fleetSelection.view}
         onOpenSession={bridge.useMockData ? undefined : handleFleetOpenSession}
         replay={fleetReplayRef.current}
         insetTop={48}
-        insetBottom={380}
+        insetBottom={mapInsetBottom(fleetTimelineVisible)}
+        timelineVisible={fleetTimelineVisible}
+        onToggleTimeline={toggleFleetTimeline}
         insetRight={detailInset(showSessionDetail, viewportWidth, CARD.sessionDetail.width)}
       />
 
       {/* Fleet timeline panel (grouped agents + Kanban/Supermemory lanes) */}
       <FleetTimelinePanel
-        visible={showFleet}
+        visible={showFleet && fleetTimelineVisible}
         instances={fleetInstances}
-        kanban={bridge.useMockData ? undefined : fleetSources.kanban}
-        supermemory={bridge.useMockData ? undefined : fleetSources.supermemory}
+        kanban={fleetKanban}
+        supermemory={fleetMemory}
         selection={fleetSelection}
         onOpenSession={bridge.useMockData ? undefined : handleFleetOpenSession}
         canOpenSession={canOpenFleetSession}
@@ -576,7 +655,10 @@ export function AgentVisualizer() {
         connectionStatus={bridge.connectionStatus}
         agentCount={agents.size}
         totalTokens={totalTokens}
-        totalCostUsd={totalCostUsd}
+        costText={costText}
+        projectOverride={costSources.projectOverrides}
+        projectOverrideTitle={costSources.text}
+        onOpenCostSettings={() => setShowCostSettings(true)}
         showFileAttention={showFileAttention}
         showTranscript={showTranscript}
         showCostOverlay={showCostOverlay}
@@ -589,6 +671,22 @@ export function AgentVisualizer() {
         onToggleFleet={() => { setShowFleet(prev => !prev); setShowTimeline(false) }}
         onToggleMute={handleToggleMute}
       />
+
+      {/* Costs config error banner (invalid ~/.agent-flow/costs.json etc.) */}
+      <CostsConfigBanner status={costsStatus} />
+
+      {/* LIMITS panel: observed 5h / weekly, estimates with tags, and the Fable estimate when Fable was used this week */}
+      <LimitsPanelHost sessionIds={limitSessionIds} eventsOf={getSessionEvents} />
+
+      {/* Cost settings drawer: prices per provider/model, currency and FX (writes the user costs.json) */}
+      {showCostSettings && (
+        <CostsSettingsDrawer
+          key={costsStatus.resolution.seq === 0 ? 'initial' : 'open'}
+          status={costsStatus}
+          seenProviders={seenProviders}
+          onClose={() => setShowCostSettings(false)}
+        />
+      )}
     </div>
     </OpenFileProvider>
   )

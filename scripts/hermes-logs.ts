@@ -36,7 +36,10 @@
  */
 import * as fs from 'fs'
 import * as path from 'path'
-import type { AgentEvent, SessionInfo } from '../extension/src/protocol'
+import type { AgentEvent, EnergyUsage, SessionInfo, SpendTotals } from '../extension/src/protocol'
+import { addUsage } from '../extension/src/usage-ledger'
+import { EnergyLedger } from '../web/lib/costs/energy'
+import { BUILTIN_PROVIDERS } from '../web/lib/costs/resolve'
 import { readSessionTranscript, rowsToItems } from './hermes-transcript'
 import type { TranscriptReader } from './hermes-transcript'
 import { isAnonymized, warnUnknownProfiles } from '../web/lib/content-privacy'
@@ -57,6 +60,10 @@ export type HermesLogEvent =
   | {
       kind: 'api'
       model: string
+      /** Hermes `provider=` value (`copilot`, `claude-subscription-directsdk-experimental`, `ollama`, ...) */
+      provider: string
+      /** Latency of this call in seconds; absent when the line has no `latency=` */
+      latencySeconds?: number
       inputTokens: number
       outputTokens: number
       /** Tokens read from the prompt cache (part of `in`) */
@@ -73,9 +80,12 @@ export interface ParsedHermesLine {
 
 const LINE_RE = /^\S+ \S+ \w+ (?:\[([^\]]+)\] )?agent\.(?:tool_executor|conversation_loop): (.*)$/
 const TOOL_RE = /^tool (\S+) (completed|failed) \(([\d.]+)s/
-const API_RE = /^API call #\d+: model=(\S+) provider=\S+ in=(\d+) out=(\d+)\b/
+const API_RE = /^API call #\d+: model=(\S+) provider=(\S+) in=(\d+) out=(\d+)\b/
+const LATENCY_RE = /\blatency=(\d+(?:\.\d+)?)(ms|s)\b/
 const CACHE_RE = /\bcache=(\d+)\/\d+\b/
 const WRITE_RE = /\bwrite=(\d+)\b/
+/** The trailing ` id=<opaque>` field (a response id; may be long and arbitrary) is cut off before the counters are read. */
+const ID_TAIL_RE = / id=\S*$/
 
 /** Parse one agent.log line. Returns null for lines the watcher does not use. */
 export function parseHermesLogLine(line: string): ParsedHermesLine | null {
@@ -94,21 +104,49 @@ export function parseHermesLogLine(line: string): ParsedHermesLine | null {
 
   const api = API_RE.exec(body)
   if (api) {
-    const cache = CACHE_RE.exec(body)
-    const write = WRITE_RE.exec(body)
+    const fields = body.replace(ID_TAIL_RE, '')
+    const cache = CACHE_RE.exec(fields)
+    const write = WRITE_RE.exec(fields)
+    const latency = LATENCY_RE.exec(fields)
     return {
       sid,
       event: {
         kind: 'api',
         model: api[1],
-        inputTokens: Number(api[2]),
-        outputTokens: Number(api[3]),
+        provider: api[2],
+        ...(latency ? { latencySeconds: latency[2] === 'ms' ? Number(latency[1]) / 1000 : Number(latency[1]) } : {}),
+        inputTokens: Number(api[3]),
+        outputTokens: Number(api[4]),
         cacheReadTokens: cache ? Number(cache[1]) : 0,
         cacheWriteTokens: write ? Number(write[1]) : 0,
       },
     }
   }
   return null
+}
+
+const LOG_TIME_RE = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})(?:[,.](\d{1,3}))?\b/
+
+/**
+ * Wall-clock time of a log line (epoch ms). Hermes writes the host's local time, so the fields are read as local time
+ * (the same zone the energy tariff uses by default). Null when the line has no timestamp prefix.
+ */
+export function parseHermesLogTimestamp(line: string): number | null {
+  const m = LOG_TIME_RE.exec(line)
+  if (!m) return null
+  const ms = m[7] ? Number(m[7].padEnd(3, '0')) : 0
+  const t = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5]), Number(m[6]), ms).getTime()
+  return Number.isFinite(t) ? t : null
+}
+
+/**
+ * Calls whose busy time is recorded for the energy estimate: every provider except the built-in non-local ones
+ * (Claude, Copilot). Whether an unknown provider really is a local model is decided on the page from the config in
+ * force, so a user rule can mark `my-gpu-box` as local without the host knowing.
+ */
+export function mayBeLocalProvider(provider: string): boolean {
+  const builtin = Object.hasOwn(BUILTIN_PROVIDERS, provider) ? BUILTIN_PROVIDERS[provider] : undefined
+  return builtin === undefined || builtin.billing === 'local'
 }
 
 export interface InboundMessage {
@@ -354,13 +392,12 @@ interface SessionState {
     /** Platform and sender of the session (its `sessions` row) */
     origin?: { platform?: string; sender?: string }
   }
-  spend: {
-    inputTokens: number
-    outputTokens: number
-    cacheReadTokens: number
-    cacheWrite5mTokens: number
-    cacheWrite1hTokens: number
-  }
+  /** Cumulative usage of the session: flat totals, per-prompt-size buckets, provider, latency (see SpendTotals) */
+  spend: SpendTotals
+  /** Hour-bucketed local-model busy time (P5); set once a call that may be local was seen */
+  energy?: EnergyUsage
+  /** Prompt size of the last call, re-sent with a corrected-energy update */
+  lastTokens?: number
 }
 
 interface ProfileState {
@@ -443,6 +480,9 @@ export class HermesLogWatcher {
   private readonly titleFor: (profile: string, dbFile: string, sid: string) => string | undefined
   private readonly transcriptFor: TranscriptReader | undefined
   private readonly profiles = new Map<string, ProfileState>()
+  /** Busy time of local-model calls across all profiles (they share the machine's hardware per provider) */
+  private readonly energy = new EnergyLedger()
+  private readonly energyOwners = new Map<string, { p: ProfileState; s: SessionState }>()
   private timer: NodeJS.Timeout | null = null
   private lastDiscovery = Number.NEGATIVE_INFINITY
 
@@ -474,7 +514,7 @@ export class HermesLogWatcher {
     for (const p of this.profiles.values()) {
       readTail(p.agentTail, line => {
         const parsed = parseHermesLogLine(line)
-        if (parsed) this.handle(p, parsed)
+        if (parsed) this.handle(p, parsed, parseHermesLogTimestamp(line))
       })
       readTail(p.gatewayTail, line => {
         const inbound = parseGatewayInbound(line)
@@ -632,7 +672,7 @@ export class HermesLogWatcher {
     this.opts.emit({ time: 0, type: 'agent_complete', payload: { name: p.group, idle: true } } as AgentEvent, p.sessionId)
   }
 
-  private handle(p: ProfileState, parsed: ParsedHermesLine): void {
+  private handle(p: ProfileState, parsed: ParsedHermesLine, lineMs: number | null = null): void {
     const t = this.now()
     let sid = parsed.sid
     if (sid) {
@@ -669,28 +709,72 @@ export class HermesLogWatcher {
         this.emitFor(p, s, agent => ({ time, type: 'model_detected', payload: { agent, model: ev.model } }))
       }
       const newInput = Math.max(0, ev.inputTokens - ev.cacheReadTokens - ev.cacheWriteTokens)
-      s.spend = {
-        inputTokens: s.spend.inputTokens + newInput,
-        outputTokens: s.spend.outputTokens + ev.outputTokens,
-        cacheReadTokens: s.spend.cacheReadTokens + ev.cacheReadTokens,
-        // Hermes does not say which cache TTL it used; the default 5-minute bucket is assumed.
-        cacheWrite5mTokens: s.spend.cacheWrite5mTokens + ev.cacheWriteTokens,
-        cacheWrite1hTokens: s.spend.cacheWrite1hTokens,
-      }
-      const spend = { ...s.spend, model: ev.model }
-      const time = this.elapsed(s, t)
-      this.emitFor(p, s, agent => ({
-        time,
-        type: 'context_update',
-        payload: {
-          agent,
-          tokens: ev.inputTokens,
-          breakdown: { systemPrompt: 0, userMessages: 0, toolResults: 0, reasoning: 0, subagentResults: 0 },
-          spend,
+      s.spend = addUsage(
+        s.spend,
+        {
+          inputTokens: newInput,
+          outputTokens: ev.outputTokens,
+          cacheReadTokens: ev.cacheReadTokens,
+          // Hermes does not say which cache TTL it used; the default 5-minute bucket is assumed.
+          cacheWrite5mTokens: ev.cacheWriteTokens,
+          cacheWrite1hTokens: 0,
         },
-      }))
+        {
+          model: ev.model,
+          provider: ev.provider,
+          latencySeconds: ev.latencySeconds,
+          // `in=` is the whole prompt (cache read and write included); newInput is clamped at 0, so keep the larger.
+          promptTokens: Math.max(ev.inputTokens, ev.cacheReadTokens + ev.cacheWriteTokens),
+          // When the call ended (the log line's own time, else now): the plan-limit estimate needs it
+          atMs: lineMs ?? t,
+        },
+      )
+      // Energy (P5): busy time of calls that may be local models, hour-bucketed and overlap-split per device.
+      const touched: Array<{ owner: string; p: ProfileState; s: SessionState }> = []
+      if (mayBeLocalProvider(ev.provider)) {
+        const owner = `${p.profile}/${s.sid}`
+        this.energyOwners.set(owner, { p, s })
+        const endMs = lineMs ?? t
+        if (ev.latencySeconds !== undefined && ev.latencySeconds > 0) {
+          // The log line is written when the call returns; its latency says when the call started. Calls to one provider share its device.
+          for (const o of this.energy.recordTimed(ev.provider, owner, endMs - ev.latencySeconds * 1000, endMs)) {
+            const other = this.energyOwners.get(o)
+            if (other && other.s !== s) touched.push({ owner: o, ...other })
+          }
+        } else {
+          this.energy.recordUntimed(owner, endMs, newInput, ev.outputTokens)
+        }
+        s.energy = this.energy.usage(owner)
+      }
+      s.lastTokens = ev.inputTokens
+      this.publishSpend(p, s, this.elapsed(s, t))
+      // Sessions whose share of a shared stretch just shrank get the corrected totals too (their next call may be far away).
+      for (const other of touched) {
+        other.s.energy = this.energy.usage(other.owner)
+        this.publishSpend(other.p, other.s, this.elapsed(other.s, t))
+      }
     }
     s.lastActivity = t
+  }
+
+  /** Emit the session's cumulative spend (and energy busy time) as a context update. */
+  private publishSpend(p: ProfileState, s: SessionState, time: number): void {
+    const spend = {
+      ...s.spend,
+      ...(s.spend.byBucket ? { byBucket: { ...s.spend.byBucket } } : {}),
+      ...(s.energy ? { energy: s.energy } : {}),
+    }
+    const tokens = s.lastTokens ?? 0
+    this.emitFor(p, s, agent => ({
+      time,
+      type: 'context_update',
+      payload: {
+        agent,
+        tokens,
+        breakdown: { systemPrompt: 0, userMessages: 0, toolResults: 0, reasoning: 0, subagentResults: 0 },
+        spend,
+      },
+    }))
   }
 
   /**
@@ -797,7 +881,7 @@ export class HermesLogWatcher {
       agentName: '',
       pending: [],
       toolSeq: 0,
-      spend: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWrite5mTokens: 0, cacheWrite1hTokens: 0 },
+      spend: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWrite5mTokens: 0, cacheWrite1hTokens: 0, calls: 0, timedCalls: 0, latencySeconds: 0 },
     }
     p.sessions.set(sid, s)
     return s

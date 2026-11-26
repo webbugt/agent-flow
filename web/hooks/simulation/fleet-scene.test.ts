@@ -56,7 +56,7 @@ function sceneFor(f: ReturnType<typeof fixture>, selection: FleetSelectionView =
   const instances = instancesFromSessionEvents(f.sessions, id => f.events[id] ?? [])
   const graph = buildFleetGraph({ instances, kanban: extra.kanban, supermemory: extra.supermemory, selection, now: NOW })
   const scene = buildFleetScene({
-    sessions: f.sessions, stateOf: id => replay.advance(id, f.events[id] ?? []), instances, selection, graph, kanban: extra.kanban,
+    sessions: f.sessions, stateOf: id => replay.advance(id, f.events[id] ?? []), instances, selection, graph,
   })
   return { scene, replay, graph, instances }
 }
@@ -72,15 +72,15 @@ const space = (tag: string, byProfile: Record<string, number>): SupermemoryNames
   id: `supermemory:${tag}`, type: 'supermemory-namespace', containerTag: tag,
   counts: { store: 1, search: 3, forget: 0 }, total: 4,
   byProfile: Object.fromEntries(Object.entries(byProfile).map(([p, n]) => [p, { store: 0, search: n, forget: 0 }])),
-  daily: [], lastEventAt: NOW - MIN,
+  daily: [], lastEventAt: NOW - MIN, lastByProfile: {}, recent: [],
 })
 
 test('fleet scene: two active profiles each show their agent nodes with their action nodes', () => {
   const { scene } = sceneFor(fixture())
   const agents = [...scene.state.agents.values()]
   const names = agents.map(a => a.name).sort()
-  // Both profiles: the main node (its profile name) and the session node.
-  assert.deepEqual(names, ['sophia', 'sophia · Report', 'taxis', 'taxis · Plan'])
+  // No central hub: each session is its own node, the profile's main node is not drawn.
+  assert.deepEqual(names, ['sophia · Report', 'taxis · Plan'])
   for (const a of agents) assert.ok(a.sessionId, `${a.name} carries its session`)
   const cards = (agent: string) => [...scene.state.toolCalls.values()].filter(tc => tc.agentId === agent)
   assert.equal(cards('hermes-taxis::taxis · Plan').length, 2, 'taxis: both tool calls orbit its node')
@@ -113,19 +113,19 @@ test('fleet scene: clicking an agent, or one of its satellites, opens that agent
   assert.equal(openTargetOf(scene, 'nope'), null)
 })
 
-test('fleet scene: clicking a profile main node opens that profile session (default node), not the empty main node', () => {
-  const { scene } = sceneFor(fixture())
-  const main = scene.state.agents.get('hermes-taxis::taxis')!
-  assert.equal(main.isMain, true)
+test('fleet scene: no hub node; a profile that has only its main node still shows as one node and opens its session', () => {
+  const f = fixture()
+  f.sessions.push(session('lone'))
+  f.events['hermes-lone'] = [{ time: 0, type: 'agent_spawn', payload: { name: 'lone', isMain: true, profile: 'lone', group: 'lone', task: 'Hermes profile lone' } }]
+  const { scene } = sceneFor(f)
+  assert.ok(!scene.state.agents.has('hermes-taxis::taxis'), 'taxis has session nodes, so its main node is not drawn')
+  const lone = scene.state.agents.get('hermes-lone::lone')!
+  assert.equal(lone.isMain, true)
   // The main node has no conversation: the detail must not be asked for it.
-  assert.deepEqual(openTargetOf(scene, main.id), { sessionId: 'hermes-taxis', instanceId: 'hermes-taxis::taxis', openId: 'hermes-taxis' })
-  assert.equal(splitInstanceId('hermes-taxis').agentName, undefined, 'a plain session id lets the panel pick the most recent session node')
-  // A satellite that belongs to the main node (e.g. a Kanban event) opens the same default.
-  const kanban = [board('b1', 'taxis')]
-  const withBoard = sceneFor(fixture(), all, new FleetReplay(), { kanban }).scene
-  const sat = [...withBoard.state.toolCalls.values()].find(tc => tc.agentId === 'hermes-taxis::taxis')
-  if (sat) assert.equal(openTargetOf(withBoard, sat.id)?.openId, 'hermes-taxis')
+  assert.deepEqual(openTargetOf(scene, lone.id), { sessionId: 'hermes-lone', instanceId: 'hermes-lone::lone', openId: 'hermes-lone' })
+  assert.equal(splitInstanceId('hermes-lone').agentName, undefined, 'a plain session id lets the panel pick the most recent session node')
   // Resource nodes open nothing.
+  const withBoard = sceneFor(fixture(), all, new FleetReplay(), { kanban: [board('b1', 'taxis')] }).scene
   assert.equal(openTargetOf(withBoard, 'kanban:b1'), null)
 })
 
@@ -206,10 +206,11 @@ test('fleet scene: Kanban boards and Supermemory namespaces stay on the map, lin
   assert.equal(memory.length, 1)
   const links = scene.state.edges.filter(e => e.type === 'resource')
   const link = (resource: string) => links.find(e => e.to === resource)!
-  assert.equal(link(kanban[0].id).from, 'hermes-taxis::taxis', 'Kanban links to the profile that works on it') // main node: id = `<session>::<name>`
-  assert.equal(link(memory[0].id).from, 'hermes-sophia::sophia')
-  // The Kanban event is a satellite of the profile's main node.
-  assert.ok([...scene.state.toolCalls.values()].some(tc => tc.agentId === 'hermes-taxis::taxis' && tc.toolName.startsWith('kanban')))
+  // Links start at the profile's cloud, not at a node, and carry their last use time.
+  assert.equal(link(kanban[0].id).from, 'cloud:taxis', 'Kanban links to the cloud of the profile that works on it')
+  assert.equal(link(memory[0].id).from, 'cloud:sophia', 'a namespace links to the cloud with events in it')
+  assert.ok(links.every(l => l.fromCloud && typeof l.lastUsedAt === 'number'))
+  assert.equal(link(kanban[0].id).lastUsedAt, NOW - MIN)
   // Resources are not an agent to open.
   assert.equal(openTargetOf(scene, kanban[0].id), null)
 })
@@ -253,4 +254,65 @@ test('fleet replay feeds the session detail: a completed or idle profile still h
   assert.ok(!detailText('hermes-taxis', 'taxis · Plan').includes('checking the build'))
   assert.ok(detailText('hermes-sophia', 'sophia · Report').includes('pnpm test'))
   assert.ok(detailText('hermes-sophia', 'sophia · Report').includes('checking the build'))
+})
+
+// ─── Clouds, placement, uncapped ────────────────────────────────────────────
+
+const positions = (scene: ReturnType<typeof sceneFor>['scene']) =>
+  [...scene.state.agents.values()].map(a => [a.id, Math.round(a.x * 1000) / 1000, Math.round(a.y * 1000) / 1000]).sort((a, b) => String(a[0]).localeCompare(String(b[0])))
+
+test('fleet scene: layout is deterministic, same input gives the same map', () => {
+  const extra = { kanban: [board('agent-flow', 'taxis')], supermemory: [space('omh_family', { sophia: 3, taxis: 1 })] }
+  const a = sceneFor(fixture(), all, new FleetReplay(), extra).scene
+  const b = sceneFor(fixture(), all, new FleetReplay(), extra).scene
+  assert.deepEqual(positions(a), positions(b))
+  assert.deepEqual([...a.clusters], [...b.clusters])
+})
+
+test('fleet scene: clouds carry the profile name and their session nodes; no link joins two sessions of a profile', () => {
+  const f = fixture()
+  f.events['hermes-taxis'].push({ time: 25, type: 'agent_spawn', payload: { name: 'taxis · Review', parent: 'taxis', startedAt: T0 + MIN, task: 'review' } })
+  const { scene } = sceneFor(f)
+  const clouds = scene.state.clouds!
+  assert.deepEqual(clouds.map(c => c.label).sort(), ['sophia', 'taxis'])
+  const taxis = clouds.find(c => c.label === 'taxis')!
+  assert.deepEqual(taxis.members.map(m => m.id).sort(), ['hermes-taxis::taxis · Plan', 'hermes-taxis::taxis · Review'])
+  const [p, r] = ['hermes-taxis::taxis · Plan', 'hermes-taxis::taxis · Review'].map(id => scene.state.agents.get(id)!)
+  assert.ok(Math.hypot(p.x - r.x, p.y - r.y) > 100, 'the two sessions are apart in the blob')
+  // No edge between agents of one profile (only tool edges to satellites).
+  for (const e of scene.state.edges) assert.ok(e.type !== 'parent-child' && !(scene.state.agents.has(e.from) && scene.state.agents.has(e.to) && e.type !== 'resource'))
+})
+
+test('fleet scene: a resource sits near the clouds it links to, outside their halo; an unlinked one is on the rim', () => {
+  const f = fixture()
+  const { scene } = sceneFor(f, all, new FleetReplay(), {
+    kanban: [board('agent-flow', 'taxis')], supermemory: [space('lonely', {})],
+  })
+  const cloud = scene.clusters.get('cloud:taxis')!
+  const other = scene.clusters.get('cloud:sophia')!
+  const kb = scene.state.agents.get('kanban:agent-flow')!
+  const dTaxis = Math.hypot(kb.x - cloud.x, kb.y - cloud.y)
+  assert.ok(dTaxis >= cloud.r, 'outside the halo')
+  assert.ok(dTaxis < Math.hypot(kb.x - other.x, kb.y - other.y), 'nearer to the cloud that uses it than to the other')
+  const lone = scene.state.agents.get('supermemory:lonely')!
+  for (const c of scene.clusters.values()) assert.ok(Math.hypot(lone.x - c.x, lone.y - c.y) >= c.r, 'the unlinked one is outside every halo')
+})
+
+test('fleet scene: a profile with many sessions shows every session node (no per-profile cap)', () => {
+  const f = fixture()
+  for (let i = 0; i < 30; i++) f.events['hermes-sophia'].push({ time: 1, type: 'agent_spawn', payload: { name: `sophia · Job ${i}`, parent: 'sophia', startedAt: T0 + i * MIN, task: 'x' } })
+  const { scene } = sceneFor(f)
+  const sophia = [...scene.state.agents.values()].filter(a => a.sessionId === 'hermes-sophia')
+  assert.equal(sophia.length, 31) // Report + 30 jobs
+  assert.equal(scene.state.clouds!.find(c => c.label === 'sophia')!.members.length, 31)
+})
+
+test('fleet scene: pulses given to the scene reach the canvas state', () => {
+  const pulses = [{ id: 'p', edgeId: 'e', kind: 'kanban' as const, color: '#fff', startedAt: NOW }]
+  const f = fixture()
+  const instances = instancesFromSessionEvents(f.sessions, id => f.events[id] ?? [])
+  const graph = buildFleetGraph({ instances, selection: all, now: NOW })
+  const replay = new FleetReplay()
+  const scene = buildFleetScene({ sessions: f.sessions, stateOf: id => replay.advance(id, f.events[id] ?? []), instances, selection: all, graph, pulses })
+  assert.deepEqual(scene.state.pulses, pulses)
 })

@@ -27,3 +27,6 @@ extension/.vscode/
 extension/package-lock.json
 
 .DS_Store
+
+# Screenshot harness scratch output (pnpm shot:smoke); task folders are committed
+docs/screenshots/smoke/
