@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import { strict as assert } from 'node:assert'
-import { buildFleetGraph, countByKind, profileKey } from './fleet-graph'
-import { instancesFromSessionEvents, type SessionEventLike, type SessionLike } from './fleet-model'
+import { buildFleetGraph, countByKind, profileKey, resolveSourceSession } from './fleet-graph'
+import { instancesFromSessionEvents, type FleetInstance, type SessionEventLike, type SessionLike } from './fleet-model'
 import type { PublicKanbanBoardNode } from './kanban-source'
 import type { SupermemoryNamespaceNode } from './supermemory-source'
 
@@ -155,4 +155,59 @@ test('uncapped resources: many boards and namespaces are all kept; archived and 
 
 test('graph is deterministic: same input, same graph', () => {
   assert.deepEqual(graph(), graph())
+})
+
+// ─── Which session node did it (the origin of a pulse, the pull on a resource) ───────────────────
+
+const inst = (id: string, startTime: number, endTime?: number): FleetInstance => ({
+  id, identity: 'taxis', runtime: 'hermes', startTime, endTime, status: endTime === undefined ? 'active' : 'completed', markers: [],
+})
+
+test('resolveSourceSession: the newest node that was running at the time; else the newest before it; else the first', () => {
+  const a = inst('s::a', 100, 400)
+  const b = inst('s::b', 200)
+  const c = inst('s::c', 500)
+  const nodes = [c, b, a]
+  assert.equal(resolveSourceSession(nodes, 250), 's::b', 'a and b were running, b started last')
+  assert.equal(resolveSourceSession(nodes, 150), 's::a', 'only a had started')
+  assert.equal(resolveSourceSession(nodes, 450), 's::b', 'a had ended')
+  assert.equal(resolveSourceSession(nodes, 600), 's::c', 'c started last and is still running')
+  assert.equal(resolveSourceSession(nodes, 10), 's::c', 'before every node started: the first of the cloud')
+  assert.equal(resolveSourceSession([], 10), undefined)
+  assert.equal(resolveSourceSession([inst('s::x', 100, 200)], 900), 's::x', 'a node that ended earlier is the newest one before')
+})
+
+test('every link event names the session node that did it; the link counts the events per node', () => {
+  const g = graph()
+  const taxisKanban = g.edges.find(e => e.id === 'cloud:taxis>kanban:agent-flow')!
+  // Both Taxis nodes were running two minutes ago; Review started last.
+  assert.deepEqual(taxisKanban.events.map(e => e.sessionId), ['hermes-taxis::Taxis · Review'])
+  assert.deepEqual(taxisKanban.sessions, [{ sessionId: 'hermes-taxis::Taxis · Review', weight: 1 }])
+  const taxisIds = g.clouds.find(c => c.profile === 'taxis')!.sessionIds
+  for (const e of g.edges) for (const ev of e.events) {
+    assert.ok(ev.sessionId, `${ev.key} has a source`)
+    assert.ok(g.clouds.find(c => c.id === e.from)!.sessionIds.includes(ev.sessionId!), 'the source is a session node of the link\'s own cloud')
+  }
+  assert.ok(taxisIds.includes(taxisKanban.sessions[0].sessionId))
+})
+
+test('events are attributed by time: an event from before the second node started belongs to the first', () => {
+  const early = T0 + 9 * HOUR + 30_000 // after Plan started, before Review started
+  const late = T0 + 9 * HOUR + 5 * MIN
+  const g = graph({ kanban: [board('agent-flow', [['taxis', early], ['taxis', late], ['taxis', late + 1000]], 1)], supermemory: [] })
+  const e = g.edges.find(x => x.id === 'cloud:taxis>kanban:agent-flow')!
+  const byAt = new Map(e.events.map(ev => [ev.at, ev.sessionId]))
+  assert.equal(byAt.get(early), 'hermes-taxis::Taxis · Plan')
+  assert.equal(byAt.get(late), 'hermes-taxis::Taxis · Review')
+  assert.deepEqual(e.sessions, [
+    { sessionId: 'hermes-taxis::Taxis · Review', weight: 2 }, { sessionId: 'hermes-taxis::Taxis · Plan', weight: 1 },
+  ], 'busiest node first')
+})
+
+test('a link has no sources when it has no events; the sources never leave the cloud of the link', () => {
+  const g = graph({ supermemory: [{ ...space('omh_family', { taxis: 3 }), recent: [] }] })
+  const e = g.edges.find(x => x.id === 'cloud:taxis>supermemory:omh_family')!
+  assert.deepEqual(e.events, [])
+  assert.deepEqual(e.sessions, [])
+  assert.equal(e.weight, 3, 'the weight still counts the calls')
 })

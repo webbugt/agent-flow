@@ -66,6 +66,18 @@ export interface FleetEdgeEvent {
   kind: FleetEdgeKind
   /** Kanban event kind, or the Supermemory action. */
   label: string
+  /**
+   * Scene id (instance id) of the session node that did the interaction: where a pulse leaves from.
+   * Neither source records which session made a call (a Kanban event names the assignee profile, a
+   * Supermemory call the profile), so it is attributed by time, see {@link resolveSourceSession}.
+   */
+  sessionId?: string
+}
+
+/** How many interactions of a link came from one session node (the weight of that node in the resource's placement). */
+export interface FleetEdgeSession {
+  sessionId: string
+  weight: number
 }
 
 export interface FleetGraphEdge {
@@ -81,6 +93,8 @@ export interface FleetGraphEdge {
   weight: number
   /** The latest interactions behind the link, newest first (what a pulse is made of). */
   events: FleetEdgeEvent[]
+  /** The session nodes behind `events`, busiest first: where in its cloud the resource is used from. */
+  sessions: FleetEdgeSession[]
 }
 
 export interface FleetGraph {
@@ -114,6 +128,23 @@ function sessionLabel(inst: FleetInstance): string {
   return (at === -1 ? name : name.slice(at + 1)).trim() || inst.runtime
 }
 
+/**
+ * Which session node of a profile did an interaction at `at`. The sources only name the profile, so
+ * this is the best guess from the timeline: among the nodes that were running at that time the one
+ * that started last (a fresh worker session does the work, an old idle one does not); else the node
+ * that started last before it; else the first one. `sessions` must be the cloud's nodes in cloud order.
+ */
+export function resolveSourceSession(sessions: readonly FleetInstance[], at: number): string | undefined {
+  if (sessions.length === 0) return undefined
+  const newest = (list: readonly FleetInstance[]) =>
+    list.reduce((best, i) => (i.startTime > best.startTime ? i : best))
+  const running = sessions.filter(i => i.startTime <= at && (i.endTime === undefined || i.endTime >= at))
+  if (running.length > 0) return newest(running).id
+  const before = sessions.filter(i => i.startTime <= at)
+  if (before.length > 0) return newest(before).id
+  return sessions[0].id
+}
+
 export function cloudIdOf(identity: string): string {
   return `cloud:${identity}`
 }
@@ -138,6 +169,9 @@ export function buildFleetGraph(input: FleetGraphInput): FleetGraph {
   const edges = new Map<string, FleetGraphEdge>()
   /** profileKey -> cloud, for the resource links. */
   const cloudByKey = new Map<string, FleetCloud>()
+  /** cloud id -> its session instances in cloud order, to attribute interactions to a session node. */
+  const sessionsOf = new Map<string, FleetInstance[]>()
+  const sourceOf = (cloud: FleetCloud, at: number) => resolveSourceSession(sessionsOf.get(cloud.id) ?? [], at)
 
   /** One link per (cloud, resource); uses by several names of the same profile merge into it. */
   const addUse = (cloud: FleetCloud, to: string, kind: FleetEdgeKind, weight: number, lastUsedAt: number, events: FleetEdgeEvent[]) => {
@@ -148,7 +182,7 @@ export function buildFleetGraph(input: FleetGraphInput): FleetGraph {
       prev.lastUsedAt = Math.max(prev.lastUsedAt, lastUsedAt)
       prev.events = [...prev.events, ...events].sort(newestFirst)
     } else {
-      edges.set(id, { id, from: cloud.id, to, kind, lastUsedAt, weight, events: [...events].sort(newestFirst) })
+      edges.set(id, { id, from: cloud.id, to, kind, lastUsedAt, weight, events: [...events].sort(newestFirst), sessions: [] })
     }
   }
 
@@ -170,6 +204,7 @@ export function buildFleetGraph(input: FleetGraphInput): FleetGraph {
       cloud.sessionIds.push(inst.id)
     }
     clouds.push(cloud)
+    sessionsOf.set(cloud.id, order)
     cloudByKey.set(profileKey(group.identity), cloud)
   }
 
@@ -196,6 +231,7 @@ export function buildFleetGraph(input: FleetGraphInput): FleetGraph {
     for (const [key, events] of used) {
       const cloud = cloudByKey.get(key)
       if (!cloud) continue
+      for (const ev of events) ev.sessionId = sourceOf(cloud, ev.at)
       addUse(cloud, board.id, 'kanban', events.length, Math.max(...events.map(e => e.at)), events)
     }
   }
@@ -214,11 +250,22 @@ export function buildFleetGraph(input: FleetGraphInput): FleetGraph {
       if (!cloud) continue
       const events: FleetEdgeEvent[] = recent
         .filter(r => r.profile === name)
-        .map(r => ({ key: `${space.id}#${r.profile}:${r.action}:${r.at}`, at: r.at, kind: 'memory' as const, label: r.action }))
+        .map(r => ({
+          key: `${space.id}#${r.profile}:${r.action}:${r.at}`, at: r.at, kind: 'memory' as const, label: r.action,
+          sessionId: sourceOf(cloud, r.at),
+        }))
       // `lastByProfile` is not capped like `recent`, so it is the better source for the use time.
       const last = space.lastByProfile?.[name] ?? events[0]?.at ?? space.lastEventAt ?? 0
       addUse(cloud, space.id, 'memory', counts.store + counts.search + counts.forget, last, events)
     }
+  }
+
+  // Per link: how many of its interactions each session node made.
+  for (const edge of edges.values()) {
+    const counts = new Map<string, number>()
+    for (const ev of edge.events) if (ev.sessionId) counts.set(ev.sessionId, (counts.get(ev.sessionId) ?? 0) + 1)
+    edge.sessions = [...counts].map(([sessionId, weight]) => ({ sessionId, weight }))
+      .sort((a, b) => b.weight - a.weight || a.sessionId.localeCompare(b.sessionId))
   }
 
   return { nodes, clouds, edges: [...edges.values()] }

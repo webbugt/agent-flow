@@ -21,13 +21,27 @@ export function overviewBoost(ctx: CanvasRenderingContext2D): number {
   return zoom > 0 && Number.isFinite(zoom) ? Math.min(Math.max(1 / zoom, 1), 4) : 1
 }
 
-/** The two ends of a cloud-to-resource link: where it leaves the cloud's halo and the resource node. */
+/**
+ * The two ends of a cloud-to-resource link: where it leaves the cloud's halo and the resource node.
+ * With `sourceId` (a pulse of one interaction) it leaves the session node that did it instead, at the
+ * node's edge, in the direction of the resource; an unknown or hidden source falls back to the halo.
+ */
 export function fleetLinkEnds(
-  edge: Edge, agents: ReadonlyMap<string, Agent>, clouds: ReadonlyMap<string, CloudGeometry>,
+  edge: Edge, agents: ReadonlyMap<string, Agent>, clouds: ReadonlyMap<string, CloudGeometry>, sourceId?: string,
 ): { fromX: number; fromY: number; toX: number; toY: number } | null {
   const cloud = clouds.get(edge.from)
   const target = agents.get(edge.to)
   if (!cloud || !target || target.opacity < MIN_VISIBLE_OPACITY) return null
+  const source = sourceId ? agents.get(sourceId) : undefined
+  if (source && source.opacity >= MIN_VISIBLE_OPACITY && !source.resourceKind) {
+    const sx = target.x - source.x
+    const sy = target.y - source.y
+    const sd = Math.hypot(sx, sy)
+    if (sd >= 1) {
+      const lift = Math.min(NODE.radiusSub * source.scale, sd * 0.5)
+      return { fromX: source.x + (sx / sd) * lift, fromY: source.y + (sy / sd) * lift, toX: target.x, toY: target.y }
+    }
+  }
   const dx = target.x - cloud.x
   const dy = target.y - cloud.y
   const d = Math.hypot(dx, dy)
@@ -92,7 +106,7 @@ export function drawFleetLinks(
   }
 }
 
-/** A dot travelling from the cloud to the resource for each new interaction, in the colour of its kind. */
+/** A dot travelling from the session node that did the interaction to the resource, for each new interaction, in the colour of its kind. */
 export function drawPulses(
   ctx: CanvasRenderingContext2D, pulses: readonly FleetPulse[], edges: readonly Edge[],
   agents: ReadonlyMap<string, Agent>, clouds: ReadonlyMap<string, CloudGeometry>, now: number,
@@ -104,7 +118,7 @@ export function drawPulses(
     if (t === null) continue
     const edge = byId.get(pulse.edgeId)
     if (!edge) continue
-    const ends = fleetLinkEnds(edge, agents, clouds)
+    const ends = fleetLinkEnds(edge, agents, clouds, pulse.sourceId)
     if (!ends) continue
     const cp = computeControlPoints(ends.fromX, ends.fromY, ends.toX, ends.toY)
     if (!cp) continue

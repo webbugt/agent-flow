@@ -316,3 +316,68 @@ test('fleet scene: pulses given to the scene reach the canvas state', () => {
   const scene = buildFleetScene({ sessions: f.sessions, stateOf: id => replay.advance(id, f.events[id] ?? []), instances, selection: all, graph, pulses })
   assert.deepEqual(scene.state.pulses, pulses)
 })
+
+// ─── Weighted resource placement (by session node) ───────────────────────────
+
+/** Taxis with a handful of session nodes, a board that Taxis uses, and a scene built from the given links. */
+function weightedFixture(sessionsOf: (taxisNodes: string[]) => Array<{ sessionId: string; weight: number }>, moved?: Map<string, { x: number; y: number }>) {
+  const f = fixture()
+  for (let i = 0; i < 7; i++) f.events['hermes-taxis'].push({ time: 1, type: 'agent_spawn', payload: { name: `taxis · Job ${i}`, parent: 'taxis', startedAt: T0 + i * MIN, task: 'x' } })
+  const instances = instancesFromSessionEvents(f.sessions, id => f.events[id] ?? [])
+  const graph = buildFleetGraph({ instances, kanban: [board('agent-flow', 'taxis')], selection: all, now: NOW })
+  const taxisNodes = graph.clouds.find(c => c.id === 'cloud:taxis')!.sessionIds
+  const edge = graph.edges.find(e => e.to === 'kanban:agent-flow')!
+  edge.sessions = sessionsOf(taxisNodes)
+  const replay = new FleetReplay()
+  const scene = buildFleetScene({ sessions: f.sessions, stateOf: id => replay.advance(id, f.events[id] ?? []), instances, selection: all, graph, moved })
+  return { scene, taxisNodes }
+}
+
+test('fleet scene: a resource is placed towards the session nodes that use it, so it moves when the weights move', () => {
+  const probe = weightedFixture(ids => [{ sessionId: ids[0], weight: 1 }]).scene
+  const centre = probe.clusters.get('cloud:taxis')!
+  const nodes = [...probe.state.agents.values()].filter(a => a.sessionId === 'hermes-taxis')
+  assert.ok(nodes.length >= 8)
+  // The two session nodes farthest apart in the cloud (by the direction they sit in from the centre).
+  const far = [...nodes].sort((a, b) => Math.hypot(b.x - centre.x, b.y - centre.y) - Math.hypot(a.x - centre.x, a.y - centre.y))
+  const a = far[0]
+  const dot = (n: { x: number; y: number }) => (n.x - centre.x) * (a.x - centre.x) + (n.y - centre.y) * (a.y - centre.y)
+  const b = [...far].sort((p, q) => dot(p) - dot(q))[0] // the node on the opposite side of the cloud
+  const toward = (scene: typeof probe, node: typeof a) => {
+    const kb = scene.state.agents.get('kanban:agent-flow')!
+    return (kb.x - centre.x) * (node.x - centre.x) + (kb.y - centre.y) * (node.y - centre.y)
+  }
+  const usedA = weightedFixture(() => [{ sessionId: a.id, weight: 9 }, { sessionId: b.id, weight: 1 }]).scene
+  const usedB = weightedFixture(() => [{ sessionId: a.id, weight: 1 }, { sessionId: b.id, weight: 9 }]).scene
+  const kbA = usedA.state.agents.get('kanban:agent-flow')!
+  const kbB = usedB.state.agents.get('kanban:agent-flow')!
+  assert.ok(Math.hypot(kbA.x - kbB.x, kbA.y - kbB.y) > 20, `the resource moved with the weights (${kbA.x.toFixed(0)},${kbA.y.toFixed(0)} vs ${kbB.x.toFixed(0)},${kbB.y.toFixed(0)})`)
+  assert.ok(toward(usedA, a) > toward(usedA, b), 'mostly used from a: sits on a\'s side of the cloud')
+  assert.ok(toward(usedB, b) > toward(usedB, a), 'mostly used from b: sits on b\'s side')
+  for (const s of [usedA, usedB]) {
+    const kb = s.state.agents.get('kanban:agent-flow')!
+    assert.ok(Math.hypot(kb.x - centre.x, kb.y - centre.y) >= centre.r, 'still outside the halo')
+  }
+})
+
+test('fleet scene: the scene reports where each resource belongs; the drawn position is that target; a dropped node keeps its place', () => {
+  const { scene } = weightedFixture(ids => [{ sessionId: ids[0], weight: 1 }])
+  const kb = scene.state.agents.get('kanban:agent-flow')!
+  assert.deepEqual([...scene.resourceTargets.keys()], ['kanban:agent-flow'])
+  assert.deepEqual(scene.resourceTargets.get('kanban:agent-flow'), { x: kb.x, y: kb.y })
+  assert.ok(![...scene.resourceTargets.keys()].some(id => scene.sessionOfAgent.has(id)), 'session nodes are not resources')
+  const dropped = weightedFixture(ids => [{ sessionId: ids[0], weight: 1 }], new Map([['kanban:agent-flow', { x: 1234, y: -567 }]])).scene
+  assert.deepEqual(dropped.resourceTargets.get('kanban:agent-flow'), { x: 1234, y: -567 }, 'a dragged resource is its own target: nothing glides it away')
+  assert.deepEqual([dropped.state.agents.get('kanban:agent-flow')!.x, dropped.state.agents.get('kanban:agent-flow')!.y], [1234, -567])
+})
+
+test('fleet scene: every link event names a session node that is on the map (a pulse has somewhere to leave from)', () => {
+  const f = fixture()
+  const instances = instancesFromSessionEvents(f.sessions, id => f.events[id] ?? [])
+  const graph = buildFleetGraph({ instances, kanban: [board('agent-flow', 'taxis')], supermemory: [{ ...space('omh_family', { taxis: 2 }), recent: [{ at: NOW - MIN, profile: 'taxis', action: 'search' }, { at: NOW - 2 * MIN, profile: 'taxis', action: 'store' }] }], selection: all, now: NOW })
+  const replay = new FleetReplay()
+  const scene = buildFleetScene({ sessions: f.sessions, stateOf: id => replay.advance(id, f.events[id] ?? []), instances, selection: all, graph })
+  const events = graph.edges.flatMap(e => e.events)
+  assert.ok(events.length >= 3)
+  for (const ev of events) assert.ok(scene.state.agents.has(ev.sessionId!), `${ev.key} leaves from ${ev.sessionId}, a node of the scene`)
+})
