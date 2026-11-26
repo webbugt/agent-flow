@@ -233,6 +233,47 @@ export function validatePlan(raw: unknown): ShotPlan {
   }
 }
 
+/**
+ * Screensaver assertions (eval steps; a throw fails the run). With the screensaver on there is NO overlay element:
+ * no button, input or link, none of the named panels, and no text outside the canvas.
+ */
+const SCREENSAVER_OVERLAY_TESTIDS = ['top-bar', 'fleet-timeline-panel', 'fleet-zoom-controls', 'fleet-timeline-toggle', 'screensaver-toggle', 'fleet-toggle']
+// "Visible" = what a person would see: on screen, not display:none / visibility:hidden, and not faded out (the sliding
+// panels stay mounted at opacity 0 when closed, which is fine).
+const SCREENSAVER_ASSERT_NO_UI = `(() => {
+  const visible = (el) => {
+    const r = el.getBoundingClientRect()
+    if (r.width <= 0 || r.height <= 0 || r.bottom <= 0 || r.right <= 0 || r.top >= innerHeight || r.left >= innerWidth) return false
+    let opacity = 1
+    for (let e = el; e; e = e.parentElement) {
+      const s = getComputedStyle(e)
+      if (s.display === 'none' || s.visibility === 'hidden') return false
+      opacity *= parseFloat(s.opacity)
+    }
+    return opacity > 0.05
+  }
+  const shown = []
+  for (const id of ${JSON.stringify(SCREENSAVER_OVERLAY_TESTIDS)}) {
+    const el = document.querySelector('[data-testid="' + id + '"]')
+    if (el && visible(el)) shown.push('#' + id)
+  }
+  for (const el of document.body.querySelectorAll('*')) {
+    if (['CANVAS', 'SCRIPT', 'STYLE', 'NOSCRIPT'].includes(el.tagName)) continue
+    const hasText = Array.from(el.childNodes).some(n => n.nodeType === 3 && n.textContent.trim())
+    const isControl = el.matches('button, input, select, textarea, a[href], [role="button"], [role="tab"]')
+    if ((hasText || isControl) && visible(el)) shown.push(el.tagName.toLowerCase() + ':' + (el.textContent || '').trim().slice(0, 30))
+  }
+  if (shown.length) throw new Error('screensaver is on but UI is visible: ' + shown.slice(0, 8).join(' | '))
+  if (!document.querySelector('canvas')) throw new Error('screensaver is on but the map canvas is gone')
+  return true
+})()`
+/** With the screensaver off the bar and its buttons are back. */
+const SCREENSAVER_ASSERT_UI_SHOWN = `(() => {
+  if (!document.querySelector('[data-testid="top-bar"]')) throw new Error('the top bar is not shown')
+  if (!document.querySelector('[data-testid="screensaver-toggle"]')) throw new Error('the screensaver button is not shown')
+  return true
+})()`
+
 /** Page script: click the cost unit toggle (money -> kWh -> tokens -> money) until the stored unit is `unit`. */
 function TOGGLE_TO(unit: 'money' | 'kwh' | 'tokens'): string {
   return `(async () => {
@@ -266,6 +307,20 @@ export const BUILTIN_PLANS: Record<string, ShotPlan> = {
   overlay: {
     shots: [
       { name: 'cost-overlay', viewports: ['desktop', 'phone'], steps: [{ key: '$' }, { wait: 300 }] },
+    ],
+  },
+  // Fleet UX F3 + F4: screensaver mode (hide all UI) and the simplified action chips. Run with `--scenario all`.
+  // The eval steps are the assertions: they throw (so the run fails) when the page is not as the spec says. Each shot
+  // starts with the screensaver off (the harness clears the stored choice once per page), so shots do not depend on each other.
+  screensaver: {
+    shots: [
+      { name: 'fleet-normal-view', viewports: ['desktop', 'phone'], steps: [{ click: '[data-testid="fleet-toggle"]' }, { wait: 1500 }, { eval: SCREENSAVER_ASSERT_UI_SHOWN }] },
+      { name: 'screensaver-key-s', viewports: ['desktop', 'phone'], steps: [{ click: '[data-testid="fleet-toggle"]' }, { wait: 1500 }, { key: 's' }, { wait: 800 }, { eval: SCREENSAVER_ASSERT_NO_UI }] },
+      { name: 'screensaver-button', viewports: ['desktop', 'phone'], steps: [{ click: '[data-testid="fleet-toggle"]' }, { wait: 1500 }, { click: '[data-testid="screensaver-toggle"]' }, { wait: 800 }, { eval: SCREENSAVER_ASSERT_NO_UI }] },
+      { name: 'screensaver-exit-by-key', viewports: ['desktop'], steps: [{ click: '[data-testid="fleet-toggle"]' }, { wait: 1500 }, { key: 's' }, { wait: 600 }, { eval: SCREENSAVER_ASSERT_NO_UI }, { key: 'x' }, { wait: 600 }, { eval: SCREENSAVER_ASSERT_UI_SHOWN }] },
+      { name: 'screensaver-exit-by-click', viewports: ['desktop'], steps: [{ click: '[data-testid="fleet-toggle"]' }, { wait: 1500 }, { key: 's' }, { wait: 600 }, { eval: SCREENSAVER_ASSERT_NO_UI }, { click: '700,450' }, { wait: 600 }, { eval: SCREENSAVER_ASSERT_UI_SHOWN }] },
+      // reload: on only because the user left it on; then leaving it clears the choice for the next reload
+      { name: 'screensaver-survives-reload', viewports: ['desktop'], steps: [{ key: 's' }, { wait: 600 }, { eval: 'setTimeout(() => location.reload(), 0)' }, { wait: 4000 }, { eval: SCREENSAVER_ASSERT_NO_UI }] },
     ],
   },
   // Costs P4: overlay per session kind (API / subscription / Copilot), provider tooltips, settings drawer, unit toggle.

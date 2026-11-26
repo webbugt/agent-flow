@@ -7,6 +7,9 @@ export function useKeyboardShortcuts(actions: {
   toggleTimeline: () => void
   toggleHexGrid: () => void
   toggleStats: () => void
+  /** `s`: screensaver mode (hide all UI). While it is on, its own listener takes every key (any key leaves it). */
+  toggleScreensaver: () => void
+  screensaverActive: boolean
   toggleCostOverlay: () => void
   zoomToFit: () => void
   clearSelection: () => void
@@ -23,6 +26,9 @@ export function useKeyboardShortcuts(actions: {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
       const a = actionsRef.current
+      // In screensaver mode every key belongs to the screensaver (it leaves the mode); no shortcut fires.
+      if (a.screensaverActive) return
+      if (e.key === 's' && !e.ctrlKey && !e.metaKey && !e.altKey) { a.toggleScreensaver(); return }
 
       switch (e.key) {
         case ' ':
@@ -57,8 +63,7 @@ export function useKeyboardShortcuts(actions: {
         case 'G':
           a.toggleHexGrid()
           break
-        case 's':
-        case 'S':
+        case 'S': // `s` is the screensaver; Shift+S keeps the stats toggle
           a.toggleStats()
           break
         case '$':

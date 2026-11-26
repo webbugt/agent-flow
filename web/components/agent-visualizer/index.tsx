@@ -5,6 +5,7 @@ import { useAgentSimulation } from "@/hooks/use-agent-simulation"
 import { useVSCodeBridge } from "@/hooks/use-vscode-bridge"
 import { useSelectionState } from "@/hooks/use-selection-state"
 import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts"
+import { useScreensaver } from "@/hooks/use-screensaver"
 import { AgentCanvas } from "./canvas"
 import { agentCostOf } from "./canvas/draw-cost"
 import { effectiveCosts } from "@/lib/costs/active"
@@ -84,6 +85,13 @@ export function AgentVisualizer() {
   })
 
   const selection = useSelectionState({ agents, toolCalls, discoveries })
+
+  // Screensaver mode: hides every piece of UI around the map; the map and its activity animation stay.
+  const screensaver = useScreensaver()
+  const sv = screensaver.on
+  const clearAllSelections = selection.clearAllSelections
+  // Entering drops what was selected, so no highlight or tether line is left on the bare map.
+  useEffect(() => { if (sv) clearAllSelections() }, [sv, clearAllSelections])
 
   const [showStats, setShowStats] = useState(false)
   const [showHexGrid, setShowHexGrid] = useState(true)
@@ -330,6 +338,8 @@ export function AgentVisualizer() {
     toggleTimeline: () => { setShowTimeline(prev => !prev) },
     toggleHexGrid: () => { setShowHexGrid(prev => !prev) },
     toggleStats: () => { setShowStats(prev => !prev) },
+    toggleScreensaver: screensaver.toggle,
+    screensaverActive: sv,
     toggleCostOverlay: () => toggleExclusivePanel('cost'),
     zoomToFit: () => { setZoomToFitTrigger(n => n + 1) },
     clearSelection: () => { selection.clearAllSelections() },
@@ -338,7 +348,7 @@ export function AgentVisualizer() {
     toggleMute: handleToggleMute,
     setSpeed,
     selectedAgentId: selection.selectedAgentId,
-  }), [handlePlayPause, selection.clearAllSelections, selection.clearAgent, selection.selectedAgentId, setSpeed, handleToggleMute, toggleExclusivePanel])
+  }), [handlePlayPause, selection.clearAllSelections, selection.clearAgent, selection.selectedAgentId, setSpeed, handleToggleMute, toggleExclusivePanel, screensaver.toggle, sv])
 
   useKeyboardShortcuts(keyboardActions)
 
@@ -460,7 +470,7 @@ export function AgentVisualizer() {
     <OpenFileProvider value={bridge.isVSCode ? openFile : null}>
     <div className="h-screen w-screen relative overflow-hidden" style={{ background: COLORS.void }}>
       {/* Empty state when no demo and no live data */}
-      {isEmpty && (
+      {isEmpty && !sv && (
         <div className="absolute inset-0 flex items-center justify-center z-10 pointer-events-none">
           <div className="text-center" style={{ fontFamily: "'SF Mono', 'Fira Code', monospace" }}>
             <div className="text-sm" style={{ color: '#66ccff80' }}>WAITING FOR AGENT SESSION</div>
@@ -474,7 +484,7 @@ export function AgentVisualizer() {
         simulationRef={frameRef}
         selectedAgentId={selection.selectedAgentId}
         hoveredAgentId={selection.hoveredAgentId}
-        showStats={showStats}
+        showStats={showStats && !sv}
         showHexGrid={showHexGrid}
         zoomToFitTrigger={zoomToFitTrigger}
         pauseAutoFit={selection.contextMenu !== null}
@@ -486,19 +496,22 @@ export function AgentVisualizer() {
         selectedToolCallId={selection.selectedToolCallId}
         onDiscoveryClick={selection.handleDiscoveryClick}
         selectedDiscoveryId={selection.selectedDiscoveryId}
-        showCostOverlay={showCostOverlay}
+        showCostOverlay={showCostOverlay && !sv}
+        screensaver={sv}
       />
 
       {/* Message feed panel (top-left) */}
-      <MessageFeedPanel
-        conversations={conversations}
-        agents={agents}
-        onAgentClick={selection.handleAgentClick}
-        selectedAgentId={selection.selectedAgentId}
-      />
+      {!sv && (
+        <MessageFeedPanel
+          conversations={conversations}
+          agents={agents}
+          onAgentClick={selection.handleAgentClick}
+          selectedAgentId={selection.selectedAgentId}
+        />
+      )}
 
       {/* Agent detail card (floating, tethered to node) */}
-      {selectedAgent && selection.selectedAgentWorldPos && (
+      {!sv && selectedAgent && selection.selectedAgentWorldPos && (
         <div {...stopPropagationHandlers}>
           <AgentDetailCard
             agent={selectedAgent}
@@ -508,7 +521,7 @@ export function AgentVisualizer() {
       )}
 
       {/* Tool call detail popup */}
-      {selection.selectedToolData && selection.selectedToolScreenPos && (
+      {!sv && selection.selectedToolData && selection.selectedToolScreenPos && (
         <div {...stopPropagationHandlers}>
           <ToolDetailPopup
             tool={selection.selectedToolData}
@@ -519,7 +532,7 @@ export function AgentVisualizer() {
       )}
 
       {/* Discovery detail popup */}
-      {selection.selectedDiscoveryData && selection.selectedDiscoveryScreenPos && (
+      {!sv && selection.selectedDiscoveryData && selection.selectedDiscoveryScreenPos && (
         <div {...stopPropagationHandlers}>
           <DiscoveryDetailPopup
             discovery={selection.selectedDiscoveryData}
@@ -531,7 +544,7 @@ export function AgentVisualizer() {
 
       {/* Chat panel (bottom-right, shown when agent selected) */}
       <AgentChatPanel
-        visible={!!selectedAgent}
+        visible={!!selectedAgent && !sv}
         agentName={selectedAgent?.name ?? ''}
         agentState={selectedAgent?.state ?? 'idle'}
         conversation={selectedConversation}
@@ -541,7 +554,7 @@ export function AgentVisualizer() {
       />
 
       {/* Context menu */}
-      {selection.contextMenu && (
+      {!sv && selection.contextMenu && (
         <GlassContextMenu
           position={selection.contextMenu}
           items={contextMenuItems}
@@ -550,7 +563,7 @@ export function AgentVisualizer() {
       )}
 
       {/* Floating control strip */}
-      <ControlBar
+      {!sv && <ControlBar
         isPlaying={isPlaying}
         speed={speed}
         currentTime={currentTime}
@@ -574,11 +587,11 @@ export function AgentVisualizer() {
         eventCount={timelineEvents.length}
         onEnterReview={handleEnterReview}
         onResumeLive={handleResumeLive}
-      />
+      />}
 
       {/* File attention panel (slide-in from right) */}
       <FileAttentionPanel
-        visible={showFileAttention}
+        visible={showFileAttention && !sv}
         fileAttention={fileAttention}
         onClose={() => setShowFileAttention(false)}
         onOpenFile={bridge.isVSCode ? openFile : undefined}
@@ -586,7 +599,7 @@ export function AgentVisualizer() {
 
       {/* Session transcript panel (slide-in from right) */}
       <SessionTranscriptPanel
-        visible={showTranscript}
+        visible={showTranscript && !sv}
         conversation={sessionConversation}
         runtime={sessionRuntime}
         onClose={() => setShowTranscript(false)}
@@ -594,7 +607,7 @@ export function AgentVisualizer() {
 
       {/* Session detail: whole conversation, tool calls (copyable), model and cost of one session */}
       <SessionDetailPanel
-        visible={showSessionDetail}
+        visible={showSessionDetail && !sv}
         agents={fleetDetail ? fleetDetail.agents : agents}
         conversations={fleetDetail ? fleetDetail.conversations : conversations}
         agentId={detailAgentId}
@@ -605,7 +618,7 @@ export function AgentVisualizer() {
 
       {/* Timeline panel (slide-in from bottom) */}
       <TimelinePanel
-        visible={showTimeline}
+        visible={showTimeline && !sv}
         timelineEntries={timelineEntries}
         currentTime={currentTime}
         onClose={() => setShowTimeline(false)}
@@ -629,11 +642,12 @@ export function AgentVisualizer() {
         timelineVisible={fleetTimelineVisible}
         onToggleTimeline={toggleFleetTimeline}
         insetRight={detailInset(showSessionDetail, viewportWidth, CARD.sessionDetail.width)}
+        screensaver={sv}
       />
 
       {/* Fleet timeline panel (grouped agents + Kanban/Supermemory lanes) */}
       <FleetTimelinePanel
-        visible={showFleet && fleetTimelineVisible}
+        visible={showFleet && fleetTimelineVisible && !sv}
         instances={fleetInstances}
         kanban={fleetKanban}
         supermemory={fleetMemory}
@@ -645,7 +659,7 @@ export function AgentVisualizer() {
       />
 
       {/* Top bar: session tabs + info/controls */}
-      <TopBar
+      {!sv && <TopBar
         sessions={visibleSessions}
         selectedSessionId={bridge.selectedSessionId}
         sessionsWithActivity={bridge.sessionsWithActivity}
@@ -670,16 +684,17 @@ export function AgentVisualizer() {
         onToggleTimeline={() => { setShowTimeline(prev => !prev); setShowFleet(false) }}
         onToggleFleet={() => { setShowFleet(prev => !prev); setShowTimeline(false) }}
         onToggleMute={handleToggleMute}
-      />
+        onToggleScreensaver={screensaver.toggle}
+      />}
 
       {/* Costs config error banner (invalid ~/.agent-flow/costs.json etc.) */}
-      <CostsConfigBanner status={costsStatus} />
+      {!sv && <CostsConfigBanner status={costsStatus} />}
 
       {/* LIMITS panel: observed 5h / weekly, estimates with tags, and the Fable estimate when Fable was used this week */}
-      <LimitsPanelHost sessionIds={limitSessionIds} eventsOf={getSessionEvents} />
+      {!sv && <LimitsPanelHost sessionIds={limitSessionIds} eventsOf={getSessionEvents} />}
 
       {/* Cost settings drawer: prices per provider/model, currency and FX (writes the user costs.json) */}
-      {showCostSettings && (
+      {!sv && showCostSettings && (
         <CostsSettingsDrawer
           key={costsStatus.resolution.seq === 0 ? 'initial' : 'open'}
           status={costsStatus}

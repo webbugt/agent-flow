@@ -52,6 +52,8 @@ interface CanvasProps {
   onDiscoveryClick?: (discoveryId: string | null) => void
   selectedDiscoveryId?: string | null
   showCostOverlay?: boolean
+  /** Screensaver mode: tool calls are drawn as short chips, no task text, no pointer. The UI around is hidden by the parent. */
+  screensaver?: boolean
   /**
    * Fleet map mode: the plain wheel zooms, a click on a node keeps the camera where it is.
    * `controlsRef` is filled with the on-screen button actions.
@@ -71,7 +73,7 @@ export interface CanvasControls {
 export function AgentCanvas({
   simulationRef,
   selectedAgentId, hoveredAgentId, showStats, showHexGrid, zoomToFitTrigger, pauseAutoFit,
-  onAgentClick, onAgentHover, onAgentDrag, onContextMenu, onToolCallClick, selectedToolCallId, onDiscoveryClick, selectedDiscoveryId, showCostOverlay, fleetView = false, controlsRef,
+  onAgentClick, onAgentHover, onAgentDrag, onContextMenu, onToolCallClick, selectedToolCallId, onDiscoveryClick, selectedDiscoveryId, showCostOverlay, screensaver = false, fleetView = false, controlsRef,
 }: CanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const mainCanvasRef = useRef<HTMLCanvasElement>(null)
@@ -130,7 +132,7 @@ export function AgentCanvas({
     particles: sim.particles, edges: sim.edges, discoveries: sim.discoveries,
     clouds: sim.clouds,
     selectedAgentId, hoveredAgentId, showStats, showHexGrid,
-    showCostOverlay, selectedToolCallId, selectedDiscoveryId,
+    showCostOverlay, selectedToolCallId, selectedDiscoveryId, screensaver,
     simTime: sim.currentTime, pauseAutoFit, dimensions,
     onAgentDrag, onAgentClick, onAgentHover, onContextMenu,
     onToolCallClick, onDiscoveryClick, onCostPill,
@@ -234,7 +236,7 @@ export function AgentCanvas({
       const {
         agents, toolCalls, particles, edges, discoveries,
         selectedAgentId, hoveredAgentId, showStats, showHexGrid,
-        showCostOverlay, selectedToolCallId, selectedDiscoveryId,
+        showCostOverlay, selectedToolCallId, selectedDiscoveryId, screensaver,
         simTime, pauseAutoFit, dimensions, onAgentDrag,
         isDragging,
       } = drawPropsRef.current
@@ -319,10 +321,10 @@ export function AgentCanvas({
       drawDiscoveryConnections(ctx, discoveries, agents)
       drawEdges(ctx, edges, agents, toolCalls, activeEdgeIds, timeRef.current)
       if (cloudGeoms) drawFleetLinks(ctx, edges, agents, cloudGeoms, wallNow)
-      drawToolCalls(ctx, toolCalls, timeRef.current, selectedToolCallId, cloudGeoms ? LABEL_MIN_PX - 2 : 0)
+      drawToolCalls(ctx, toolCalls, timeRef.current, selectedToolCallId, cloudGeoms ? LABEL_MIN_PX - 2 : 0, screensaver)
       drawDiscoveries(ctx, discoveries, agents, selectedDiscoveryId)
       drawAgents(ctx, agents, selectedAgentId, hoveredAgentId, showStats, timeRef.current, !cloudGeoms)
-      if (cloudGeoms && fleet.clouds) drawFleetLabels(ctx, fleet.clouds, cloudGeoms, agents, selectedAgentId, hoveredAgentId)
+      if (cloudGeoms && fleet.clouds) drawFleetLabels(ctx, fleet.clouds, cloudGeoms, agents, selectedAgentId, hoveredAgentId, !screensaver)
       drawMessageBubblesWorld(ctx, agents, simTimeRef.current)
       if (showCostOverlay) drawCostLabels(ctx, agents, toolCalls)
       drawParticles(ctx, particles, edgeMap, agents, toolCalls, timeRef.current)
@@ -438,7 +440,7 @@ export function AgentCanvas({
   }, [])
 
   return (
-    <div ref={containerRef} className="relative w-full h-full overflow-hidden" style={{ cursor: isDragging ? 'grabbing' : 'grab' }}>
+    <div ref={containerRef} className="relative w-full h-full overflow-hidden" style={{ cursor: screensaver ? 'none' : isDragging ? 'grabbing' : 'grab' }}>
       <canvas
         ref={mainCanvasRef}
         style={{ width: dimensions.width, height: dimensions.height }}

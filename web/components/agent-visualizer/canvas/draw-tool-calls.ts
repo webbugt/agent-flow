@@ -3,6 +3,7 @@ import { COLORS, withAlpha } from '@/lib/colors'
 import { TOOL_MAX_CARD_W, TOOL_DRAW } from '@/lib/canvas-constants'
 import { truncateText } from './draw-misc'
 import { measureTextCached } from './render-cache'
+import { drawToolChips } from './draw-tool-chips'
 
 export function drawToolCalls(
   ctx: CanvasRenderingContext2D,
@@ -14,7 +15,10 @@ export function drawToolCalls(
    * itself stays. 0 = always (single-session view).
    */
   minTextPx = 0,
+  /** Screensaver mode: one short chip (icon + verb) per tool call, no arguments or output. */
+  chips = false,
 ) {
+  if (chips) { drawToolChips(ctx, toolCalls, time, selectedToolCallId, minTextPx); return }
   const dpr = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1
   const zoom = ctx.getTransform().a / dpr
   const textLegible = minTextPx <= 0 || !(zoom > 0) || TOOL_DRAW.fontSize * zoom >= minTextPx

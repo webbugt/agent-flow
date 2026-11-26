@@ -37,6 +37,8 @@ interface FleetMapProps {
   /** Whether the fleet timeline panel is shown. When it is hidden the map takes the full height. */
   timelineVisible?: boolean
   onToggleTimeline?: () => void
+  /** Screensaver mode: no zoom buttons, no timeline toggle, no inspector; the map takes the whole screen. */
+  screensaver?: boolean
 }
 
 const NARROW_WIDTH = 720
@@ -53,7 +55,7 @@ const ZOOM_BUTTON_PX = 40
  */
 export function FleetMap({
   visible, sessions, eventsOf, tick, instances, kanban, supermemory, selection, onOpenSession, replay, insetTop, insetBottom, insetRight,
-  timelineVisible = true, onToggleTimeline,
+  timelineVisible = true, onToggleTimeline, screensaver = false,
 }: FleetMapProps) {
   const [wrap, setWrap] = useState<HTMLDivElement | null>(null)
   const [size, setSize] = useState({ width: 0, height: 0 })
@@ -90,12 +92,13 @@ export function FleetMap({
   // On a phone the top bar wraps to more rows and the timeline panel takes a larger share
   // of the screen: keep the map in what is left (never more than 42% of the height reserved below).
   const narrow = size.width > 0 && size.width < NARROW_WIDTH
-  const top = narrow ? 138 : insetTop
+  // Screensaver: no bar, no panel, no detail panel: the whole screen is the map.
+  const top = screensaver ? 0 : narrow ? 138 : insetTop
   // Below the map: the timeline panel's measured height (never more than 55% of the screen), else the given inset.
   // Timeline hidden: only what the playback bar covers is reserved (insetBottom is that then).
   const measuredBottom = !timelineVisible ? insetBottom : panelTop !== null ? Math.max(size.height - panelTop + 8, 0) : insetBottom
-  const bottom = timelineVisible ? Math.min(measuredBottom, Math.round(size.height * 0.55)) : measuredBottom
-  const freeW = Math.max(size.width - insetRight, 1)
+  const bottom = screensaver ? 0 : timelineVisible ? Math.min(measuredBottom, Math.round(size.height * 0.55)) : measuredBottom
+  const freeW = Math.max(size.width - (screensaver ? 0 : insetRight), 1)
   const freeH = Math.max(size.height - top - bottom, 1)
 
   // Resources and their links to the agents (which boards/namespaces are shown, who uses them).
@@ -133,6 +136,11 @@ export function FleetMap({
     lastFitRef.current = { nodeCount, width: freeW, height: freeH }
     controlsRef.current?.fit()
   }
+
+  // Screensaver: no node stays selected or inspected (nothing is highlighted on the bare map).
+  useEffect(() => {
+    if (screensaver) { setSelectedId(null); setInspectId(null); setHoveredId(null) }
+  }, [screensaver])
 
   // A node that left the map (deselected) cannot stay selected.
   useEffect(() => {
@@ -184,11 +192,12 @@ export function FleetMap({
       style={{ zIndex: Z.info - 5, background: COLORS.void }}
     >
       {/* The canvas lives in the free area, so its camera fits the map between the bars and panels. */}
-      <div className="absolute" style={{ left: 0, top, bottom, right: insetRight }}>
+      <div className="absolute" style={{ left: 0, top, bottom, right: screensaver ? 0 : insetRight }}>
         <AgentCanvas
+          screensaver={screensaver}
           simulationRef={frameRef}
           selectedAgentId={selectedId}
-          hoveredAgentId={hoveredId}
+          hoveredAgentId={screensaver ? null : hoveredId}
           showStats={false}
           showHexGrid
           fleetView
@@ -202,7 +211,7 @@ export function FleetMap({
         />
       </div>
       {/* Zoom controls: bottom-left of the map area, clear of the timeline toggle (bottom-right) and the session detail. */}
-      <div
+      {!screensaver && <div
         data-testid="fleet-zoom-controls"
         className="absolute flex flex-col gap-1.5"
         style={{ left: 12, bottom: bottom + 8, zIndex: 6 }}
@@ -228,12 +237,12 @@ export function FleetMap({
             {glyph}
           </button>
         ))}
-      </div>
-      {inspection && (
+      </div>}
+      {!screensaver && inspection && (
         <FleetInspector inspection={inspection} now={now} top={top} right={insetRight} narrow={narrow}
           onClose={() => { setInspectId(null); setSelectedId(null) }} />
       )}
-      {onToggleTimeline && (
+      {onToggleTimeline && !screensaver && (
         <button
           type="button"
           data-testid="fleet-timeline-toggle"
@@ -248,7 +257,7 @@ export function FleetMap({
           {timelineVisible ? 'Hide timeline' : 'Show timeline'}
         </button>
       )}
-      {scene.state.agents.size === 0 && (
+      {!screensaver && scene.state.agents.size === 0 && (
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none font-mono text-xs" style={{ color: COLORS.textMuted }}>
           No Hermes profiles with sessions yet
         </div>

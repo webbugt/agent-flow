@@ -197,6 +197,8 @@ function drawLabelJob(ctx: CanvasRenderingContext2D, placer: LabelPlacer, job: L
 export function drawFleetLabels(
   ctx: CanvasRenderingContext2D, clouds: readonly CloudView[], geometries: ReadonlyMap<string, CloudGeometry>,
   agents: ReadonlyMap<string, Agent>, selectedId: string | null, hoveredId: string | null,
+  /** Screensaver mode passes false: the second line under a resource (its task text) is not drawn. Names and captions stay. */
+  showTaskText = true,
 ) {
   const zoom = currentZoom(ctx)
   const gap = 8 / Math.min(zoom, 1)
@@ -229,7 +231,7 @@ export function drawFleetLabels(
       widthPx: a.resourceKind ? LABEL_WIDTH_PX.resource : LABEL_WIDTH_PX.session,
       color: a.id === hoveredId ? COLORS.textPrimary : COLORS.textDim,
     }, zoom, force)
-    if (rect && a.resourceKind && a.task) {
+    if (showTaskText && rect && a.resourceKind && a.task) {
       drawLabelJob(ctx, placer, {
         text: a.task, x: (rect.x0 + rect.x1) / 2, y: rect.y1 + 3 / zoom, nominalPx: 9, maxPx: 12, weight: '400',
         widthPx: LABEL_WIDTH_PX.task, color: COLORS.textMuted,

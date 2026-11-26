@@ -114,6 +114,8 @@ export interface TopBarProps {
   onToggleTimeline: () => void
   onToggleFleet: () => void
   onToggleMute: () => void
+  /** Screensaver mode: hide all UI (key `s`). Any key or click brings it back. */
+  onToggleScreensaver: () => void
 }
 
 export const TopBar = memo(function TopBar({
@@ -122,7 +124,7 @@ export const TopBar = memo(function TopBar({
   isVSCode, connectionStatus,
   agentCount, totalTokens, costText, projectOverride, projectOverrideTitle, onOpenCostSettings,
   showFileAttention, showTranscript, showCostOverlay, showSessionDetail, showTimeline, showFleet, isMuted,
-  onTogglePanel, onToggleTimeline, onToggleFleet, onToggleMute,
+  onTogglePanel, onToggleTimeline, onToggleFleet, onToggleMute, onToggleScreensaver,
 }: TopBarProps) {
   // Re-render when the unit toggle or the loaded config (currency symbol) changes
   useSyncExternalStore(subscribeOverlayUnit, overlayUnitVersion, overlayUnitVersion)
@@ -219,6 +221,10 @@ export const TopBar = memo(function TopBar({
         {/* Independent toggles */}
         <ToggleButton active={showTimeline} onClick={onToggleTimeline}>Timeline</ToggleButton>
         <ToggleButton active={showFleet} onClick={onToggleFleet} testId="fleet-toggle">Fleet</ToggleButton>
+        {/* The bar is only shown while the screensaver is off, so this button only ever turns it on. */}
+        <ToggleButton active={false} onClick={onToggleScreensaver} testId="screensaver-toggle">
+          <span title="Hide all UI (S). Any key or click brings it back." aria-label="Screensaver">Screensaver</span>
+        </ToggleButton>
         <ToggleButton active={!isMuted} onClick={onToggleMute} style={{ border: `1px solid ${COLORS.toggleBorder}` }}>
           {isMuted ? <MutedIcon /> : <UnmutedIcon />}
         </ToggleButton>
