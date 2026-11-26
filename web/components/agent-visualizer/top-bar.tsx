@@ -102,6 +102,8 @@ export interface TopBarProps {
   projectOverride: boolean
   projectOverrideTitle: string
   onOpenCostSettings: () => void
+  showOptions: boolean
+  onToggleOptions: () => void
   // Panel toggles
   showFileAttention: boolean
   showTranscript: boolean
@@ -120,7 +122,7 @@ export const TopBar = memo(function TopBar({
   sessions, selectedSessionId, sessionsWithActivity,
   onSelectSession, onCloseSession,
   isVSCode, connectionStatus,
-  agentCount, totalTokens, costText, projectOverride, projectOverrideTitle, onOpenCostSettings,
+  agentCount, totalTokens, costText, projectOverride, projectOverrideTitle, onOpenCostSettings, showOptions, onToggleOptions,
   showFileAttention, showTranscript, showCostOverlay, showSessionDetail, showTimeline, showFleet, isMuted,
   onTogglePanel, onToggleTimeline, onToggleFleet, onToggleMute,
 }: TopBarProps) {
@@ -221,6 +223,9 @@ export const TopBar = memo(function TopBar({
         <ToggleButton active={showFleet} onClick={onToggleFleet} testId="fleet-toggle">Fleet</ToggleButton>
         <ToggleButton active={!isMuted} onClick={onToggleMute} style={{ border: `1px solid ${COLORS.toggleBorder}` }}>
           {isMuted ? <MutedIcon /> : <UnmutedIcon />}
+        </ToggleButton>
+        <ToggleButton active={showOptions} onClick={onToggleOptions} testId="options-toggle">
+          <span title="Options: resource block linger and fade, sound, timeline, cost unit, hidden agents" aria-label="Options">⚙ Options</span>
         </ToggleButton>
       </div>
     </div>

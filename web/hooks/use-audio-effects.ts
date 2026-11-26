@@ -1,5 +1,6 @@
 import { useRef, useState, useEffect, useCallback } from 'react'
-import { SOUND_PREF_KEY } from '@/lib/canvas-constants'
+import { getOptions, updateOptions } from '@/lib/options-store'
+import { useOptions } from '@/hooks/use-options'
 import { AudioEngine } from '@/lib/audio-engine'
 import type { Agent, ToolCallNode } from '@/lib/agent-types'
 import { detectStateChanges } from '@/components/agent-visualizer/canvas/detect-state-changes'
@@ -15,19 +16,21 @@ export function useAudioEffects(
   const prevToolStatesRef = useRef<Map<string, string>>(new Map())
   const prevAgentStatesRef = useRef<Map<string, string>>(new Map())
 
-  // Audio engine lifecycle + restore persisted mute preference
+  // The sound preference lives in the options registry (`soundOn`), shared with the options panel.
+  const soundOn = useOptions().soundOn
+
+  // Audio engine lifecycle
   useEffect(() => {
     const engine = new AudioEngine()
-    try {
-      const savedOn = localStorage.getItem(SOUND_PREF_KEY) === 'on'
-      if (savedOn) {
-        engine.setMuted(false)
-        setIsMuted(false)
-      }
-    } catch { /* localStorage unavailable (private browsing, etc.) */ }
     audioRef.current = engine
     return () => { audioRef.current?.dispose(); audioRef.current = null }
   }, [])
+
+  // Follow the preference: the stored value after load, a change in the options panel or in another tab.
+  useEffect(() => {
+    audioRef.current?.setMuted(!soundOn)
+    setIsMuted(!soundOn)
+  }, [soundOn])
 
   // Detect tool/agent state transitions and play sounds (live mode only)
   useEffect(() => {
@@ -53,11 +56,12 @@ export function useAudioEffects(
   }, [agents, toolCalls, isReviewing])
 
   const handleToggleMute = useCallback(() => {
-    if (audioRef.current) {
-      const nowMuted = audioRef.current.toggleMute()
-      setIsMuted(nowMuted)
-      try { localStorage.setItem(SOUND_PREF_KEY, nowMuted ? 'off' : 'on') } catch { /* ignore */ }
-    }
+    // Unmute right here (inside the click) so the browser accepts the audio context; the options store then
+    // keeps it and the effect above confirms it.
+    const nowOn = !getOptions().soundOn
+    audioRef.current?.setMuted(!nowOn)
+    setIsMuted(!nowOn)
+    updateOptions({ soundOn: nowOn })
   }, [])
 
   return { isMuted, seekingRef, handleToggleMute }

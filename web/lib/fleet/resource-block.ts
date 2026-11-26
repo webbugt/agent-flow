@@ -35,6 +35,7 @@ export type PinSet = ReadonlySet<string>
 
 export const EMPTY_PINS: PinSet = new Set<string>()
 export const MAX_BLOCK_KEY_LENGTH = 200
+export const MAX_BLOCK_LABEL_LENGTH = 200
 export const MAX_BLOCK_AGENTS = 200
 
 /** Stable id of a block: `kind:key`. */
@@ -62,7 +63,7 @@ export function recordUse(store: BlockStore, use: BlockUse): BlockStore {
   if (key === '') return store
   const id = blockId(use.kind, key)
   const prev = store.get(id)
-  const label = typeof use.label === 'string' && use.label.trim() !== '' ? use.label.trim() : (prev?.label ?? key)
+  const label = typeof use.label === 'string' && use.label.trim() !== '' ? use.label.trim().slice(0, MAX_BLOCK_LABEL_LENGTH) : (prev?.label ?? key)
   const agentId = typeof use.agentId === 'string' && use.agentId !== '' ? use.agentId : null
   const agents = prev ? [...prev.agents] : []
   if (agentId !== null && !agents.includes(agentId) && agents.length < MAX_BLOCK_AGENTS) agents.push(agentId)
