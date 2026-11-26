@@ -46,26 +46,91 @@ export interface Blob {
 }
 
 const GOLDEN_ANGLE = 2.399963229728653
-/** Distance between units, world units. */
-export const BLOB_GAP = 16
-const BLOB_STEP = 28
+/** Free space between two units (edge to edge), world units. */
+export const BLOB_GAP = 6
+/** Spacing of the fallback spiral (see {@link placeBlob}); smaller = finer search. */
+export const BLOB_STEP = 12
 
 /**
- * Pack units around a centroid. The first unit sits in the middle, the next ones on a seeded
- * golden-angle spiral, each at the first spiral spot where it does not touch a unit placed
- * before it. `seed` (the profile name) rotates the spiral, so two profiles do not look alike.
+ * Up to this many placed units a candidate spot is scored by the halo it would give (cubic work per unit);
+ * beyond it, by its distance to the centre of the blob (cheap), so a profile with hundreds of sessions stays fast.
+ */
+const BLOB_EXACT_MAX = 40
+
+interface Placed { id: string; x: number; y: number; r: number }
+
+/** The points where a circle of radius `r` touches both `a` and `b` (each kept {@link BLOB_GAP} away): 0, 1 or 2 points. */
+function touchingBoth(a: Placed, b: Placed, r: number): Point[] {
+  const da = a.r + r + BLOB_GAP
+  const db = b.r + r + BLOB_GAP
+  const dx = b.x - a.x
+  const dy = b.y - a.y
+  const d = Math.hypot(dx, dy)
+  if (d < 1e-9 || d > da + db || d < Math.abs(da - db)) return []
+  const t = (da * da - db * db + d * d) / (2 * d)
+  const h2 = da * da - t * t
+  const h = h2 > 0 ? Math.sqrt(h2) : 0
+  const mx = a.x + (dx * t) / d
+  const my = a.y + (dy * t) / d
+  return [{ x: mx - (dy * h) / d, y: my + (dx * h) / d }, { x: mx + (dy * h) / d, y: my - (dx * h) / d }]
+}
+
+/**
+ * Pack units around a centroid, as tight as {@link BLOB_GAP} allows. The first unit sits at the origin,
+ * the second touches it at a seeded angle (`seed`, the profile name, so two profiles do not look
+ * alike). Each later unit goes to the spot where it touches two units already placed, does not overlap
+ * any and lies closest to the centre of the units placed so far (ties: a seeded pick). That grows a
+ * compact, roughly round blob. A unit's spot depends only on the units before it, so adding a session
+ * never moves the earlier ones relative to each other. If no touching spot exists (cannot happen
+ * for real inputs) a seeded golden-angle spiral with step {@link BLOB_STEP} finds the first free spot.
  */
 export function placeBlob(units: readonly BlobUnit[], seed: string): Blob {
   const s = hashString(seed)
   const theta0 = seeded(s, 0) * Math.PI * 2
-  const placed: Array<{ id: string; x: number; y: number; r: number }> = []
+  const placed: Placed[] = []
   for (const unit of units) {
-    let spot: Point = { x: 0, y: 0 }
-    for (let j = 0; j < 20000; j++) {
-      const d = BLOB_STEP * Math.sqrt(j) + (j === 0 ? 0 : (seeded(s, 2 * j + 1) - 0.5) * BLOB_STEP * 0.5)
-      const a = theta0 + j * GOLDEN_ANGLE + (j === 0 ? 0 : (seeded(s, 2 * j + 2) - 0.5) * 0.4)
-      spot = { x: d * Math.cos(a), y: d * Math.sin(a) }
-      if (placed.every(p => Math.hypot(p.x - spot.x, p.y - spot.y) >= p.r + unit.radius + BLOB_GAP)) break
+    const clear = (at: Point) => placed.every(p => Math.hypot(p.x - at.x, p.y - at.y) >= p.r + unit.radius + BLOB_GAP - 1e-6)
+    let spot: Point | null = null
+    if (placed.length === 0) {
+      spot = { x: 0, y: 0 }
+    } else if (placed.length === 1) {
+      const d = placed[0].r + unit.radius + BLOB_GAP
+      spot = { x: placed[0].x + d * Math.cos(theta0), y: placed[0].y + d * Math.sin(theta0) }
+    } else {
+      const mx = placed.reduce((sum, p) => sum + p.x, 0) / placed.length
+      const my = placed.reduce((sum, p) => sum + p.y, 0) / placed.length
+      let best = Infinity
+      let k = 0
+      for (let i = 0; i < placed.length; i++) {
+        for (let j = i + 1; j < placed.length; j++) {
+          for (const c of touchingBoth(placed[i], placed[j], unit.radius)) {
+            k++
+            if (!clear(c)) continue
+            // What the halo would be with this unit added (its centre is the mean of the unit centres, as in
+            // cloudGeometry); the distance to the current centre breaks ties between equally round blobs; the
+            // seeded term is far below a world unit and only decides between identical spots.
+            const dToMean = Math.hypot(c.x - mx, c.y - my)
+            let score = dToMean + seeded(s, 1000 + k) * 1e-3
+            if (placed.length <= BLOB_EXACT_MAX) {
+              const nx = (mx * placed.length + c.x) / (placed.length + 1)
+              const ny = (my * placed.length + c.y) / (placed.length + 1)
+              let radius = Math.hypot(c.x - nx, c.y - ny) + unit.radius
+              for (const p of placed) radius = Math.max(radius, Math.hypot(p.x - nx, p.y - ny) + p.r)
+              score = radius + 0.05 * dToMean + seeded(s, 1000 + k) * 1e-3
+            }
+            if (score < best) { best = score; spot = c }
+          }
+        }
+      }
+    }
+    if (!spot) {
+      spot = { x: 0, y: 0 }
+      for (let j = 0; j < 20000; j++) {
+        const d = BLOB_STEP * Math.sqrt(j) + (j === 0 ? 0 : (seeded(s, 2 * j + 1) - 0.5) * BLOB_STEP * 0.5)
+        const a = theta0 + j * GOLDEN_ANGLE + (j === 0 ? 0 : (seeded(s, 2 * j + 2) - 0.5) * 0.4)
+        spot = { x: d * Math.cos(a), y: d * Math.sin(a) }
+        if (clear(spot)) break
+      }
     }
     placed.push({ id: unit.id, x: spot.x, y: spot.y, r: unit.radius })
   }

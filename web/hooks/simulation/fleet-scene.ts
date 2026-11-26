@@ -49,8 +49,8 @@ import { pruneRestingTools } from './animate'
 import { snapVisualState } from './snap-visual-state'
 
 /** Gap between clouds on the grid, world units (on top of the halo). */
-const CLOUD_GAP_X = 70
-const CLOUD_GAP_Y = 60
+export const CLOUD_GAP_X = 40
+export const CLOUD_GAP_Y = 36
 /** Room under a halo for the profile caption. */
 const CAPTION_ROOM = 26
 
