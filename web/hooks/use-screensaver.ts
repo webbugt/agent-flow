@@ -2,9 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { loadScreensaver, saveScreensaver, shouldExitScreensaver } from '@/lib/fleet/screensaver-pref'
-
-/** How long after leaving with a click the click event that follows the press is swallowed, ms. */
-const SWALLOW_CLICK_MS = 600
+import { swallowGesture } from '@/lib/fleet/swallow-gesture'
 
 export interface Screensaver {
   /** Screensaver mode is on: the UI is hidden, the map and its activity animation stay. */
@@ -17,7 +15,7 @@ export interface Screensaver {
  * Screensaver mode ("hide all UI"). Off by default; the choice is kept in localStorage (read after
  * mount, so server and client render the same first frame), so a reload keeps it on only when the user
  * left it on. While it is on, any key or click leaves it. The press that leaves it is consumed (a key
- * does not also fire its shortcut, a click does not also select the node under it).
+ * does not also fire its shortcut, a click does not also select the node under it or start a drag).
  */
 export function useScreensaver(): Screensaver {
   const [on, setOn] = useState(false)
@@ -47,14 +45,13 @@ export function useScreensaver(): Screensaver {
 
   useEffect(() => {
     if (!on) return
-    const swallowClick = (e: Event) => { e.stopPropagation(); e.preventDefault() }
     const onInput = (e: KeyboardEvent | PointerEvent) => {
       if (!shouldExitScreensaver({ type: e.type, key: (e as KeyboardEvent).key, timeStamp: e.timeStamp }, enteredAtRef.current)) return
       if (e.type === 'keydown') e.stopPropagation()
       if (e.type === 'pointerdown') {
-        // The click that follows this press must not select the node under the pointer. It goes away by itself.
-        window.addEventListener('click', swallowClick, { capture: true, once: true })
-        setTimeout(() => window.removeEventListener('click', swallowClick, true), SWALLOW_CLICK_MS)
+        // The rest of this press (mousedown starts a drag, mouseup selects the node, then click) must not reach the
+        // canvas. It goes away by itself after the click.
+        swallowGesture(window)
       }
       set(false)
     }

@@ -274,6 +274,50 @@ const SCREENSAVER_ASSERT_UI_SHOWN = `(() => {
   return true
 })()`
 
+/** After leaving the screensaver by clicking ON a node: the node must not have been selected or inspected, and the fleet map is still the view. */
+const SCREENSAVER_ASSERT_NO_SELECTION = `(() => {
+  const found = []
+  if (document.querySelector('.agent-detail-card')) found.push('agent detail card')
+  if (document.querySelector('[data-testid="fleet-inspector"]')) found.push('fleet inspector')
+  // the sliding chat panel stays mounted when closed: faded (an ancestor at opacity 0), hidden or pushed off screen
+  const shown = e => {
+    const r = e.getBoundingClientRect()
+    if (r.width <= 0 || r.height <= 0 || r.right <= 0 || r.bottom <= 0 || r.left >= innerWidth || r.top >= innerHeight) return false
+    let opacity = 1
+    for (let n = e; n; n = n.parentElement) { const s = getComputedStyle(n); if (s.display === 'none' || s.visibility === 'hidden') return false; opacity *= parseFloat(s.opacity) }
+    return opacity > 0.05
+  }
+  const chat = Array.from(document.querySelectorAll('[data-testid="open-session-detail"]')).find(shown)
+  if (chat) found.push('chat panel')
+  if (!document.querySelector('[data-testid="fleet-map"]')) found.push('fleet map is gone (a session was opened)')
+  if (found.length) throw new Error('an exit click selected the node under the pointer: ' + found.join(', '))
+  return true
+})()`
+
+/**
+ * The press that leaves the mode must not reach the page: selection runs on mouseup, a drag starts on mousedown.
+ * React listens at the root in the bubble phase, so a counter on `document` (bubble) sees exactly what React would.
+ * (Asserting on the detail card alone is not reliable here: leaving the mode re-lays out the fleet map, so the
+ * node under the pointer at mouseup is not the one at mousedown.)
+ */
+const SCREENSAVER_COUNT_PRESS = `(() => {
+  window.__afPress = { mousedown: 0, mouseup: 0, click: 0 }
+  for (const t of ['mousedown', 'mouseup', 'click']) document.addEventListener(t, () => { window.__afPress[t]++ })
+  return true
+})()`
+const SCREENSAVER_ASSERT_PRESS_SWALLOWED = `(() => {
+  const p = window.__afPress
+  if (!p) throw new Error('press counters were not installed')
+  if (p.mousedown || p.mouseup || p.click) throw new Error('the press that left the screensaver reached the page: ' + JSON.stringify(p))
+  return true
+})()`
+/** A normal press after leaving the mode goes through again (the guard releases after the click). */
+const SCREENSAVER_ASSERT_NEXT_PRESS_PASSES = `(() => {
+  const p = window.__afPress
+  if (!p || !p.mousedown || !p.mouseup || !p.click) throw new Error('the next press was swallowed too: ' + JSON.stringify(p))
+  return true
+})()`
+
 /** Page script: click the cost unit toggle (money -> kWh -> tokens -> money) until the stored unit is `unit`. */
 function TOGGLE_TO(unit: 'money' | 'kwh' | 'tokens'): string {
   return `(async () => {
@@ -319,6 +363,8 @@ export const BUILTIN_PLANS: Record<string, ShotPlan> = {
       { name: 'screensaver-button', viewports: ['desktop', 'phone'], steps: [{ click: '[data-testid="fleet-toggle"]' }, { wait: 1500 }, { click: '[data-testid="screensaver-toggle"]' }, { wait: 800 }, { eval: SCREENSAVER_ASSERT_NO_UI }] },
       { name: 'screensaver-exit-by-key', viewports: ['desktop'], steps: [{ click: '[data-testid="fleet-toggle"]' }, { wait: 1500 }, { key: 's' }, { wait: 600 }, { eval: SCREENSAVER_ASSERT_NO_UI }, { key: 'x' }, { wait: 600 }, { eval: SCREENSAVER_ASSERT_UI_SHOWN }] },
       { name: 'screensaver-exit-by-click', viewports: ['desktop'], steps: [{ click: '[data-testid="fleet-toggle"]' }, { wait: 1500 }, { key: 's' }, { wait: 600 }, { eval: SCREENSAVER_ASSERT_NO_UI }, { click: '700,450' }, { wait: 600 }, { eval: SCREENSAVER_ASSERT_UI_SHOWN }] },
+      // The click that leaves the mode lands on the map: it must only leave (mousedown, mouseup and click never reach the page: no select, no drag).
+      { name: 'screensaver-exit-click-on-node', viewports: ['desktop'], steps: [{ click: '[data-testid="fleet-toggle"]' }, { wait: 1500 }, { key: 's' }, { wait: 600 }, { eval: SCREENSAVER_ASSERT_NO_UI }, { eval: SCREENSAVER_COUNT_PRESS }, { click: '1193,445' }, { wait: 600 }, { eval: SCREENSAVER_ASSERT_UI_SHOWN }, { eval: SCREENSAVER_ASSERT_PRESS_SWALLOWED }, { eval: SCREENSAVER_ASSERT_NO_SELECTION }, { click: '720,250' }, { wait: 300 }, { eval: SCREENSAVER_ASSERT_NEXT_PRESS_PASSES }] },
       // reload: on only because the user left it on; then leaving it clears the choice for the next reload
       { name: 'screensaver-survives-reload', viewports: ['desktop'], steps: [{ key: 's' }, { wait: 600 }, { eval: 'setTimeout(() => location.reload(), 0)' }, { wait: 4000 }, { eval: SCREENSAVER_ASSERT_NO_UI }] },
     ],
