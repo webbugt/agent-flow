@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import { strict as assert } from 'node:assert'
-import { placeBlob, placeResources, hashString, BLOB_GAP, clearOfCaption, CAPTION_HALF_WIDTH, CAPTION_HEIGHT, type BlobUnit, type PlacementCloud } from './fleet-placement'
+import { placeBlob, placeResources, linkPull, hashString, BLOB_GAP, clearOfCaption, CAPTION_HALF_WIDTH, CAPTION_HEIGHT, type BlobUnit, type PlacementCloud } from './fleet-placement'
 
 const units = (n: number, r = 80): BlobUnit[] => Array.from({ length: n }, (_, i) => ({ id: `s${i}`, radius: r }))
 
@@ -171,4 +171,49 @@ test('clearOfCaption: a point inside the box leaves it, a clear point stays', ()
   assert.ok(Math.abs(inside.x) > CAPTION_HALF_WIDTH || inside.y > 100 + CAPTION_HEIGHT || inside.y < 100, `${JSON.stringify(inside)}`)
   const far = { x: 400, y: 400 }
   assert.equal(clearOfCaption(far, c), far)
+})
+
+// ─── Weights by session node ─────────────────────────────────────────────────
+
+const WITH_NODES: PlacementCloud[] = [
+  { id: 'cloud:a', x: 0, y: 0, r: 150, nodes: [{ id: 'a::west', x: -90, y: 0 }, { id: 'a::east', x: 90, y: 0 }] },
+  { id: 'cloud:b', x: 800, y: 0, r: 150, nodes: [{ id: 'b::only', x: 800, y: 0 }] },
+]
+
+test('linkPull: the weighted mean of the session nodes behind the link; the cloud centre when none is known', () => {
+  const a = WITH_NODES[0]
+  const pull = linkPull(a, { cloudId: 'cloud:a', weight: 10, sessions: [{ id: 'a::west', weight: 3 }, { id: 'a::east', weight: 1 }] })
+  assert.deepEqual([pull.x, pull.y, pull.weight], [-45, 0, 10])
+  assert.deepEqual(linkPull(a, { cloudId: 'cloud:a', weight: 4 }), { x: 0, y: 0, weight: 4 }, 'no session data: the centre')
+  assert.deepEqual(linkPull(a, { cloudId: 'cloud:a', weight: 4, sessions: [{ id: 'elsewhere', weight: 5 }] }), { x: 0, y: 0, weight: 4 }, 'a session that is not in this cloud is ignored')
+  assert.deepEqual(linkPull({ id: 'c', x: 5, y: 6, r: 1 }, { cloudId: 'c', weight: 0, sessions: [{ id: 'x', weight: 1 }] }), { x: 5, y: 6, weight: 1 }, 'a cloud without nodes, weight floored at 1')
+})
+
+test('placeResources: a resource used by one cloud moves with the weights of ITS SESSIONS (it used to ignore the weight)', () => {
+  const at = (west: number, east: number) => placeResources(WITH_NODES, [
+    { id: 'kanban:x', links: [{ cloudId: 'cloud:a', weight: west + east, sessions: [{ id: 'a::west', weight: west }, { id: 'a::east', weight: east }] }] },
+  ]).get('kanban:x')!
+  const w = at(9, 1)
+  const e = at(1, 9)
+  assert.ok(w.x < -150, `used mostly from the west node: west of the cloud (${w.x})`)
+  assert.ok(e.x > 150, `used mostly from the east node: east of the cloud (${e.x})`)
+  assert.ok(Math.abs(w.x + e.x) < 1e-6 && Math.abs(w.y - e.y) < 1e-6, 'mirror images')
+  // Both are outside the halo, as before.
+  for (const p of [w, e]) assert.ok(Math.hypot(p.x, p.y) >= 150 + 46)
+})
+
+test('placeResources: session weights add to the cloud weights (two clouds, one of them used from one node)', () => {
+  const one = placeResources(WITH_NODES, [
+    { id: 'kanban:x', links: [{ cloudId: 'cloud:a', weight: 5, sessions: [{ id: 'a::east', weight: 5 }] }, { cloudId: 'cloud:b', weight: 5 }] },
+  ]).get('kanban:x')!
+  const plain = placeResources(WITH_NODES, [
+    { id: 'kanban:x', links: [{ cloudId: 'cloud:a', weight: 5 }, { cloudId: 'cloud:b', weight: 5 }] },
+  ]).get('kanban:x')!
+  assert.ok(one.x > plain.x - 1e-6, 'pulled to a\'s east node, so it sits at least as far east as with the plain centre')
+})
+
+test('placeResources: links without session data behave as before (the cloud centre)', () => {
+  const withNodes = placeResources(WITH_NODES, [{ id: 'k', links: [{ cloudId: 'cloud:a', weight: 2 }, { cloudId: 'cloud:b', weight: 1 }] }])
+  const without = placeResources(WITH_NODES.map(({ nodes: _nodes, ...c }) => c), [{ id: 'k', links: [{ cloudId: 'cloud:a', weight: 2 }, { cloudId: 'cloud:b', weight: 1 }] }])
+  assert.deepEqual([...withNodes], [...without])
 })

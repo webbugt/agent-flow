@@ -1,10 +1,11 @@
 'use client'
 
-import { useCallback, useMemo, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useRef } from 'react'
 import type { SimulationEvent } from '@/lib/agent-types'
 import type { FleetInstance, FleetSelectionView, SessionLike } from '@/lib/fleet/fleet-model'
 import type { FleetGraph } from '@/lib/fleet/fleet-graph'
 import { FleetPulseTracker } from '@/lib/fleet/fleet-pulses'
+import { glideAll, startPositions } from '@/lib/fleet/fleet-glide'
 import { buildFleetScene, FleetReplay, type FleetScene } from './simulation/fleet-scene'
 import { createEmptyState, type SimulationState } from './simulation/types'
 
@@ -27,6 +28,7 @@ const EMPTY_SCENE: FleetScene = {
   state: createEmptyState({ keepFinished: true }),
   sessionOfAgent: new Map(),
   clusters: new Map(),
+  resourceTargets: new Map(),
 }
 
 /**
@@ -62,8 +64,42 @@ export function useFleetScene(opts: UseFleetSceneOptions) {
   const lastSceneRef = useRef<FleetScene | null>(null)
   if (lastSceneRef.current !== scene) {
     lastSceneRef.current = scene
-    frameRef.current = scene.state
+    // A rebuilt scene places every resource at its (new) weighted target. Showing it there would make the
+    // node jump, so a resource that is already on the map starts where it is drawn now and glides (below).
+    const prev = frameRef.current
+    const here = new Map<string, { x: number; y: number }>()
+    for (const id of scene.resourceTargets.keys()) {
+      const a = prev.agents.get(id)
+      if (a) here.set(id, { x: a.x, y: a.y })
+    }
+    const starts = startPositions(here, scene.resourceTargets)
+    let agents: typeof scene.state.agents | null = null
+    for (const [id, p] of starts) {
+      const a = scene.state.agents.get(id)
+      if (!a || (a.x === p.x && a.y === p.y)) continue
+      if (!agents) agents = new Map(scene.state.agents)
+      agents.set(id, { ...a, x: p.x, y: p.y })
+    }
+    frameRef.current = agents ? { ...scene.state, agents } : scene.state
   }
+
+  // Glide the resources to their targets, frame by frame, until they are there. The canvas reads
+  // frameRef every frame, so mutating it here is all the drawing needs; a node the user dragged is held.
+  useEffect(() => {
+    if (!visible || typeof requestAnimationFrame === 'undefined') return
+    let raf = 0
+    let last = performance.now()
+    const tickFrame = (t: number) => {
+      const dt = t - last
+      last = t
+      const frame = frameRef.current
+      const r = glideAll(frame.agents, scene.resourceTargets, dt, movedRef.current)
+      if (r.nodes !== frame.agents) frameRef.current = { ...frame, agents: r.nodes as typeof frame.agents }
+      if (!r.settled) raf = requestAnimationFrame(tickFrame)
+    }
+    raf = requestAnimationFrame(tickFrame)
+    return () => cancelAnimationFrame(raf)
+  }, [visible, scene])
 
   /** Drag: the node and its satellites follow the pointer at once; the position survives rebuilds. */
   const moveNode = useCallback((id: string, x: number, y: number) => {

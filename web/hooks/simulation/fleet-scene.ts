@@ -40,7 +40,7 @@ import {
 } from '@/lib/fleet/fleet-model'
 import { cloudIdOf, type FleetGraph } from '@/lib/fleet/fleet-graph'
 import { HALO_PAD, type CloudView } from '@/lib/fleet/fleet-cloud-geometry'
-import { placeBlob, placeResources, type BlobUnit } from '@/lib/fleet/fleet-placement'
+import { placeBlob, placeResources, type BlobUnit, type PlacementResource } from '@/lib/fleet/fleet-placement'
 import type { FleetPulse } from '@/lib/fleet/fleet-pulses'
 import { createEmptyState, type SimulationState } from './types'
 import { processEvent, type ProcessEventContext } from './process-event'
@@ -151,6 +151,8 @@ export interface FleetScene {
   sessionOfAgent: ReadonlyMap<string, string>
   /** Cloud centres by cloud id, world coordinates (the profile centroid), with the profile name. */
   clusters: ReadonlyMap<string, { x: number; y: number; r: number; identity: string }>
+  /** Where each resource node belongs (weighted by its interactions). The scene draws it there; the frame loop glides to it. */
+  resourceTargets: ReadonlyMap<string, { x: number; y: number }>
 }
 
 /** A session node with its satellites: the unit a blob is made of. */
@@ -287,6 +289,8 @@ export function buildFleetScene(input: FleetSceneInput): FleetScene {
   const sessionOfAgent = new Map<string, string>()
   const centers = new Map<string, { x: number; y: number; r: number; identity: string }>()
   const cloudViews: CloudView[] = []
+  /** Session nodes of each cloud with their laid-out positions: what the resources' session weights point at. */
+  const cloudNodes = new Map<string, Array<{ id: string; x: number; y: number }>>()
   const graphCloud = new Map(graph.clouds.map(c => [c.id, c]))
   const ns = (sid: string, id: string) => sceneId(sid, id)
 
@@ -297,6 +301,8 @@ export function buildFleetScene(input: FleetSceneInput): FleetScene {
     const cloudId = cloudIdOf(identity)
     centers.set(cloudId, { x: cx, y: cy, r: halo, identity })
     const members: CloudView['members'] = []
+    const nodePositions: Array<{ id: string; x: number; y: number }> = []
+    cloudNodes.set(cloudId, nodePositions)
     for (const u of group.units) {
       const id = ns(u.sid, u.agent.id)
       const at = blob.positions.get(id)!
@@ -311,6 +317,7 @@ export function buildFleetScene(input: FleetSceneInput): FleetScene {
         x, y, sessionId: u.sid, pinned: true,
       })
       sessionOfAgent.set(id, u.sid)
+      nodePositions.push({ id, x, y })
       for (const tc of u.toolCalls) {
         const tid = ns(u.sid, tc.id)
         toolCalls.set(tid, { ...tc, id: tid, agentId: id, x: tc.x + dx, y: tc.y + dy })
@@ -328,19 +335,23 @@ export function buildFleetScene(input: FleetSceneInput): FleetScene {
   // 3. Resources near the weighted centroid of the clouds they link to; unlinked ones on the rim.
   // Placed from the layout, before drags, so a dragged node does not move the map around it.
   const resources = graph.nodes.filter(nd => nd.kind === 'kanban' || nd.kind === 'supermemory' || nd.kind === 'bash' || nd.kind === 'subsystem')
-  const linksOf = new Map<string, Array<{ cloudId: string; weight: number }>>()
+  // A link pulls the resource towards the session nodes that used it (not the cloud as a whole).
+  const linksOf = new Map<string, PlacementResource['links'][number][]>()
   for (const e of graph.edges) {
     if (!centers.has(e.from)) continue
     const list = linksOf.get(e.to) ?? []
-    list.push({ cloudId: e.from, weight: e.weight })
+    list.push({ cloudId: e.from, weight: e.weight, sessions: e.sessions.map(s => ({ id: s.sessionId, weight: s.weight })) })
     linksOf.set(e.to, list)
   }
   const spots = placeResources(
-    [...centers].map(([id, c]) => ({ id, x: c.x, y: c.y, r: c.r })),
+    [...centers].map(([id, c]) => ({ id, x: c.x, y: c.y, r: c.r, nodes: cloudNodes.get(id) })),
     resources.map(r => ({ id: r.id, links: linksOf.get(r.id) ?? [] })),
   )
+  /** Where each resource belongs (also where a dragged one was dropped): the scene draws them there, the hook glides to it. */
+  const resourceTargets = new Map<string, { x: number; y: number }>()
   for (const node of resources) {
-    const p = spots.get(node.id)!
+    const p = input.moved?.get(node.id) ?? spots.get(node.id)!
+    resourceTargets.set(node.id, { x: p.x, y: p.y })
     agents.set(node.id, resourceAgent(node, p.x, p.y))
   }
   for (const e of graph.edges) {
@@ -368,7 +379,7 @@ export function buildFleetScene(input: FleetSceneInput): FleetScene {
     agents, toolCalls, edges, keepFinished: true, isPlaying: false, currentTime, maxTimeReached: currentTime,
     clouds: cloudViews, pulses: input.pulses ? [...input.pulses] : [],
   })
-  return { state, sessionOfAgent, clusters: centers }
+  return { state, sessionOfAgent, clusters: centers, resourceTargets }
 }
 
 /**

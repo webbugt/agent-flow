@@ -24,8 +24,13 @@ export interface FleetPulse {
   edgeId: string
   kind: FleetEdgeKind
   color: string
-  /** Epoch ms the dot leaves the cloud. Can lie slightly in the future (staggered burst). */
+  /** Epoch ms the dot leaves its session node. Can lie slightly in the future (staggered burst). */
   startedAt: number
+  /**
+   * Scene id of the session node the dot leaves from (the one that did the interaction). Absent when the
+   * source is unknown, or no longer on the map: the dot then leaves from the cloud's rim.
+   */
+  sourceId?: string
 }
 
 /** Colour of a pulse: one for Kanban events, one for memory store/search/forget, one for Bash commands. */
@@ -62,7 +67,7 @@ export class FleetPulseTracker {
           if (!this.primed || now - ev.at > PULSE_MAX_AGE_MS || burst >= MAX_PULSES_PER_EDGE) continue
           fresh.push({
             id: `${edge.id}@${ev.key}`, edgeId: edge.id, kind: ev.kind, color: pulseColor(ev.kind),
-            startedAt: now + burst * PULSE_STAGGER_MS,
+            startedAt: now + burst * PULSE_STAGGER_MS, sourceId: ev.sessionId,
           })
           burst++
         }

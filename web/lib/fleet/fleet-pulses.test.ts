@@ -7,7 +7,7 @@ import { FleetPulseTracker, MAX_PULSES_PER_EDGE, PULSE_MAX_AGE_MS, PULSE_MS, pul
 const NOW = Date.UTC(2026, 10, 25, 12, 0, 0)
 const ev = (key: string, at: number, kind: 'kanban' | 'memory' = 'kanban', label = 'claimed'): FleetEdgeEvent => ({ key, at, kind, label })
 const edge = (id: string, events: FleetEdgeEvent[], kind: 'kanban' | 'memory' = 'kanban'): FleetGraphEdge => ({
-  id, from: 'cloud:x', to: 'r', kind, lastUsedAt: Math.max(...events.map(e => e.at)), weight: events.length, events,
+  id, from: 'cloud:x', to: 'r', kind, lastUsedAt: Math.max(...events.map(e => e.at)), weight: events.length, events, sessions: [],
 })
 
 test('colours: one for Kanban events, a different one for memory store, search and forget', () => {
@@ -72,4 +72,15 @@ test('pulseProgress: 0..1 along the trip, null before it starts or after it ends
   assert.equal(pulseProgress(p, NOW + PULSE_MS / 2), 0.5)
   assert.equal(pulseProgress(p, NOW + PULSE_MS), 1)
   assert.equal(pulseProgress(p, NOW + PULSE_MS + 1), null)
+})
+
+test('a pulse leaves from the session node that did the interaction (its source id comes from the event)', () => {
+  const t = new FleetPulseTracker()
+  t.update([edge('e', [ev('seed', NOW - 90_000)])], NOW)
+  const a: FleetEdgeEvent = { ...ev('a', NOW + 100), sessionId: 'hermes-taxis::Taxis · Plan' }
+  const b: FleetEdgeEvent = { ...ev('b', NOW + 200), sessionId: 'hermes-taxis::Taxis · Review' }
+  const c = ev('c', NOW + 300) // source unknown
+  const out = t.update([edge('e', [c, b, a, ev('seed', NOW - 90_000)])], NOW + 400)
+  assert.deepEqual(out.map(p => p.sourceId), ['hermes-taxis::Taxis · Plan', 'hermes-taxis::Taxis · Review', undefined])
+  assert.equal(new Set(out.map(p => p.edgeId)).size, 1, 'still one link: the pulses differ in where they start')
 })
