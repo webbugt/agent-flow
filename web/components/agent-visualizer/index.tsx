@@ -23,6 +23,8 @@ import { FleetMap } from "./fleet-map"
 import { createDemoResources, addDemoEvent, addDemoNodes, type DemoEventKind } from "@/lib/fleet/fleet-demo-resources"
 import { loadTimelineVisible, saveTimelineVisible, mapInsetBottom } from "@/lib/fleet/fleet-timeline-pref"
 import { useFleetSelection } from "@/hooks/use-fleet-selection"
+import { useFleetActivityFilter } from "@/hooks/use-fleet-activity-filter"
+import { applyActivityFilter, withActivityFilter } from "@/lib/fleet/fleet-activity-filter"
 import { useFleetSources } from "@/hooks/use-fleet-sources"
 import { createFleetFixtureSessions } from "@/lib/fleet/fleet-fixture-events"
 import { createFleetFixture, fleetSessions, instancesFromSessionEvents, splitInstanceId, tabSessions } from "@/lib/fleet/fleet-model"
@@ -165,6 +167,19 @@ export function AgentVisualizer() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bridge.useMockData, showFleet, bridgeSessions, getDismissedSessions, fleetDemo, fleetTick])
   const mapEventsOf = bridge.useMockData ? fleetDemo.eventsOf : getSessionEvents
+  // Latest-activity filter: profiles, sessions and resources with no event in the window are hidden from
+  // the map and the timeline panel. Visual only: nothing is stopped, and the user's selection is untouched
+  // (so the tab strip below keeps following the selection alone).
+  const activityFilter = useFleetActivityFilter({
+    enabled: showFleet, instances: fleetInstances, kanban: fleetKanban, supermemory: fleetMemory, selection: fleetSelection.view,
+  })
+  const mapSelection = useMemo(
+    () => withActivityFilter(fleetSelection.view, activityFilter.hidden),
+    [fleetSelection.view, activityFilter.hidden],
+  )
+  const panelInstances = useMemo(() => applyActivityFilter(fleetInstances, activityFilter.hidden), [fleetInstances, activityFilter.hidden])
+  const panelKanban = useMemo(() => fleetKanban && applyActivityFilter(fleetKanban, activityFilter.hidden), [fleetKanban, activityFilter.hidden])
+  const panelMemory = useMemo(() => fleetMemory && applyActivityFilter(fleetMemory, activityFilter.hidden), [fleetMemory, activityFilter.hidden])
   // Fleet on: nodes deselected in the fleet drop out of the tab strip (the open tab always stays).
   // Fleet off: the single-profile tab strip is unchanged.
   const visibleSessions = useMemo(
@@ -621,7 +636,10 @@ export function AgentVisualizer() {
         instances={fleetInstances}
         kanban={fleetKanban}
         supermemory={fleetMemory}
-        selection={fleetSelection.view}
+        selection={mapSelection}
+        activityWindow={activityFilter.window}
+        onActivityWindowChange={activityFilter.setWindow}
+        hiddenSummary={activityFilter.summary}
         onOpenSession={bridge.useMockData ? undefined : handleFleetOpenSession}
         replay={fleetReplayRef.current}
         insetTop={48}
@@ -634,9 +652,9 @@ export function AgentVisualizer() {
       {/* Fleet timeline panel (grouped agents + Kanban/Supermemory lanes) */}
       <FleetTimelinePanel
         visible={showFleet && fleetTimelineVisible}
-        instances={fleetInstances}
-        kanban={fleetKanban}
-        supermemory={fleetMemory}
+        instances={panelInstances}
+        kanban={panelKanban}
+        supermemory={panelMemory}
         selection={fleetSelection}
         onOpenSession={bridge.useMockData ? undefined : handleFleetOpenSession}
         canOpenSession={canOpenFleetSession}

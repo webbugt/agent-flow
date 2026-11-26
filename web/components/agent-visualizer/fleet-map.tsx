@@ -11,6 +11,9 @@ import { inspectResource } from "@/lib/fleet/fleet-inspect"
 import { useFleetScene } from "@/hooks/use-fleet-scene"
 import { openTargetOf, type FleetReplay } from "@/hooks/simulation/fleet-scene"
 import { BUTTON_ZOOM_STEP, shouldRefit, type FitBasis } from "@/lib/fleet/fleet-camera"
+import {
+  ACTIVITY_WINDOWS, DEFAULT_ACTIVITY_WINDOW, isActivityWindowId, type ActivityWindowId, type HiddenSummary,
+} from "@/lib/fleet/fleet-activity-filter"
 import { AgentCanvas, type CanvasControls } from "./canvas"
 import { FleetInspector } from "./fleet-inspector"
 
@@ -37,6 +40,11 @@ interface FleetMapProps {
   /** Whether the fleet timeline panel is shown. When it is hidden the map takes the full height. */
   timelineVisible?: boolean
   onToggleTimeline?: () => void
+  /** Latest-activity filter (the map already receives the filtered selection). Control hidden when no handler is given. */
+  activityWindow?: ActivityWindowId
+  onActivityWindowChange?: (id: ActivityWindowId) => void
+  /** What the filter hides, for the "N hidden" hint. */
+  hiddenSummary?: HiddenSummary
 }
 
 const NARROW_WIDTH = 720
@@ -53,7 +61,7 @@ const ZOOM_BUTTON_PX = 40
  */
 export function FleetMap({
   visible, sessions, eventsOf, tick, instances, kanban, supermemory, selection, onOpenSession, replay, insetTop, insetBottom, insetRight,
-  timelineVisible = true, onToggleTimeline,
+  timelineVisible = true, onToggleTimeline, activityWindow = DEFAULT_ACTIVITY_WINDOW, onActivityWindowChange, hiddenSummary,
 }: FleetMapProps) {
   const [wrap, setWrap] = useState<HTMLDivElement | null>(null)
   const [size, setSize] = useState({ width: 0, height: 0 })
@@ -229,6 +237,39 @@ export function FleetMap({
           </button>
         ))}
       </div>
+      {onActivityWindowChange && (
+        <div
+          data-testid="fleet-activity-filter"
+          className="absolute flex flex-col items-end gap-1 font-mono text-xs"
+          style={{ right: insetRight + 12, top: top + 8, zIndex: 6, maxWidth: 'calc(100% - 24px)' }}
+        >
+          <select
+            data-testid="fleet-activity-select"
+            aria-label="Filter by latest activity"
+            title="Hides profiles, sessions and resources with no event in the window. Hidden is not stopped."
+            value={activityWindow}
+            onChange={e => { if (isActivityWindowId(e.target.value)) onActivityWindowChange(e.target.value) }}
+            className="font-mono text-xs px-2 py-1 rounded"
+            style={{ background: 'rgba(8,12,24,0.88)', border: `1px solid ${COLORS.holoBase}66`, color: COLORS.textPrimary, touchAction: 'manipulation' }}
+          >
+            {ACTIVITY_WINDOWS.map(w => <option key={w.id} value={w.id}>{w.label}</option>)}
+          </select>
+          {hiddenSummary && (hiddenSummary.sessions > 0 || hiddenSummary.resources > 0) && (
+            <span
+              data-testid="fleet-activity-hidden"
+              data-hidden-profiles={hiddenSummary.profiles}
+              data-hidden-sessions={hiddenSummary.sessions}
+              data-hidden-resources={hiddenSummary.resources}
+              style={{ color: COLORS.textMuted }}
+              title="Hidden by the filter, not stopped"
+            >
+              {hiddenSummary.profiles > 0 ? `${hiddenSummary.profiles} profile${hiddenSummary.profiles === 1 ? '' : 's'}, ` : ''}
+              {`${hiddenSummary.sessions} session${hiddenSummary.sessions === 1 ? '' : 's'}`}
+              {hiddenSummary.resources > 0 ? `, ${hiddenSummary.resources} resource${hiddenSummary.resources === 1 ? '' : 's'}` : ''} hidden
+            </span>
+          )}
+        </div>
+      )}
       {inspection && (
         <FleetInspector inspection={inspection} now={now} top={top} right={insetRight} narrow={narrow}
           onClose={() => { setInspectId(null); setSelectedId(null) }} />
@@ -250,7 +291,9 @@ export function FleetMap({
       )}
       {scene.state.agents.size === 0 && (
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none font-mono text-xs" style={{ color: COLORS.textMuted }}>
-          No Hermes profiles with sessions yet
+          {hiddenSummary && (hiddenSummary.sessions > 0 || hiddenSummary.resources > 0)
+            ? 'Nothing active in this window. Choose a longer one to see the rest (hidden is not stopped).'
+            : 'No Hermes profiles with sessions yet'}
         </div>
       )}
     </div>
