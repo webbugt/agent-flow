@@ -30,6 +30,9 @@ export interface AgentEvent {
    *  when the source has one, so the web view can match parallel calls to the same tool. */
   payload: Record<string, unknown>
   sessionId?: string
+  /** The event already happened before the page could see it (the backlog of a session met for the
+   *  first time). The page applies it as a snapshot instead of animating it as live activity. */
+  history?: boolean
 }
 
 export interface SessionInfo {
