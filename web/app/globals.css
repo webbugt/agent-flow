@@ -223,3 +223,46 @@
   .af-review-scrubber { order: 10; flex-basis: 100%; }
   .af-review-speeds { order: 11; margin-left: auto; margin-right: auto; }
 }
+
+
+/* ─── Hit areas (WCAG 2.2 AA 2.5.8 Target Size, minimum 24x24 CSS px) ───────────
+   `.af-tap` makes a small control at least 24x24 px to hit without changing how it looks or how the row lays out: the
+   padding is a pseudo-element centred on the control. Under a coarse pointer (a finger) the primary controls get 44 px.
+   `.af-tap-fine` keeps 24 px there (dense secondary controls, where 44 px targets would overlap each other). */
+.af-tap {
+  position: relative;
+}
+.af-tap::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: max(100%, 24px);
+  height: max(100%, 24px);
+  transform: translate(-50%, -50%);
+}
+@media (pointer: coarse) {
+  .af-tap:not(.af-tap-fine)::after {
+    width: max(100%, 44px);
+    height: max(100%, 44px);
+  }
+}
+/* A visible focus ring for the controls the app draws itself. */
+.af-focus:focus-visible {
+  outline: 2px solid #aaeeff;
+  outline-offset: 1px;
+}
+/* The close button of a tab chip: shown on the selected chip, on hover and when anything in the chip has focus. */
+.af-chip-close {
+  opacity: 0;
+}
+.af-chip:hover .af-chip-close,
+.af-chip:focus-within .af-chip-close,
+.af-chip[data-selected="true"] .af-chip-close,
+.af-chip-close:focus-visible {
+  opacity: 1;
+}
+@media (pointer: coarse) {
+  /* No hover on a touch screen: the close is always drawn. */
+  .af-chip-close { opacity: 1; }
+}
