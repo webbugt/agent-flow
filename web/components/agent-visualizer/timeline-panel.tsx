@@ -233,7 +233,7 @@ export function TimelinePanel({ visible, timelineEntries, currentTime, onClose }
           only the rows scroll. On a 390 px high landscape phone the panel used to end above the screen. */}
       <div className="glass-card relative flex flex-col" data-testid="timeline-panel" style={{ maxHeight: STACK_PANEL_MAX_HEIGHT }}>
         <PanelHeader onClose={onClose} className="mb-2 flex-shrink-0">
-          <span className="text-[10px] font-mono tracking-wider" style={{ color: COLORS.textPrimary }}>
+          <span className="text-[11px] font-mono tracking-wider" style={{ color: COLORS.textPrimary }}>
             EXECUTION TIMELINE
           </span>
         </PanelHeader>
@@ -249,7 +249,7 @@ export function TimelinePanel({ visible, timelineEntries, currentTime, onClose }
             {LEGEND_ITEMS.map(item => (
               <div key={item.label} className="flex items-center gap-1">
                 <div className="w-2 h-2 rounded-sm" style={{ background: item.color + '70' }} />
-                <span className="text-[9px] font-mono" style={{ color: COLORS.textMuted }}>{item.label}</span>
+                <span className="text-[11px] font-mono" style={{ color: COLORS.textMuted }}>{item.label}</span>
               </div>
             ))}
           </div>

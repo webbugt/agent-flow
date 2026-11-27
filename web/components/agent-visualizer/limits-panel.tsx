@@ -51,7 +51,7 @@ function EstIcon() {
 function Tag({ tag, id }: { tag: RowTag; id: string }) {
   const t = TAG[tag]
   return (
-    <span data-testid={`limits-row-${id}-tag`} style={{ color: t.color, border: `1px solid ${t.color}66`, borderRadius: 4, padding: '0 4px', fontSize: 9 }}>{t.text}</span>
+    <span data-testid={`limits-row-${id}-tag`} style={{ color: t.color, border: `1px solid ${t.color}66`, borderRadius: 4, padding: '0 4px', fontSize: 11 }}>{t.text}</span>
   )
 }
 
@@ -88,7 +88,7 @@ function RowTooltip({ row, anchor, narrow, onClose, pinned }: { row: LimitRow; a
       ref={ref}
       role="tooltip"
       data-testid={f ? 'fable-estimate-tooltip' : 'limits-row-tooltip'}
-      className="font-mono text-[10px] rounded"
+      className="font-mono text-[11px] rounded"
       style={{
         position: 'fixed', left: pos?.left ?? -9999, top: pos?.top ?? -9999, width: `min(${TIP_WIDTH}px, calc(100vw - ${MARGIN * 2}px))`, zIndex: Z.detailCard + 5,
         background: 'rgba(8, 12, 24, 0.97)', border: `1px solid ${COLORS.glassBorder}`, boxShadow: '0 4px 24px rgba(0,0,0,0.5)', padding: '8px 10px',
@@ -155,13 +155,13 @@ function Row({ row, narrow }: { row: LimitRow; narrow: boolean }) {
         <strong data-testid={`limits-row-${row.id}-value`} style={{ fontSize: 13, color: row.tag ? COLORS.textPrimary : COLORS.textMuted }}>{row.valueText}</strong>
         {row.estimate && <EstIcon />}
         {row.tag && <Tag tag={row.tag} id={row.id} />}
-        {row.asOfText && <span data-testid={`limits-row-${row.id}-asof`} style={{ color: AMBER, fontSize: 10 }}>{row.asOfText}</span>}
-        <span style={{ color: COLORS.textMuted, fontSize: 10, marginLeft: 'auto', textAlign: 'right' }}>{row.resetText}</span>
+        {row.asOfText && <span data-testid={`limits-row-${row.id}-asof`} style={{ color: AMBER, fontSize: 11 }}>{row.asOfText}</span>}
+        <span style={{ color: COLORS.textMuted, fontSize: 11, marginLeft: 'auto', textAlign: 'right' }}>{row.resetText}</span>
       </div>
       <div aria-hidden style={{ height: 4, borderRadius: 2, background: 'rgba(255,255,255,0.08)', marginTop: 3, overflow: 'hidden' }}>
         <div style={{ width: `${barPct}%`, height: '100%', background: row.tag === 'stale' ? `${AMBER}99` : row.estimate ? `${color}aa` : color }} />
       </div>
-      {row.hint && <div data-testid={`limits-row-${row.id}-hint`} style={{ color: COLORS.textMuted, fontSize: 9, marginTop: 2 }}>{row.hint}</div>}
+      {row.hint && <div data-testid={`limits-row-${row.id}-hint`} style={{ color: COLORS.textMuted, fontSize: 11, marginTop: 2 }}>{row.hint}</div>}
       {open && anchor && <RowTooltip row={row} anchor={anchor} narrow={narrow} pinned={pinned} onClose={() => { setPinned(false); setHover(false) }} />}
     </div>
   )
@@ -202,15 +202,15 @@ export function LimitsPanel({ model, collapsed: collapsedProp, onCollapsedChange
       data-stacked={stacked ? '1' : '0'}
       data-auto-folded={autoFolded ? '1' : '0'}
       aria-label="Claude usage limits"
-      className="font-mono text-[10px] rounded"
+      className="font-mono text-[11px] rounded"
       style={{
         position: 'fixed', right: narrow ? 8 : 16, left: narrow ? 8 : 'auto', bottom: stacked ? `calc(var(${VAR_BAR_TOP}, ${DEFAULT_BAR_TOP_PX}px) + ${STACK_GAP_PX}px)` : 16, width: narrow ? 'auto' : 300, zIndex: Z.sidePanel + 5,
         background: COLORS.panelBg, border: `1px solid ${COLORS.glassBorder}`, padding: '8px 10px', color: COLORS.textPrimary, backdropFilter: 'blur(8px)',
       }}
     >
       <div className="flex items-baseline gap-2" style={{ marginBottom: collapsed ? 0 : 6 }}>
-        <h3 style={{ margin: 0, color: COLORS.textMuted, fontSize: 9, letterSpacing: 1, textTransform: 'uppercase' }}>Limits</h3>
-        <span data-testid="limits-plan" style={{ color: COLORS.textMuted, fontSize: 9, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{model.planText}</span>
+        <h3 style={{ margin: 0, color: COLORS.textMuted, fontSize: 11, letterSpacing: 1, textTransform: 'uppercase' }}>Limits</h3>
+        <span data-testid="limits-plan" style={{ color: COLORS.textMuted, fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{model.planText}</span>
         <button
           type="button" data-testid="limits-panel-toggle" onClick={() => setCollapsed(!collapsed)}
           aria-expanded={!collapsed} aria-label={collapsed ? 'Show usage limits' : 'Hide usage limits'} disabled={autoFolded} title={autoFolded ? 'Folded while another panel is open' : undefined}
@@ -220,7 +220,7 @@ export function LimitsPanel({ model, collapsed: collapsedProp, onCollapsedChange
         </button>
       </div>
       {!collapsed && model.rows.map(r => <Row key={r.id} row={r} narrow={narrow} />)}
-      {!collapsed && model.notes.map((n, i) => <p key={i} data-testid="limits-panel-note" style={{ margin: '4px 0 0', color: COLORS.textMuted, fontSize: 9, lineHeight: 1.4 }}>{n}</p>)}
+      {!collapsed && model.notes.map((n, i) => <p key={i} data-testid="limits-panel-note" style={{ margin: '4px 0 0', color: COLORS.textMuted, fontSize: 11, lineHeight: 1.4 }}>{n}</p>)}
     </section>
   )
 }

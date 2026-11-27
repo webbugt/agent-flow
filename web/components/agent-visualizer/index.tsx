@@ -548,8 +548,8 @@ export function AgentVisualizer() {
       {isEmpty && !sv && (
         <div className="absolute inset-0 flex items-center justify-center z-10 pointer-events-none">
           <div className="text-center" style={{ fontFamily: "'SF Mono', 'Fira Code', monospace" }}>
-            <div className="text-sm" style={{ color: '#66ccff80' }}>WAITING FOR AGENT SESSION</div>
-            <div className="mt-2 text-xs" style={{ color: '#66ccff40' }}>Start a Claude Code session to see activity</div>
+            <div className="text-sm" style={{ color: COLORS.textMuted }}>WAITING FOR AGENT SESSION</div>
+            <div className="mt-2 text-xs" style={{ color: COLORS.textMuted }}>Start a Claude Code session to see activity</div>
           </div>
         </div>
       )}

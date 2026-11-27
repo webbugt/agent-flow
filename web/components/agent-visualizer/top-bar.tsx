@@ -155,7 +155,7 @@ export const TopBar = memo(function TopBar({
     <div
       data-testid="top-bar"
       ref={barRef}
-      className="absolute top-3 left-3 right-3 flex flex-wrap items-center gap-x-4 gap-y-1.5 font-mono text-[10px]"
+      className="absolute top-3 left-3 right-3 flex flex-wrap items-center gap-x-4 gap-y-1.5 font-mono text-[11px]"
       style={{ zIndex: Z.info }}
     >
       {/* Session tabs — scrollable, never wider than the bar */}
@@ -215,7 +215,7 @@ export const TopBar = memo(function TopBar({
               </ToggleButton>
               <LimitsChip onOpen={onOpenCostSettings} />
               {projectOverride && (
-                <span data-testid="cost-project-badge" title={projectOverrideTitle} style={{ color: '#ffcc66', border: '1px solid #ffcc6666', borderRadius: 4, padding: '0 4px', fontSize: 9 }}>
+                <span data-testid="cost-project-badge" title={projectOverrideTitle} style={{ color: '#ffcc66', border: '1px solid #ffcc6666', borderRadius: 4, padding: '0 4px', fontSize: 11 }}>
                   project
                 </span>
               )}

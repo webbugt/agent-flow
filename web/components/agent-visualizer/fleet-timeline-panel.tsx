@@ -181,7 +181,7 @@ function LabelCell({ row, onToggle, onExpand, onOpen, canOpen }: { row: FleetRow
 
   return (
     <div
-      className="flex items-center gap-1 font-mono text-[9px] overflow-hidden"
+      className="flex items-center gap-1 font-mono text-[11px] overflow-hidden"
       style={{
         height: ROW_HEIGHT, paddingLeft: 6 + row.depth * 14, paddingRight: 4,
         opacity: row.hidden ? 0.45 : 1, color: COLORS.textDim,
@@ -336,7 +336,7 @@ export function FleetTimelinePanel({ visible, instances, kanban, supermemory, se
           className="mb-2 flex-shrink-0"
           onClose={onClose}
           actions={
-            <div className="flex items-center gap-1 mr-2 font-mono text-[9px]">
+            <div className="flex items-center gap-1 mr-2 font-mono text-[11px]">
               <button
                 onClick={selection.selectAll}
                 disabled={allSelected}
@@ -356,8 +356,8 @@ export function FleetTimelinePanel({ visible, instances, kanban, supermemory, se
             </div>
           }
         >
-          <span className="text-[10px] font-mono tracking-wider" style={{ color: COLORS.textPrimary }}>FLEET TIMELINE</span>
-          <span className="text-[9px] font-mono" style={{ color: COLORS.textMuted }}>
+          <span className="text-[11px] font-mono tracking-wider" style={{ color: COLORS.textPrimary }}>FLEET TIMELINE</span>
+          <span className="text-[11px] font-mono" style={{ color: COLORS.textMuted }}>
             hiding does not stop agents{onOpenSession ? ' · click a name to open its session' : ''}
           </span>
         </PanelHeader>
@@ -378,7 +378,7 @@ export function FleetTimelinePanel({ visible, instances, kanban, supermemory, se
                 />
               ))}
               {rows.length === 0 && (
-                <div className="font-mono text-[9px] px-2" style={{ height: ROW_HEIGHT, color: COLORS.textMuted }}>No fleet data</div>
+                <div className="font-mono text-[11px] px-2" style={{ height: ROW_HEIGHT, color: COLORS.textMuted }}>No fleet data</div>
               )}
             </div>
             <div ref={trackRef} style={{ flex: 1, minWidth: MIN_TRACK_WIDTH }}>
@@ -392,7 +392,7 @@ export function FleetTimelinePanel({ visible, instances, kanban, supermemory, se
             {LEGEND_ITEMS.map(item => (
               <div key={item.label} className="flex items-center gap-1">
                 <div className="w-2 h-2 rotate-45" style={{ background: item.color + '90' }} />
-                <span className="text-[9px] font-mono" style={{ color: COLORS.textMuted }}>{item.label}</span>
+                <span className="text-[11px] font-mono" style={{ color: COLORS.textMuted }}>{item.label}</span>
               </div>
             ))}
           </div>
