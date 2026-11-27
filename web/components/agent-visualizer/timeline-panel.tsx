@@ -19,6 +19,8 @@ interface TimelinePanelProps {
 const ROW_HEIGHT = 22
 const HEADER_HEIGHT = 20
 const LABEL_WIDTH = 90
+/** Room right of the track for the last axis label (centred on the end of the track, it was cut in half). */
+const RIGHT_PAD = 16
 const FONT = '9px monospace'
 const MODEL_FONT = '8px monospace'
 
@@ -78,7 +80,7 @@ function drawTimeline(
     if (end > maxTime) maxTime = end
   }
   const timeSpan = Math.max(maxTime - minTime, 1)
-  const barWidth = width - LABEL_WIDTH
+  const barWidth = Math.max(width - LABEL_WIDTH - RIGHT_PAD, 1)
 
   // Time markers
   const markerInterval = timeSpan > 60 ? 10 : timeSpan > 20 ? 5 : timeSpan > 10 ? 2 : 1
@@ -244,8 +246,8 @@ export function TimelinePanel({ visible, timelineEntries, currentTime, onClose }
 
         {/* Legend (static DOM) */}
         <div className="flex items-center gap-3 px-3 py-1.5 flex-shrink-0" style={{ borderTop: `1px solid ${COLORS.holoBorder06}` }}>
-          <div style={{ width: LABEL_WIDTH, flexShrink: 0 }} />
-          <div className="flex items-center gap-3">
+          <div className="hidden sm:block" style={{ width: LABEL_WIDTH, flexShrink: 0 }} />
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 min-w-0">
             {LEGEND_ITEMS.map(item => (
               <div key={item.label} className="flex items-center gap-1">
                 <div className="w-2 h-2 rounded-sm" style={{ background: item.color + '70' }} />
