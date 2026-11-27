@@ -11,6 +11,7 @@ import type { useFleetSelection } from '@/hooks/use-fleet-selection'
 import type { PublicKanbanBoardNode } from '@/lib/fleet/kanban-source'
 import type { SupermemoryNamespaceNode } from '@/lib/fleet/supermemory-source'
 import { PanelHeader, SlidingPanel } from './shared-ui'
+import { STACK_BOTTOM, STACK_PANEL_MAX_HEIGHT } from '@/lib/bottom-stack'
 
 interface FleetTimelinePanelProps {
   visible: boolean
@@ -323,14 +324,16 @@ export function FleetTimelinePanel({ visible, instances, kanban, supermemory, se
   return (
     <SlidingPanel
       visible={visible}
-      position={{ bottom: 72, left: 16, right: 16 + rightInset }}
+      position={{ bottom: STACK_BOTTOM, left: 16, right: 16 + rightInset }}
       axis="Y"
       zIndex={Z.sidePanel}
       className="mx-auto"
       style={{ maxWidth: 860 }}
     >
-      <div className="glass-card relative" data-testid="fleet-timeline-panel">
+      {/* Capped to the free height (flex column): the title row with the close control stays reachable, only the lanes scroll. */}
+      <div className="glass-card relative flex flex-col" data-testid="fleet-timeline-panel" style={{ maxHeight: STACK_PANEL_MAX_HEIGHT }}>
         <PanelHeader
+          className="mb-2 flex-shrink-0"
           onClose={onClose}
           actions={
             <div className="flex items-center gap-1 mr-2 font-mono text-[9px]">
@@ -360,7 +363,7 @@ export function FleetTimelinePanel({ visible, instances, kanban, supermemory, se
         </PanelHeader>
 
         {/* Shorter on a phone (18vh) so the node map above keeps most of the screen. */}
-        <div className="overflow-auto max-h-[18vh] sm:max-h-80">
+        <div className="overflow-auto min-h-0 flex-1 max-h-[max(18vh,120px)] sm:max-h-80">
           <div className="flex">
             <div style={{ width: LABEL_WIDTH, flexShrink: 0 }}>
               <div style={{ height: HEADER_HEIGHT }} />
@@ -384,7 +387,7 @@ export function FleetTimelinePanel({ visible, instances, kanban, supermemory, se
           </div>
         </div>
 
-        <div className="flex items-center gap-3 px-3 py-1.5" style={{ borderTop: `1px solid ${COLORS.holoBorder06}` }}>
+        <div className="flex items-center gap-3 px-3 py-1.5 flex-shrink-0" style={{ borderTop: `1px solid ${COLORS.holoBorder06}` }}>
           <div className="flex items-center gap-3 flex-wrap">
             {LEGEND_ITEMS.map(item => (
               <div key={item.label} className="flex items-center gap-1">

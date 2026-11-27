@@ -5,6 +5,7 @@ import { TimelineEntry, Z } from '@/lib/agent-types'
 import { COLORS } from '@/lib/colors'
 import { formatTimelineModels } from '@/lib/timeline-models'
 import { PanelHeader, SlidingPanel } from './shared-ui'
+import { STACK_BOTTOM, STACK_PANEL_MAX_HEIGHT } from '@/lib/bottom-stack'
 
 interface TimelinePanelProps {
   visible: boolean
@@ -222,25 +223,27 @@ export function TimelinePanel({ visible, timelineEntries, currentTime, onClose }
   return (
     <SlidingPanel
       visible={visible}
-      position={{ bottom: 72, left: 16, right: 16 }}
+      position={{ bottom: STACK_BOTTOM, left: 16, right: 16 }}
       axis="Y"
       zIndex={Z.sidePanel}
       className="mx-auto"
       style={{ maxWidth: 700 }}
     >
-      <div className="glass-card relative">
-        <PanelHeader onClose={onClose}>
+      {/* A flex column capped to the free height: the title row (with the close control) and the legend stay put,
+          only the rows scroll. On a 390 px high landscape phone the panel used to end above the screen. */}
+      <div className="glass-card relative flex flex-col" data-testid="timeline-panel" style={{ maxHeight: STACK_PANEL_MAX_HEIGHT }}>
+        <PanelHeader onClose={onClose} className="mb-2 flex-shrink-0">
           <span className="text-[10px] font-mono tracking-wider" style={{ color: COLORS.textPrimary }}>
             EXECUTION TIMELINE
           </span>
         </PanelHeader>
 
-        <div className="overflow-auto" style={{ maxHeight: 300 }}>
+        <div className="overflow-auto min-h-0 flex-1" style={{ maxHeight: 300 }}>
           <canvas ref={canvasRef} style={{ display: 'block' }} onMouseMove={handleMouseMove} />
         </div>
 
         {/* Legend (static DOM) */}
-        <div className="flex items-center gap-3 px-3 py-1.5" style={{ borderTop: `1px solid ${COLORS.holoBorder06}` }}>
+        <div className="flex items-center gap-3 px-3 py-1.5 flex-shrink-0" style={{ borderTop: `1px solid ${COLORS.holoBorder06}` }}>
           <div style={{ width: LABEL_WIDTH, flexShrink: 0 }} />
           <div className="flex items-center gap-3">
             {LEGEND_ITEMS.map(item => (
