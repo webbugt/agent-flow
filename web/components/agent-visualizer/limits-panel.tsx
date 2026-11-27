@@ -170,10 +170,17 @@ function Row({ row, narrow }: { row: LimitRow; narrow: boolean }) {
  * hover / tap explanation. DOM, not canvas, so the hover targets are real. Bottom-right on desktop, a sheet above
  * the control bar on a phone. Plan `api` or nothing to show: nothing is rendered.
  */
-export function LimitsPanel({ model }: { model: LimitsPanelModel }) {
+export function LimitsPanel({ model, collapsed: collapsedProp, onCollapsedChange }: {
+  model: LimitsPanelModel
+  /** Controlled fold state (the app keeps it in its saved state). Without it the panel keeps its own, starting folded. */
+  collapsed?: boolean
+  onCollapsedChange?: (collapsed: boolean) => void
+}) {
   const width = useViewportWidth(1280)
   const narrow = width < PHONE_PX
-  const [collapsed, setCollapsed] = useState(false)
+  const [ownCollapsed, setOwnCollapsed] = useState(true)
+  const collapsed = collapsedProp ?? ownCollapsed
+  const setCollapsed = (next: boolean) => { if (onCollapsedChange) onCollapsedChange(next); else setOwnCollapsed(next) }
   if (!model.visible) return null
   return (
     <section
@@ -190,7 +197,7 @@ export function LimitsPanel({ model }: { model: LimitsPanelModel }) {
         <h3 style={{ margin: 0, color: COLORS.textMuted, fontSize: 9, letterSpacing: 1, textTransform: 'uppercase' }}>Limits</h3>
         <span data-testid="limits-plan" style={{ color: COLORS.textMuted, fontSize: 9, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{model.planText}</span>
         <button
-          type="button" data-testid="limits-panel-toggle" onClick={() => setCollapsed(c => !c)}
+          type="button" data-testid="limits-panel-toggle" onClick={() => setCollapsed(!collapsed)}
           aria-expanded={!collapsed} aria-label={collapsed ? 'Show usage limits' : 'Hide usage limits'}
           className="ml-auto" style={{ color: COLORS.textMuted, fontSize: 11, lineHeight: 1 }}
         >
@@ -204,7 +211,12 @@ export function LimitsPanel({ model }: { model: LimitsPanelModel }) {
 }
 
 /** Mounted once near the root: reads every session's ledger, the config and the observed readings. */
-export function LimitsPanelHost({ sessionIds, eventsOf }: { sessionIds: readonly string[]; eventsOf: (id: string) => readonly LedgerEvent[] }) {
+export function LimitsPanelHost({ sessionIds, eventsOf, collapsed, onCollapsedChange }: {
+  sessionIds: readonly string[]
+  eventsOf: (id: string) => readonly LedgerEvent[]
+  collapsed?: boolean
+  onCollapsedChange?: (collapsed: boolean) => void
+}) {
   const model = useLimitsPanelModel(sessionIds, eventsOf)
-  return <LimitsPanel model={model} />
+  return <LimitsPanel model={model} collapsed={collapsed} onCollapsedChange={onCollapsedChange} />
 }

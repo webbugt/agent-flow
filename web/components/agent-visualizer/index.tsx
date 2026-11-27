@@ -51,6 +51,8 @@ import { useCostsConfig } from "@/hooks/use-costs-config"
 import { useLimitsFeed } from "@/hooks/use-limits"
 import { useAudioEffects } from "@/hooks/use-audio-effects"
 import { useViewportWidth } from "@/hooks/use-viewport-width"
+import { useAppStatePersistence } from "@/hooks/use-app-state"
+import type { AppState } from "@/lib/fleet/app-state"
 import { detailInset } from "@/lib/session-detail"
 import { FleetReplay } from "@/hooks/simulation/fleet-scene"
 
@@ -116,6 +118,8 @@ export function AgentVisualizer() {
   const [showTranscript, setShowTranscript] = useState(false)
   // Session detail: the whole conversation + tool calls of ONE Hermes session (agent node)
   const [showSessionDetail, setShowSessionDetail] = useState(false)
+  // LIMITS panel fold state: folded by default; kept with the rest of the app state below.
+  const [limitsCollapsed, setLimitsCollapsed] = useState(true)
   const [detailAgentId, setDetailAgentId] = useState<string | null>(null)
   // Set when the detail was opened from the Fleet: it then reads that profile's fleet replay
   // (finished and idle nodes keep their history there), not the single-view simulation.
@@ -123,6 +127,24 @@ export function AgentVisualizer() {
   const fleetReplayRef = useRef<FleetReplay | null>(null)
   if (!fleetReplayRef.current) fleetReplayRef.current = new FleetReplay()
   const viewportWidth = useViewportWidth(1280)
+
+  // The latest app state (open tab, mode, panels, LIMITS fold) is kept in localStorage and restored after mount,
+  // so the server and the first client frame render the same. Screensaver mode, the options, the fleet timeline
+  // visibility, the activity window and the fleet selection have their own keys. The open tab is restored by the
+  // session bridge when the session list arrives; the session detail panel is not restored (it needs a node id).
+  useAppStatePersistence(
+    { showFleet, showTimeline, showStats, showHexGrid, showCostOverlay, showFileAttention, showTranscript, limitsCollapsed, selectedSessionId: bridge.selectedSessionId },
+    useCallback((s: AppState) => {
+      setShowFleet(s.showFleet)
+      setShowTimeline(s.showTimeline)
+      setShowStats(s.showStats)
+      setShowHexGrid(s.showHexGrid)
+      setShowCostOverlay(s.showCostOverlay)
+      setShowFileAttention(s.showFileAttention)
+      setShowTranscript(s.showTranscript)
+      setLimitsCollapsed(s.limitsCollapsed)
+    }, []),
+  )
 
   // Fleet view: agent instances grouped by identity + Kanban/Supermemory lanes.
   // Selection only hides things from the views; it never stops a session.
@@ -726,7 +748,7 @@ export function AgentVisualizer() {
       {!sv && <CostsConfigBanner status={costsStatus} />}
 
       {/* LIMITS panel: observed 5h / weekly, estimates with tags, and the Fable estimate when Fable was used this week */}
-      {!sv && <LimitsPanelHost sessionIds={limitSessionIds} eventsOf={getSessionEvents} />}
+      {!sv && <LimitsPanelHost sessionIds={limitSessionIds} eventsOf={getSessionEvents} collapsed={limitsCollapsed} onCollapsedChange={setLimitsCollapsed} />}
 
       {/* Options panel: linger/fade/show per resource kind, sound, timeline, cost unit, hidden fleet agents (browser only, no server config) */}
       {showOptions && <OptionsPanel selection={fleetSelection} onClose={() => setShowOptions(false)} />}
