@@ -135,3 +135,29 @@ test('anchor layout is deterministic: the same input gives the same map', () => 
   const b = build('anchor').scene.state.agents
   assert.deepEqual([...a].map(([id, v]) => [id, v.x, v.y]), [...b].map(([id, v]) => [id, v.x, v.y]))
 })
+
+test('anchor layout (R6): a sub-agent is related to its parent node, so hovering one does not dim the other', () => {
+  const sessions = [session('taxis')]
+  const events: Record<string, SimulationEvent[]> = {
+    'hermes-taxis': [
+      ...profileEvents('taxis', 'taxis · Plan'),
+      { time: 2, type: 'agent_spawn', payload: { name: 'explore', parent: 'taxis · Plan', task: 'look around' } },
+    ],
+  }
+  const instances = instancesFromSessionEvents(sessions, id => events[id] ?? [])
+  const graph = buildFleetGraph({
+    instances, selection: all, now: NOW, options: defaultOptions(),
+    kanban: [board('alpha', 'taxis')], supermemory: [],
+  })
+  const replay = new FleetReplay()
+  const { state } = buildFleetScene({
+    sessions, stateOf: id => replay.advance(id, events[id] ?? []), instances, selection: all, graph, layout: 'anchor', now: NOW,
+  })
+  const children = [...state.agents.values()].filter(a => !a.resourceKind && a.parentId && state.agents.has(a.parentId))
+  assert.ok(children.length > 0, "the scene has a sub-agent node with a parent node")
+  for (const child of children) {
+    assert.ok(state.relations!.get(child.id)!.has(child.parentId!), 'child -> parent')
+    assert.ok(state.relations!.get(child.parentId!)!.has(child.id), 'parent -> child')
+    assert.equal(hoverAlpha(child.parentId!, child.id, state.relations!.get(child.id)), 1)
+  }
+})

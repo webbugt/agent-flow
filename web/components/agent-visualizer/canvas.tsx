@@ -9,6 +9,7 @@ import { cloudGeometries } from '@/lib/fleet/fleet-cloud-geometry'
 import { fleetNow } from '@/lib/fleet/fleet-clock'
 import { animatedView, ghostIdsOf } from '@/hooks/simulation/fleet-presence-scene'
 import { LABEL_MIN_PX } from '@/lib/fleet/fleet-labels'
+import { dimToolCalls, edgeHoverAlpha, hoverDimmer } from '@/lib/fleet/anchor-mode'
 import { BloomRenderer } from './bloom-renderer'
 import { createDepthParticles, updateDepthParticles, drawBackground } from './background-layer'
 import {
@@ -337,9 +338,12 @@ export function AgentCanvas({
       const wallNow = Date.now()
       if (cloudGeoms && vClouds) drawClouds(ctx, vClouds, cloudGeoms, timeRef.current, fade)
       drawDiscoveryConnections(ctx, discoveries, vAgents)
-      drawEdges(ctx, vEdges, vAgents, vTools, activeEdgeIds, timeRef.current)
+      // Resource-anchor mode, hover: tool-call cards and tree edges follow the nodes they belong to (R6: everything else at 80%).
+      const dimOf = hoverDimmer(fleet.relations, hoveredAgentId)
+      drawEdges(ctx, vEdges, vAgents, vTools, activeEdgeIds, timeRef.current,
+        dimOf ? e => edgeHoverAlpha(e, id => vTools.get(id)?.agentId, dimOf) : undefined)
       if (cloudGeoms) drawFleetLinks(ctx, vEdges, vAgents, cloudGeoms, wallNow, hoveredAgentId, !!fleet.relations)
-      drawToolCalls(ctx, vTools, timeRef.current, selectedToolCallId, cloudGeoms ? LABEL_MIN_PX - 2 : 0, screensaver)
+      drawToolCalls(ctx, dimToolCalls(vTools, dimOf) as typeof vTools, timeRef.current, selectedToolCallId, cloudGeoms ? LABEL_MIN_PX - 2 : 0, screensaver)
       drawDiscoveries(ctx, discoveries, vAgents, selectedDiscoveryId)
       drawAgents(ctx, vAgents, selectedAgentId, hoveredAgentId, showStats, timeRef.current, !cloudGeoms, wallNow, fleet.relations)
       if (cloudGeoms && vClouds) drawFleetLabels(ctx, vClouds, cloudGeoms, vAgents, selectedAgentId, hoveredAgentId, !screensaver, wallNow, fade)

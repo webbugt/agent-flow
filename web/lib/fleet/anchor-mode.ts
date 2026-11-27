@@ -64,6 +64,37 @@ export function hoverAlpha(id: string, hoveredId: string | null | undefined, rel
   return related?.has(id) ? 1 : ANCHOR_DIM_ALPHA
 }
 
+/**
+ * The per-node dim factor of a frame: `null` when nothing is dimmed (mode off, or nothing hovered), else a function from
+ * a node id to {@link hoverAlpha}. Tool-call satellites and tree edges borrow it from the nodes they belong to.
+ */
+export function hoverDimmer(
+  relations: ReadonlyMap<string, ReadonlySet<string>> | undefined,
+  hoveredId: string | null | undefined,
+): ((id: string) => number) | null {
+  if (!relations || !hoveredId) return null
+  const related = relations.get(hoveredId)
+  return id => hoverAlpha(id, hoveredId, related)
+}
+
+/** Tool-call cards of a dimmed frame: a card takes the dim factor of its agent. Same map when nothing is dimmed. */
+export function dimToolCalls<T extends { agentId: string; opacity: number }>(
+  tools: ReadonlyMap<string, T>, dimOf: ((id: string) => number) | null,
+): ReadonlyMap<string, T> {
+  if (!dimOf) return tools
+  const out = new Map<string, T>()
+  for (const [id, t] of tools) out.set(id, { ...t, opacity: t.opacity * dimOf(t.agentId) })
+  return out
+}
+
+/** A tree or tool edge of a dimmed frame: full while either end is the hovered node or related to it. `to` may be a tool-call id. */
+export function edgeHoverAlpha(
+  edge: { from: string; to: string }, agentOfTool: (toolId: string) => string | undefined, dimOf: ((id: string) => number) | null,
+): number {
+  if (!dimOf) return 1
+  return Math.max(dimOf(edge.from), dimOf(agentOfTool(edge.to) ?? edge.to))
+}
+
 // ─── Weights ────────────────────────────────────────────────────────────────
 
 /** One interaction summary: `unit` (a session node, or a profile when the node is not known) used `resource` `weight` times. */

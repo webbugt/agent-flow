@@ -568,6 +568,12 @@ function buildAnchorScene(
   let currentTime = 0
   for (const s of sessions) currentTime = Math.max(currentTime, input.stateOf(s.id).currentTime)
   const relations = buildRelations({ uses, nodesOf: new Map(), weights })
+  // A sub-agent hangs on its parent node (as in the single view): hovering either keeps the other at full opacity.
+  for (const a of agents.values()) {
+    if (a.resourceKind || !a.parentId || !agents.has(a.parentId)) continue
+    ;(relations.get(a.id) ?? relations.set(a.id, new Set()).get(a.id) as Set<string>).add(a.parentId)
+    ;(relations.get(a.parentId) ?? relations.set(a.parentId, new Set()).get(a.parentId) as Set<string>).add(a.id)
+  }
   // Resources without any use still get an (empty) entry, so a hover on them finds nothing related instead of nothing known.
   for (const r of resources) if (!relations.has(r.id)) relations.set(r.id, new Set())
   const state = createEmptyState({

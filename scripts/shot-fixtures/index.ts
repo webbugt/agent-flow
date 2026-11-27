@@ -355,6 +355,44 @@ export const FIXTURE_IDS = [
 export interface Scenario {
   claude: string[]
   hermes: string[]
+  /** Kanban boards and Supermemory namespaces seeded for the fleet map (resource-anchor shots). */
+  resources?: ResourceSeed
+}
+
+/**
+ * Seeded resources. Invented names only. Events lie `agoSec` seconds before the run starts, so they sit inside the
+ * fleet's default "Active last 5 min" window.
+ */
+export interface ResourceSeed {
+  boards: Array<{ slug: string; name: string; events: Array<{ assignee: string; kind: string; agoSec: number; title: string }> }>
+  memories: Array<{ tag: string; calls: Array<{ profile: string; tool: 'supermemory_store' | 'supermemory_search' | 'supermemory_forget'; agoSec: number }> }>
+}
+
+/**
+ * Scenario `fleet-anchor`:
+ *   board `orbit` + memory `orbit`  one project (explicit board<->memory link): used by sub-demo and copilot-demo
+ *   board `media`                   used by local-demo only
+ *   memory `scratch`                used by unknown-demo only (unrelated to the project above)
+ */
+export const ANCHOR_RESOURCES: ResourceSeed = {
+  boards: [
+    { slug: 'orbit', name: 'orbit', events: [
+      { assignee: 'sub-demo', kind: 'claimed', agoSec: 8, title: 'Draft the orbit plan' },
+      { assignee: 'copilot-demo', kind: 'completed', agoSec: 15, title: 'Audit the orbit repo' },
+    ] },
+    { slug: 'media', name: 'media', events: [
+      { assignee: 'local-demo', kind: 'claimed', agoSec: 10, title: 'Transcode the demo clip' },
+    ] },
+  ],
+  memories: [
+    { tag: 'orbit', calls: [
+      { profile: 'sub-demo', tool: 'supermemory_search', agoSec: 6 },
+      { profile: 'copilot-demo', tool: 'supermemory_store', agoSec: 12 },
+    ] },
+    { tag: 'scratch', calls: [
+      { profile: 'unknown-demo', tool: 'supermemory_search', agoSec: 9 },
+    ] },
+  ],
 }
 
 /** `costs` has one session of each kind the cost work needs (task H0). */
@@ -365,6 +403,8 @@ export const SCENARIOS: Record<string, Scenario> = {
   hermes: { claude: [], hermes: HERMES_SESSIONS.map(s => s.id) },
   // Fleet map: 4 profiles with 8 / 5 / 3 / 1 session nodes (cloud grouping shots).
   'fleet-multi': { claude: [], hermes: FLEET_MULTI_SESSIONS.map(s => s.id) },
+  // Resource-anchor mode: four Hermes profiles plus two Kanban boards and two Supermemory namespaces in use (ANCHOR_RESOURCES).
+  'fleet-anchor': { claude: [], hermes: ['F-B', 'F-E', 'F-F', 'F-G'], resources: ANCHOR_RESOURCES },
 }
 
 export function resolveScenario(name: string): Scenario {
@@ -518,6 +558,7 @@ export function materializeFixtures(opts: {
   if (opts.limits && !(opts.limits in LIMITS_FIXTURES)) throw new Error(`unknown limits fixture ${opts.limits}`)
   if (opts.config && !(opts.config in CONFIG_FIXTURES)) throw new Error(`unknown config fixture ${opts.config}`)
   const { claude, hermes } = loadScenario(opts.scenario)
+  const resources = resolveScenario(opts.scenario).resources
   fs.mkdirSync(opts.workspace, { recursive: true })
   const projectDir = path.join(opts.home, '.claude', 'projects', encodeProjectDir(opts.workspace))
   fs.mkdirSync(projectDir, { recursive: true })
@@ -558,6 +599,45 @@ export function materializeFixtures(opts: {
         ins.run(f.sid, 'user', f.user, (now - 50_000) / 1000)
         ins.run(f.sid, 'assistant', f.assistant, (now - 40_000) / 1000)
       }
+      // Supermemory calls of this profile (resource seeds): assistant messages with a tool_calls array, as Hermes writes them.
+      const insTool = db.prepare('insert into messages (session_id, role, content, tool_calls, timestamp) values (?, ?, ?, ?, ?)')
+      let callNo = 0
+      for (const mem of resources?.memories ?? []) {
+        for (const c of mem.calls.filter(x => x.profile === profile)) {
+          const args = JSON.stringify({ container_tag: mem.tag, ...(c.tool === 'supermemory_search' ? { query: 'demo' } : { content: 'demo' }) })
+          const tc = JSON.stringify([{ id: `call_${profile}_${callNo++}`, type: 'function', function: { name: c.tool, arguments: args } }])
+          insTool.run(fixtures[0].sid, 'assistant', '', tc, (now - c.agoSec * 1000) / 1000)
+        }
+      }
+      // The same profile's Kanban calls as shell commands (`hermes kanban --board <slug> list`): the single view reads boards from the session's own tool calls.
+      for (const b of resources?.boards ?? []) {
+        for (const e of b.events.filter(x => x.assignee === profile)) {
+          const args = JSON.stringify({ command: `hermes kanban --board ${b.slug} list` })
+          const tc = JSON.stringify([{ id: `call_${profile}_${callNo++}`, type: 'function', function: { name: 'terminal', arguments: args } }])
+          insTool.run(fixtures[0].sid, 'assistant', '', tc, (now - e.agoSec * 1000) / 1000)
+        }
+      }
+    } finally {
+      db.close()
+    }
+  }
+
+  // Kanban boards: <hermesRoot>/kanban/boards/<slug>/{board.json,kanban.db} with the columns the read-only source uses.
+  for (const b of resources?.boards ?? []) {
+    const dir = path.join(hermesRoot, 'kanban', 'boards', b.slug)
+    fs.mkdirSync(dir, { recursive: true })
+    fs.writeFileSync(path.join(dir, 'board.json'), JSON.stringify({ name: b.name, description: '', archived: false }))
+    const db = openWritable(path.join(dir, 'kanban.db'))
+    try {
+      db.exec('create table tasks (id text primary key, title text not null, body text, assignee text, status text not null, created_at integer not null, result text)')
+      db.exec('create table task_events (id integer primary key autoincrement, task_id text not null, run_id integer, kind text not null, payload text, created_at integer not null)')
+      b.events.forEach((e, i) => {
+        const id = `t_${b.slug}${i + 1}`
+        db.prepare('insert into tasks (id, title, body, assignee, status, created_at, result) values (?, ?, ?, ?, ?, ?, ?)')
+          .run(id, e.title, null, e.assignee, e.kind === 'completed' ? 'done' : 'running', Math.floor((now - 600_000) / 1000), null)
+        db.prepare('insert into task_events (task_id, run_id, kind, payload, created_at) values (?, ?, ?, ?, ?)')
+          .run(id, i + 1, e.kind, null, Math.floor((now - e.agoSec * 1000) / 1000))
+      })
     } finally {
       db.close()
     }

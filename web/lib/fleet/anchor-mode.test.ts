@@ -2,6 +2,7 @@ import { test } from 'node:test'
 import { strict as assert } from 'node:assert'
 import {
   ANCHOR_DIM_ALPHA, ANCHOR_SPACING, CURRENT_USE_MS, EXPLICIT_LINK_WEIGHT, buildRelations, coUseWeights, currentResource,
+  dimToolCalls, edgeHoverAlpha, hoverDimmer,
   explicitLinkPairs, hoverAlpha, layoutWeights, pairKey, paletteIndex, placeAnchorSessions, placeAnchors, profileColor,
   proximityWeights, weightOf,
 } from './anchor-mode'
@@ -213,4 +214,37 @@ test('buildRelations: a resource relates to its sessions and to co-used / explic
   // the hover rule on top of it: hovering kanban:a keeps s1 and memory:a at 100%, drops bash:git and s2 to 80%
   const related = rel.get('kanban:a')
   assert.deepEqual(['s1', 'memory:a', 'bash:git', 's2'].map(id => hoverAlpha(id, 'kanban:a', related)), [1, 1, 0.8, 0.8])
+})
+
+// ─── hover dim of tool-call cards and tree edges (R6: everything else at 80%) ──
+
+test('hoverDimmer: null while nothing is hovered or there are no relations; else hoverAlpha of the hovered node', () => {
+  const relations = new Map([['kanban:a', new Set(['s1'])], ['s1', new Set(['kanban:a'])]])
+  assert.equal(hoverDimmer(undefined, 'kanban:a'), null, 'mode off: no relations')
+  assert.equal(hoverDimmer(relations, null), null, 'nothing hovered')
+  const dim = hoverDimmer(relations, 'kanban:a')!
+  assert.deepEqual(['kanban:a', 's1', 's2'].map(dim), [1, 1, ANCHOR_DIM_ALPHA])
+})
+
+test('dimToolCalls: a card takes the factor of its agent; the input map is not changed; the same map when nothing is dimmed', () => {
+  const tools = new Map([
+    ['t1', { agentId: 's1', opacity: 1 }],
+    ['t2', { agentId: 's2', opacity: 0.5 }],
+  ])
+  assert.equal(dimToolCalls(tools, null), tools)
+  const dim = hoverDimmer(new Map([['kanban:a', new Set(['s1'])]]), 'kanban:a')!
+  const out = dimToolCalls(tools, dim)
+  assert.equal(out.get('t1')!.opacity, 1, 'card of a related session stays at 100%')
+  assert.equal(out.get('t2')!.opacity, 0.5 * ANCHOR_DIM_ALPHA, 'card of an unrelated session: 80% of its own opacity')
+  assert.equal(tools.get('t2')!.opacity, 0.5, 'input untouched')
+})
+
+test('edgeHoverAlpha: full while either end is hovered or related; 80% for an edge between unrelated nodes; tool edges use the tool\'s agent', () => {
+  const dim = hoverDimmer(new Map([['s1', new Set(['s1b'])], ['s1b', new Set(['s1'])]]), 's1')!
+  const agentOfTool = (id: string) => (id === 'tool-1' ? 's1b' : id === 'tool-9' ? 's9' : undefined)
+  assert.equal(edgeHoverAlpha({ from: 's1', to: 's1b' }, agentOfTool, dim), 1, 'parent edge of the hovered node')
+  assert.equal(edgeHoverAlpha({ from: 's1b', to: 'tool-1' }, agentOfTool, dim), 1, 'tool edge of a related node')
+  assert.equal(edgeHoverAlpha({ from: 's9', to: 'tool-9' }, agentOfTool, dim), ANCHOR_DIM_ALPHA, 'tool edge of an unrelated node')
+  assert.equal(edgeHoverAlpha({ from: 's8', to: 's9' }, agentOfTool, dim), ANCHOR_DIM_ALPHA, 'parent edge between unrelated nodes')
+  assert.equal(edgeHoverAlpha({ from: 's8', to: 's9' }, agentOfTool, null), 1, 'nothing dimmed')
 })

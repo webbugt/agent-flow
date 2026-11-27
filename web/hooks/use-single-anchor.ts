@@ -40,7 +40,16 @@ export function useSingleAnchor(opts: UseSingleAnchorOptions) {
   const options = useOptions()
   const trackerRef = useRef<SingleSessionTracker | null>(null)
   if (!trackerRef.current) trackerRef.current = new SingleSessionTracker()
-  const frameRef = useRef<SimulationState>(sourceRef.current)
+  // The canvas keeps the ref it was first given, so this object must stay the same across enabled/disabled. It is a
+  // live view: off, a read returns the simulation's own current frame (never a copy that can be a frame old); on, the
+  // last frame composed by the draw loop below.
+  const enabledRef = useRef(enabled)
+  enabledRef.current = enabled
+  const composedRef = useRef<SimulationState>(sourceRef.current)
+  const frameRef = useMemo(() => ({
+    get current(): SimulationState { return enabledRef.current ? composedRef.current : sourceRef.current },
+    set current(v: SimulationState) { composedRef.current = v },
+  }), [sourceRef])
   const [now, setNow] = useState(() => Date.now())
   const drawnRootRef = useRef<{ x: number; y: number } | null>(null)
   const offsetRef = useRef({ x: 0, y: 0 })
@@ -83,15 +92,13 @@ export function useSingleAnchor(opts: UseSingleAnchorOptions) {
   const layoutRef = useRef<ReturnType<typeof layoutSingleAnchor> | null>(null)
   const layoutSigRef = useRef('')
   useEffect(() => {
-    if (!enabled) drawnRootRef.current = null
-    if (!enabled) lastRootRef.current = null
+    // Off: no loop at all; reads of frameRef go straight to the simulation.
+    if (!enabled) { drawnRootRef.current = null; lastRootRef.current = null; return }
     let raf = 0
     let last = 0
     const frame = (ts: number) => {
       raf = requestAnimationFrame(frame)
       const source = sourceRef.current
-      // Off: the frame IS the simulation (the canvas keeps the ref it was first given, so this ref is always the one passed).
-      if (!enabled) { frameRef.current = source; return }
       const root = rootOf(source.agents)
       if (!root) { frameRef.current = source; return }
       const sig = `${blocks.map(b => b.id).join('|')}#${events.length}#${now}`

@@ -105,6 +105,8 @@ export function drawEdges(
   toolCalls: Map<string, ToolCallNode>,
   activeEdgeIds: Set<string>,
   time: number,
+  /** Resource-anchor mode, hover: factor (0..1) of one edge; 1 when absent. */
+  edgeAlpha?: (edge: Edge) => number,
 ) {
   for (const edge of edges) {
     // Cloud-to-resource links of the Fleet map are drawn by drawFleetLinks (linger and fade).
@@ -120,7 +122,8 @@ export function drawEdges(
     const hasActiveParticles = activeEdgeIds.has(edge.id)
     const isResource = edge.type === 'resource'
     // Resource links (fleet map) carry no particles: a link that saw recent use is drawn like an active beam.
-    const baseAlpha = hasActiveParticles || (isResource && edge.active) ? BEAM.activeAlpha : isResource ? BEAM.idleAlpha * 2 : BEAM.idleAlpha
+    const dim = edgeAlpha ? edgeAlpha(edge) : 1
+    const baseAlpha = (hasActiveParticles || (isResource && edge.active) ? BEAM.activeAlpha : isResource ? BEAM.idleAlpha * 2 : BEAM.idleAlpha) * dim
     const pulsing = hasActiveParticles ? Math.sin(time * ANIM.pulseSpeed) * 0.1 + 0.9 : 1
 
     const cp = computeControlPoints(fromX, fromY, toX, toY)
@@ -139,7 +142,7 @@ export function drawEdges(
     // Active glow beam (wider, dimmer)
     if (hasActiveParticles) {
       drawTaperedBezier(ctx, fromX, fromY, cp1x, cp1y, cp2x, cp2y, toX, toY,
-        bw.startW + BEAM.glowExtra.startW, bw.endW + BEAM.glowExtra.endW, beamColor, BEAM.glowExtra.alpha)
+        bw.startW + BEAM.glowExtra.startW, bw.endW + BEAM.glowExtra.endW, beamColor, BEAM.glowExtra.alpha * dim)
     }
 
     ctx.restore()
