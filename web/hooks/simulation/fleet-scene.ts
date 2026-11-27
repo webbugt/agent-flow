@@ -40,7 +40,7 @@ import {
 } from '@/lib/fleet/fleet-model'
 import { cloudIdOf, type FleetGraph } from '@/lib/fleet/fleet-graph'
 import { HALO_PAD, type CloudView } from '@/lib/fleet/fleet-cloud-geometry'
-import { placeBlob, placeResources, type BlobUnit } from '@/lib/fleet/fleet-placement'
+import { placeBlob, placeResources, type BlobUnit, type PlacementResource } from '@/lib/fleet/fleet-placement'
 import type { FleetPulse } from '@/lib/fleet/fleet-pulses'
 import { createEmptyState, type SimulationState } from './types'
 import { processEvent, type ProcessEventContext } from './process-event'
@@ -151,6 +151,8 @@ export interface FleetScene {
   sessionOfAgent: ReadonlyMap<string, string>
   /** Cloud centres by cloud id, world coordinates (the profile centroid), with the profile name. */
   clusters: ReadonlyMap<string, { x: number; y: number; r: number; identity: string }>
+  /** Where each resource node belongs (weighted by its interactions). The scene draws it there; the frame loop glides to it. */
+  resourceTargets: ReadonlyMap<string, { x: number; y: number }>
 }
 
 /** A session node with its satellites: the unit a blob is made of. */
@@ -160,7 +162,9 @@ interface Unit {
   toolCalls: ToolCallNode[]
   /** Start of the node, epoch ms, for a stable order inside the cloud. */
   start: number
-  /** Distance from the node to the farthest corner of its satellites and bubbles. */
+  /** Distance from the node to the farthest corner of its satellites and bubbles (what the halo must cover). */
+  reach: number
+  /** What the blob packs on: {@link AGENT_PAD} plus {@link SATELLITE_PACK_SHARE} of the reach beyond it. */
   radius: number
 }
 
@@ -173,6 +177,13 @@ interface Cluster {
 }
 
 const AGENT_PAD = 70
+/**
+ * Share of a node's satellite reach (the part beyond {@link AGENT_PAD}) that the blob packing counts, 0..1.
+ * Tool cards and bubbles are small on the fleet map and only show in full when zoomed in, so neighbours
+ * pack on the node plus this share of the reach and their cards may touch when zoomed in; the halo still
+ * covers the full reach. 1 = the old behaviour (nodes never closer than twice the full reach).
+ */
+export const SATELLITE_PACK_SHARE = 0.35
 /** Reach of a node's message bubbles for the blob packing, world units. */
 const BUBBLE_REACH = 130
 
@@ -207,7 +218,8 @@ function buildCluster(
   return { session: s, identity: identityFromLabel(s.label), agents, toolCalls, edges }
 }
 
-function unitRadius(agent: Agent, toolCalls: readonly ToolCallNode[]): number {
+/** Distance from the node to the farthest corner of its satellites (and a fixed share for bubbles). */
+export function unitReach(agent: Agent, toolCalls: readonly ToolCallNode[]): number {
   let r = AGENT_PAD
   // Message bubbles hang off the node to the right, but only show when the camera is zoomed in: they
   // get a fixed share of the blob (not a share per bubble), or one chatty session would blow up its cloud.
@@ -216,6 +228,11 @@ function unitRadius(agent: Agent, toolCalls: readonly ToolCallNode[]): number {
     r = Math.max(r, Math.hypot(tc.x - agent.x, tc.y - agent.y) + Math.hypot(TOOL_CARD_W, TOOL_CARD_H) / 2)
   }
   return r
+}
+
+/** The radius the blob packs a node on: the node itself plus a share of the reach beyond it. */
+export function packRadius(reach: number): number {
+  return AGENT_PAD + SATELLITE_PACK_SHARE * Math.max(0, reach - AGENT_PAD)
 }
 
 function resourceAgent(node: FleetGraph['nodes'][number], x: number, y: number): Agent {
@@ -245,9 +262,10 @@ export function buildFleetScene(input: FleetSceneInput): FleetScene {
     group.clusters.push(c)
     for (const agent of c.agents) {
       const toolCalls = c.toolCalls.filter(tc => tc.agentId === agent.id)
+      const reach = unitReach(agent, toolCalls)
       group.units.push({
         sid: s.id, agent, toolCalls, start: startOf.get(nodeInstanceId(s.id, agent.id)) ?? 0,
-        radius: unitRadius(agent, toolCalls),
+        reach, radius: packRadius(reach),
       })
     }
   }
@@ -258,7 +276,13 @@ export function buildFleetScene(input: FleetSceneInput): FleetScene {
     group.units.sort((a, b) => a.start - b.start || nodeInstanceId(a.sid, a.agent.id).localeCompare(nodeInstanceId(b.sid, b.agent.id)))
     const blobUnits: BlobUnit[] = group.units.map(u => ({ id: nodeInstanceId(u.sid, u.agent.id), radius: u.radius }))
     const blob = placeBlob(blobUnits, identity)
-    return { identity, group, blob, halo: blob.radius + HALO_PAD }
+    // The halo covers every node with its full reach (not just the packing radius), as cloudGeometry does.
+    let cover = 0
+    for (const u of group.units) {
+      const at = blob.positions.get(nodeInstanceId(u.sid, u.agent.id))!
+      cover = Math.max(cover, Math.hypot(at.x, at.y) + u.reach)
+    }
+    return { identity, group, blob, halo: cover + HALO_PAD }
   })
 
   // 2. Grid of clouds, cells sized to their own halo (plus the caption), so one big profile does not
@@ -287,6 +311,8 @@ export function buildFleetScene(input: FleetSceneInput): FleetScene {
   const sessionOfAgent = new Map<string, string>()
   const centers = new Map<string, { x: number; y: number; r: number; identity: string }>()
   const cloudViews: CloudView[] = []
+  /** Session nodes of each cloud with their laid-out positions: what the resources' session weights point at. */
+  const cloudNodes = new Map<string, Array<{ id: string; x: number; y: number }>>()
   const graphCloud = new Map(graph.clouds.map(c => [c.id, c]))
   const ns = (sid: string, id: string) => sceneId(sid, id)
 
@@ -297,6 +323,8 @@ export function buildFleetScene(input: FleetSceneInput): FleetScene {
     const cloudId = cloudIdOf(identity)
     centers.set(cloudId, { x: cx, y: cy, r: halo, identity })
     const members: CloudView['members'] = []
+    const nodePositions: Array<{ id: string; x: number; y: number }> = []
+    cloudNodes.set(cloudId, nodePositions)
     for (const u of group.units) {
       const id = ns(u.sid, u.agent.id)
       const at = blob.positions.get(id)!
@@ -311,11 +339,12 @@ export function buildFleetScene(input: FleetSceneInput): FleetScene {
         x, y, sessionId: u.sid, pinned: true,
       })
       sessionOfAgent.set(id, u.sid)
+      nodePositions.push({ id, x, y })
       for (const tc of u.toolCalls) {
         const tid = ns(u.sid, tc.id)
         toolCalls.set(tid, { ...tc, id: tid, agentId: id, x: tc.x + dx, y: tc.y + dy })
       }
-      members.push({ id, pad: u.radius })
+      members.push({ id, pad: u.reach })
     }
     // Edges inside a session node (to its satellites, or sub-agent spawns) keep their shape; none join two sessions.
     for (const c of group.clusters) {
@@ -328,19 +357,23 @@ export function buildFleetScene(input: FleetSceneInput): FleetScene {
   // 3. Resources near the weighted centroid of the clouds they link to; unlinked ones on the rim.
   // Placed from the layout, before drags, so a dragged node does not move the map around it.
   const resources = graph.nodes.filter(nd => nd.kind === 'kanban' || nd.kind === 'supermemory' || nd.kind === 'bash' || nd.kind === 'subsystem')
-  const linksOf = new Map<string, Array<{ cloudId: string; weight: number }>>()
+  // A link pulls the resource towards the session nodes that used it (not the cloud as a whole).
+  const linksOf = new Map<string, PlacementResource['links'][number][]>()
   for (const e of graph.edges) {
     if (!centers.has(e.from)) continue
     const list = linksOf.get(e.to) ?? []
-    list.push({ cloudId: e.from, weight: e.weight })
+    list.push({ cloudId: e.from, weight: e.weight, sessions: e.sessions.map(s => ({ id: s.sessionId, weight: s.weight })) })
     linksOf.set(e.to, list)
   }
   const spots = placeResources(
-    [...centers].map(([id, c]) => ({ id, x: c.x, y: c.y, r: c.r })),
+    [...centers].map(([id, c]) => ({ id, x: c.x, y: c.y, r: c.r, nodes: cloudNodes.get(id) })),
     resources.map(r => ({ id: r.id, links: linksOf.get(r.id) ?? [] })),
   )
+  /** Where each resource belongs (also where a dragged one was dropped): the scene draws them there, the hook glides to it. */
+  const resourceTargets = new Map<string, { x: number; y: number }>()
   for (const node of resources) {
-    const p = spots.get(node.id)!
+    const p = input.moved?.get(node.id) ?? spots.get(node.id)!
+    resourceTargets.set(node.id, { x: p.x, y: p.y })
     agents.set(node.id, resourceAgent(node, p.x, p.y))
   }
   for (const e of graph.edges) {
@@ -368,7 +401,7 @@ export function buildFleetScene(input: FleetSceneInput): FleetScene {
     agents, toolCalls, edges, keepFinished: true, isPlaying: false, currentTime, maxTimeReached: currentTime,
     clouds: cloudViews, pulses: input.pulses ? [...input.pulses] : [],
   })
-  return { state, sessionOfAgent, clusters: centers }
+  return { state, sessionOfAgent, clusters: centers, resourceTargets }
 }
 
 /**

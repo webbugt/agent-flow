@@ -477,6 +477,12 @@ export function drawAgents(
       if (life <= 0) continue
       ctx.save()
       ctx.globalAlpha = agent.opacity * life
+      // Entry/exit: a resource node grows from and shrinks into its centre.
+      if (agent.scale !== 1) {
+        ctx.translate(agent.x, agent.y)
+        ctx.scale(agent.scale, agent.scale)
+        ctx.translate(-agent.x, -agent.y)
+      }
       drawResourceNode(ctx, agent, id === hoveredAgentId, id === selectedAgentId, time, drawLabels)
       ctx.restore()
       continue

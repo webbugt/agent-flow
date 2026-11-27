@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import { strict as assert } from 'node:assert'
-import type { SimulationEvent } from '@/lib/agent-types'
+import { NODE, type SimulationEvent } from '@/lib/agent-types'
+import { cloudGeometry } from '@/lib/fleet/fleet-cloud-geometry'
 import { instancesFromSessionEvents, splitInstanceId, type FleetSelectionView, type SessionLike } from '@/lib/fleet/fleet-model'
 import { buildFleetGraph } from '@/lib/fleet/fleet-graph'
 import { defaultOptions } from '@/lib/fleet/options-registry'
@@ -8,7 +9,10 @@ import type { PublicKanbanBoardNode } from '@/lib/fleet/kanban-source'
 import type { SupermemoryNamespaceNode } from '@/lib/fleet/supermemory-source'
 import { anonymizeToolInput, createAnonymizePolicy, isAnonymized } from '@/lib/content-privacy'
 import { BLOB_GAP } from '@/lib/fleet/fleet-placement'
-import { buildFleetScene, CLOUD_GAP_X, CLOUD_GAP_Y, FleetReplay, openTargetOf } from './fleet-scene'
+import { newFleetPresenceTracker, withGhosts, ghostIdsOf } from './fleet-presence-scene'
+import { positionsOf, tweenedFrame } from './fleet-tween-scene'
+import { TWEEN_MS, retarget } from '@/lib/fleet/fleet-tween'
+import { buildFleetScene, CLOUD_GAP_X, CLOUD_GAP_Y, FleetReplay, openTargetOf, packRadius, unitReach, SATELLITE_PACK_SHARE } from './fleet-scene'
 import { buildSessionItems, pickDefaultAgentId } from '@/lib/session-detail'
 import { RESTING_TOOLS_PER_AGENT } from './animate'
 
@@ -353,10 +357,22 @@ test('fleet scene: sessions of a cloud sit at least BLOB_GAP apart (no overlap) 
       for (let j = i + 1; j < c.members.length; j++) {
         const a = scene.state.agents.get(c.members[i].id)!
         const b = scene.state.agents.get(c.members[j].id)!
-        const gap = Math.hypot(a.x - b.x, a.y - b.y) - c.members[i].pad - c.members[j].pad
-        assert.ok(gap >= BLOB_GAP - 1e-6, `${c.label}: nodes ${i}/${j} gap ${gap}`)
+        // The packing counts AGENT_PAD plus SATELLITE_PACK_SHARE of the reach (member.pad is the full reach).
+        const d = Math.hypot(a.x - b.x, a.y - b.y)
+        const gap = d - packRadius(c.members[i].pad) - packRadius(c.members[j].pad)
+        assert.ok(gap >= BLOB_GAP - 1e-6, `${c.label}: nodes ${i}/${j} packing gap ${gap}`)
+        // No overlap at normal zoom: the node discs themselves (and a margin) never touch.
+        assert.ok(d >= 2 * NODE.radiusMain + BLOB_GAP, `${c.label}: nodes ${i}/${j} overlap (${d})`)
       }
     }
+    // The halo (as the canvas computes it from the drawn positions) still covers every node with its whole reach.
+    const g = cloudGeometry(c, new Map(c.members.map(m => [m.id, scene.state.agents.get(m.id)!])))!
+    for (const m of c.members) {
+      const a = scene.state.agents.get(m.id)!
+      assert.ok(Math.hypot(a.x - g.x, a.y - g.y) + m.pad <= g.r + 1e-6, `${c.label}: halo covers ${m.id}`)
+    }
+    const stored = scene.clusters.get(c.id)!
+    assert.ok(Math.abs(stored.r - g.r) < 1e-6, `${c.label}: scene halo ${stored.r} = canvas halo ${g.r}`)
   }
   // Halos of different clouds never overlap.
   const cl = [...scene.clusters.values()]
@@ -375,6 +391,61 @@ test('fleet scene: sessions of a cloud sit at least BLOB_GAP apart (no overlap) 
   assert.ok(b.x - a.x - a.r - b.r >= CLOUD_GAP_X - 1e-6, `alpha-beta halo gap ${b.x - a.x - a.r - b.r}`)
 })
 
+test('fleet scene: packing radius = AGENT_PAD + SATELLITE_PACK_SHARE of the reach beyond it (pure, monotone, never above the reach)', () => {
+  assert.ok(SATELLITE_PACK_SHARE > 0 && SATELLITE_PACK_SHARE < 1, 'a share of the reach, not none and not all')
+  assert.equal(packRadius(70), 70, 'a node with no satellites packs on AGENT_PAD')
+  assert.equal(packRadius(10), 70, 'never below AGENT_PAD')
+  const full = 221.9
+  assert.ok(Math.abs(packRadius(full) - (70 + SATELLITE_PACK_SHARE * (full - 70))) < 1e-9)
+  for (const r of [70, 100, 130, 222, 400]) assert.ok(packRadius(r) <= r + 1e-9)
+  for (let r = 70; r < 400; r += 10) assert.ok(packRadius(r + 10) >= packRadius(r), 'monotone in the reach')
+})
+
+test('fleet scene: a node with one tool card packs on the reduced radius while the halo keeps the full reach', () => {
+  const { scene } = sceneFor({
+    sessions: [session('alpha')],
+    events: {
+      'hermes-alpha': [
+        { time: 0, type: 'agent_spawn', payload: { name: 'alpha', isMain: true, profile: 'alpha', group: 'alpha', task: 'alpha' } },
+        ...[0, 1, 2].flatMap(k => [
+          { time: 0, type: 'agent_spawn' as const, payload: { name: `alpha · S${k}`, parent: 'alpha', startedAt: T0 + k * 1000, task: 'x' } },
+          { time: 5, type: 'tool_call_start' as const, payload: { agent: `alpha · S${k}`, tool: 'Read', toolUseId: `u${k}`, args: 'a.ts', inputData: { path: 'a.ts' } } },
+          { time: 6, type: 'tool_call_end' as const, payload: { agent: `alpha · S${k}`, tool: 'Read', toolUseId: `u${k}`, result: 'ok' } },
+        ]),
+      ],
+    },
+  })
+  const cloud = scene.state.clouds![0]
+  assert.equal(cloud.members.length, 3)
+  const reach = cloud.members[0].pad
+  assert.ok(reach > 200 && reach < 240, `full reach of node + card ~222 (got ${reach})`)
+  // Neighbours sit closer than twice the full reach (the old packing), at the reduced packing radius + BLOB_GAP.
+  const ids = cloud.members.map(m => scene.state.agents.get(m.id)!)
+  const dists = [[0, 1], [0, 2], [1, 2]].map(([i, j]) => Math.hypot(ids[i].x - ids[j].x, ids[i].y - ids[j].y))
+  const min = Math.min(...dists)
+  assert.ok(min < 2 * reach - 100, `nodes at ${min}, old packing needed >= ${2 * reach}`)
+  assert.ok(Math.abs(min - (2 * packRadius(reach) + BLOB_GAP)) < 1e-6, `closest pair touches at the packing radius (${min})`)
+  // Zoomed in nothing is cut: every tool card still lies inside the halo.
+  const halo = scene.clusters.get(cloud.id)!
+  for (const t of scene.state.toolCalls.values()) assert.ok(Math.hypot(t.x - halo.x, t.y - halo.y) <= halo.r, 'card inside the halo')
+  // A tool card never lies on another node's disc at normal zoom.
+  for (const t of scene.state.toolCalls.values()) {
+    for (const a of ids) {
+      if (a.id === t.agentId) continue
+      const dx = Math.max(Math.abs(a.x - t.x) - 170 / 2, 0)
+      const dy = Math.max(Math.abs(a.y - t.y) - 36 / 2, 0)
+      assert.ok(Math.hypot(dx, dy) >= NODE.radiusSub, `card ${t.id} on node ${a.id}`)
+    }
+  }
+})
+
+test('fleet scene: unitReach is unchanged by the packing share (what the halo must cover)', () => {
+  const agent = { x: 0, y: 0, messageBubbles: [] } as unknown as Parameters<typeof unitReach>[0]
+  assert.equal(unitReach(agent, []), 70)
+  const tc = { x: 135, y: 0 } as unknown as Parameters<typeof unitReach>[1][number]
+  assert.ok(Math.abs(unitReach(agent, [tc]) - (135 + Math.hypot(170, 36) / 2)) < 1e-9)
+})
+
 test('fleet scene: pulses given to the scene reach the canvas state', () => {
   const pulses = [{ id: 'p', edgeId: 'e', kind: 'kanban' as const, color: '#fff', startedAt: NOW }]
   const f = fixture()
@@ -383,4 +454,145 @@ test('fleet scene: pulses given to the scene reach the canvas state', () => {
   const replay = new FleetReplay()
   const scene = buildFleetScene({ sessions: f.sessions, stateOf: id => replay.advance(id, f.events[id] ?? []), instances, selection: all, graph, pulses })
   assert.deepEqual(scene.state.pulses, pulses)
+})
+
+// ─── Weighted resource placement (by session node) ───────────────────────────
+
+/** Taxis with a handful of session nodes, a board that Taxis uses, and a scene built from the given links. */
+function weightedFixture(sessionsOf: (taxisNodes: string[]) => Array<{ sessionId: string; weight: number }>, moved?: Map<string, { x: number; y: number }>) {
+  const f = fixture()
+  for (let i = 0; i < 7; i++) f.events['hermes-taxis'].push({ time: 1, type: 'agent_spawn', payload: { name: `taxis · Job ${i}`, parent: 'taxis', startedAt: T0 + i * MIN, task: 'x' } })
+  const instances = instancesFromSessionEvents(f.sessions, id => f.events[id] ?? [])
+  const graph = buildFleetGraph({ instances, kanban: [board('agent-flow', 'taxis')], selection: all, now: NOW })
+  const taxisNodes = graph.clouds.find(c => c.id === 'cloud:taxis')!.sessionIds
+  const edge = graph.edges.find(e => e.to === 'kanban:agent-flow')!
+  edge.sessions = sessionsOf(taxisNodes)
+  const replay = new FleetReplay()
+  const scene = buildFleetScene({ sessions: f.sessions, stateOf: id => replay.advance(id, f.events[id] ?? []), instances, selection: all, graph, moved })
+  return { scene, taxisNodes }
+}
+
+test('fleet scene: a resource is placed towards the session nodes that use it, so it moves when the weights move', () => {
+  const probe = weightedFixture(ids => [{ sessionId: ids[0], weight: 1 }]).scene
+  const centre = probe.clusters.get('cloud:taxis')!
+  const nodes = [...probe.state.agents.values()].filter(a => a.sessionId === 'hermes-taxis')
+  assert.ok(nodes.length >= 8)
+  // The two session nodes farthest apart in the cloud (by the direction they sit in from the centre).
+  const far = [...nodes].sort((a, b) => Math.hypot(b.x - centre.x, b.y - centre.y) - Math.hypot(a.x - centre.x, a.y - centre.y))
+  const a = far[0]
+  const dot = (n: { x: number; y: number }) => (n.x - centre.x) * (a.x - centre.x) + (n.y - centre.y) * (a.y - centre.y)
+  const b = [...far].sort((p, q) => dot(p) - dot(q))[0] // the node on the opposite side of the cloud
+  const toward = (scene: typeof probe, node: typeof a) => {
+    const kb = scene.state.agents.get('kanban:agent-flow')!
+    return (kb.x - centre.x) * (node.x - centre.x) + (kb.y - centre.y) * (node.y - centre.y)
+  }
+  const usedA = weightedFixture(() => [{ sessionId: a.id, weight: 9 }, { sessionId: b.id, weight: 1 }]).scene
+  const usedB = weightedFixture(() => [{ sessionId: a.id, weight: 1 }, { sessionId: b.id, weight: 9 }]).scene
+  const kbA = usedA.state.agents.get('kanban:agent-flow')!
+  const kbB = usedB.state.agents.get('kanban:agent-flow')!
+  assert.ok(Math.hypot(kbA.x - kbB.x, kbA.y - kbB.y) > 20, `the resource moved with the weights (${kbA.x.toFixed(0)},${kbA.y.toFixed(0)} vs ${kbB.x.toFixed(0)},${kbB.y.toFixed(0)})`)
+  assert.ok(toward(usedA, a) > toward(usedA, b), 'mostly used from a: sits on a\'s side of the cloud')
+  assert.ok(toward(usedB, b) > toward(usedB, a), 'mostly used from b: sits on b\'s side')
+  for (const s of [usedA, usedB]) {
+    const kb = s.state.agents.get('kanban:agent-flow')!
+    assert.ok(Math.hypot(kb.x - centre.x, kb.y - centre.y) >= centre.r, 'still outside the halo')
+  }
+})
+
+test('fleet scene: the scene reports where each resource belongs; the drawn position is that target; a dropped node keeps its place', () => {
+  const { scene } = weightedFixture(ids => [{ sessionId: ids[0], weight: 1 }])
+  const kb = scene.state.agents.get('kanban:agent-flow')!
+  assert.deepEqual([...scene.resourceTargets.keys()], ['kanban:agent-flow'])
+  assert.deepEqual(scene.resourceTargets.get('kanban:agent-flow'), { x: kb.x, y: kb.y })
+  assert.ok(![...scene.resourceTargets.keys()].some(id => scene.sessionOfAgent.has(id)), 'session nodes are not resources')
+  const dropped = weightedFixture(ids => [{ sessionId: ids[0], weight: 1 }], new Map([['kanban:agent-flow', { x: 1234, y: -567 }]])).scene
+  assert.deepEqual(dropped.resourceTargets.get('kanban:agent-flow'), { x: 1234, y: -567 }, 'a dragged resource is its own target: nothing glides it away')
+  assert.deepEqual([dropped.state.agents.get('kanban:agent-flow')!.x, dropped.state.agents.get('kanban:agent-flow')!.y], [1234, -567])
+})
+
+test('fleet scene: every link event names a session node that is on the map (a pulse has somewhere to leave from)', () => {
+  const f = fixture()
+  const instances = instancesFromSessionEvents(f.sessions, id => f.events[id] ?? [])
+  const graph = buildFleetGraph({ instances, kanban: [board('agent-flow', 'taxis')], supermemory: [{ ...space('omh_family', { taxis: 2 }), recent: [{ at: NOW - MIN, profile: 'taxis', action: 'search' }, { at: NOW - 2 * MIN, profile: 'taxis', action: 'store' }] }], selection: all, now: NOW })
+  const replay = new FleetReplay()
+  const scene = buildFleetScene({ sessions: f.sessions, stateOf: id => replay.advance(id, f.events[id] ?? []), instances, selection: all, graph })
+  const events = graph.edges.flatMap(e => e.events)
+  assert.ok(events.length >= 3)
+  for (const ev of events) assert.ok(scene.state.agents.has(ev.sessionId!), `${ev.key} leaves from ${ev.sessionId}, a node of the scene`)
+})
+
+// ─── Position tween on a rebuilt scene (F3b) ────────────────────────────────
+
+function threeProfiles(names: string[]) {
+  const sessions = names.map(n => session(n))
+  const events: Record<string, SimulationEvent[]> = {}
+  for (const n of names) events[`hermes-${n}`] = profileEvents(n, `${n} · Node`, [{ tool: 'Read', hermesTool: 'read_file', input: { path: `/x/${n}.md` } }], false)
+  return { sessions, events }
+}
+
+test('position tween: a cloud in the middle of the grid leaves, the clouds after it shift in the scene, and glide to the new place instead of jumping', () => {
+  const T = 9_000_000
+  // 4 clouds on a 2 x 2 grid in name order: alpha beta / gamma delta. beta leaves: gamma and delta move.
+  const before = sceneFor(threeProfiles(['alpha', 'beta', 'gamma', 'delta'])).scene
+  const afterEvents = threeProfiles(['alpha', 'gamma', 'delta'])
+  const after = sceneFor(afterEvents).scene
+  const tracker = newFleetPresenceTracker()
+  const live1 = withGhosts(before.state, tracker, T - 5000, before.clusters)
+  const live2 = withGhosts(after.state, tracker, T, after.clusters)
+
+  const id = (n: string) => `hermes-${n}::${n} · Node`
+  const moved = ['gamma', 'delta'].filter(n => {
+    const a = before.state.agents.get(id(n))!
+    const b = after.state.agents.get(id(n))!
+    return Math.hypot(a.x - b.x, a.y - b.y) > 1
+  })
+  assert.ok(moved.length >= 1, 'the scene itself moves the clouds that stay (this is the snap the tween removes)')
+
+  const legs = retarget(null, positionsOf(live1), positionsOf(live2), T)
+  for (const n of moved) assert.ok(legs.has(id(n)), `${n} gets a leg`)
+  // First drawn frame = where it was; last = the scene's place; in between never outside the box of both.
+  for (const n of moved) {
+    const a = before.state.agents.get(id(n))!
+    const b = after.state.agents.get(id(n))!
+    const f0 = tweenedFrame(live2, legs, T).frame.agents.get(id(n))!
+    assert.deepEqual([f0.x, f0.y], [a.x, a.y])
+    const fm = tweenedFrame(live2, legs, T + TWEEN_MS / 2).frame.agents.get(id(n))!
+    assert.ok(fm.x >= Math.min(a.x, b.x) - 1e-6 && fm.x <= Math.max(a.x, b.x) + 1e-6)
+    assert.ok(fm.y >= Math.min(a.y, b.y) - 1e-6 && fm.y <= Math.max(a.y, b.y) + 1e-6)
+    assert.ok(Math.hypot(fm.x - a.x, fm.y - a.y) > 0.1, 'half way it is on its way')
+    const f1 = tweenedFrame(live2, legs, T + TWEEN_MS)
+    assert.deepEqual([f1.frame.agents.get(id(n))!.x, f1.frame.agents.get(id(n))!.y], [b.x, b.y])
+    assert.equal(f1.settled, true)
+  }
+  // Its satellites move with it (the offset the scene gave them is kept).
+  const sat = [...live2.toolCalls.values()].find(tc => tc.agentId === id('gamma'))!
+  const own = live2.agents.get(id('gamma'))!
+  const mid = tweenedFrame(live2, legs, T + 100).frame
+  const midSat = mid.toolCalls.get(sat.id)!
+  const midOwn = mid.agents.get(id('gamma'))!
+  assert.ok(Math.abs((midSat.x - midOwn.x) - (sat.x - own.x)) < 1e-9)
+})
+
+test('position tween: a session of a multi-session cloud leaves: the others glide, the ghost keeps its cloud and follows its centre', () => {
+  const T = 9_000_000
+  const base = threeProfiles(['alpha', 'beta'])
+  // beta gets a second session node (its own session id, same profile name).
+  base.sessions.push(session('beta', { id: 'hermes-beta-2' }))
+  base.events['hermes-beta-2'] = profileEvents('beta', 'beta · Two', [{ tool: 'Read', hermesTool: 'read_file', input: { path: '/x/two.md' } }], false)
+  const before = sceneFor(base).scene
+  const smaller = { sessions: base.sessions.filter(s => s.id !== 'hermes-beta-2'), events: base.events }
+  const after = sceneFor(smaller).scene
+  const tracker = newFleetPresenceTracker()
+  withGhosts(before.state, tracker, T - 5000, before.clusters)
+  const live = withGhosts(after.state, tracker, T, after.clusters)
+
+  const gone = 'hermes-beta-2::beta · Two'
+  assert.ok(live.agents.has(gone), 'its ghost is in the frame')
+  assert.ok(live.clouds!.find(c => c.id.includes('beta'))!.members.some(m => m.id === gone), 'and stays a member of its cloud')
+  const cb = before.clusters.get([...before.clusters.keys()].find(k => k.includes('beta'))!)!
+  const ca = after.clusters.get([...after.clusters.keys()].find(k => k.includes('beta'))!)!
+  const ghost = live.agents.get(gone)!
+  const was = before.state.agents.get(gone)!
+  assert.ok(Math.abs(ghost.x - (was.x + ca.x - cb.x)) < 1e-9 && Math.abs(ghost.y - (was.y + ca.y - cb.y)) < 1e-9, 'old place plus the cloud centre delta')
+  assert.deepEqual(ghostIdsOf(live), new Set([gone]))
 })

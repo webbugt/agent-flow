@@ -153,6 +153,8 @@ export interface PlacementCloud extends Point {
   id: string
   /** Radius of the halo, world units: resources stay outside it. */
   r: number
+  /** Session nodes of the cloud (absolute positions): what a link's `sessions` weights refer to. */
+  nodes?: ReadonlyArray<{ id: string } & Point>
 }
 
 /**
@@ -189,7 +191,37 @@ export function clearOfCaption(p: Point, c: PlacementCloud, clearance: number = 
 export interface PlacementResource {
   id: string
   /** The clouds the resource is linked to, weight = event count. Unknown cloud ids are ignored. */
-  links: ReadonlyArray<{ cloudId: string; weight: number }>
+  links: ReadonlyArray<{
+    cloudId: string
+    weight: number
+    /**
+     * Which session nodes of the cloud the interactions came from (`weight` = their count). The link then
+     * pulls the resource towards those nodes, not towards the cloud centre. Ids that are not nodes of the
+     * cloud are ignored; without any usable one the link pulls towards the cloud centre.
+     */
+    sessions?: ReadonlyArray<{ id: string; weight: number }>
+  }>
+}
+
+/**
+ * The point a link pulls its resource to: the weighted mean of the session nodes behind it (each node's
+ * share of the link weight is its share of the interactions), or the cloud centre when it is not known
+ * which nodes were used. Pure; `weight` of the link is at least 1.
+ */
+export function linkPull(cloud: PlacementCloud, link: PlacementResource['links'][number]): { x: number; y: number; weight: number } {
+  const w = Math.max(link.weight, 1)
+  const at = new Map((cloud.nodes ?? []).map(n => [n.id, n]))
+  const used = (link.sessions ?? []).filter(s => at.has(s.id) && s.weight > 0)
+  const total = used.reduce((sum, s) => sum + s.weight, 0)
+  if (total <= 0) return { x: cloud.x, y: cloud.y, weight: w }
+  let x = 0
+  let y = 0
+  for (const s of used) {
+    const n = at.get(s.id)!
+    x += n.x * (s.weight / total)
+    y += n.y * (s.weight / total)
+  }
+  return { x, y, weight: w }
 }
 
 export interface PlaceResourcesOptions {
@@ -232,8 +264,8 @@ export function placeResources(
     for (const link of res.links) {
       const c = byId.get(link.cloudId)
       if (!c) continue
-      const w = Math.max(link.weight, 1)
-      wsum += w; x += c.x * w; y += c.y * w
+      const pull = linkPull(c, link)
+      wsum += pull.weight; x += pull.x * pull.weight; y += pull.y * pull.weight
     }
     if (wsum === 0) { unlinked.push(res); continue }
     pos.set(res.id, { x: x / wsum, y: y / wsum })

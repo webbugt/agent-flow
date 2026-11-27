@@ -6,6 +6,8 @@ import type { SimulationState } from '@/hooks/simulation/types'
 import { getStateColor } from '@/lib/colors'
 import { ANIM_SPEED, PERF_OVERLAY, PERF_OVERLAY_ENABLED } from '@/lib/canvas-constants'
 import { cloudGeometries } from '@/lib/fleet/fleet-cloud-geometry'
+import { fleetNow } from '@/lib/fleet/fleet-clock'
+import { animatedView, ghostIdsOf } from '@/hooks/simulation/fleet-presence-scene'
 import { LABEL_MIN_PX } from '@/lib/fleet/fleet-labels'
 import { BloomRenderer } from './bloom-renderer'
 import { createDepthParticles, updateDepthParticles, drawBackground } from './background-layer'
@@ -127,10 +129,17 @@ export function AgentCanvas({
   // Simulation data (agents, particles, etc.) is synced from simulationRef
   // at the top of each draw frame, so it's always fresh even without re-renders.
   const sim = simulationRef.current
+  // Ghosts (leaving nodes) are drawn but not hit-testable. Recomputed only when the presence stamps are a new map.
+  const ghostCacheRef = useRef<{ presence: SimulationState['presence']; ids: ReadonlySet<string> }>({ presence: undefined, ids: new Set() })
+  const ghostsOf = (s: SimulationState): ReadonlySet<string> => {
+    const c = ghostCacheRef.current
+    if (c.presence !== s.presence) ghostCacheRef.current = { presence: s.presence, ids: ghostIdsOf(s) }
+    return ghostCacheRef.current.ids
+  }
   const makeDrawProps = (prev?: { isDragging: boolean }) => ({
     agents: sim.agents, toolCalls: sim.toolCalls,
     particles: sim.particles, edges: sim.edges, discoveries: sim.discoveries,
-    clouds: sim.clouds,
+    clouds: sim.clouds, ghosts: ghostsOf(sim),
     selectedAgentId, hoveredAgentId, showStats, showHexGrid,
     showCostOverlay, selectedToolCallId, selectedDiscoveryId, screensaver,
     simTime: sim.currentTime, pauseAutoFit, dimensions,
@@ -230,6 +239,7 @@ export function AgentCanvas({
         p.particles = s.particles
         p.edges = s.edges
         p.discoveries = s.discoveries
+        p.ghosts = ghostsOf(s)
         p.simTime = s.currentTime
       }
 
@@ -315,20 +325,28 @@ export function AgentCanvas({
 
       // Fleet map only: clouds (halo + profile caption) under everything, then the cloud-to-resource links.
       const fleet = simulationRef.current
-      const cloudGeoms = fleet.clouds && fleet.clouds.length > 0 ? cloudGeometries(fleet.clouds, agents) : null
+      // Entry/exit: nodes and clouds in transition are drawn with their own opacity and size for this frame.
+      // The scene itself (and so the camera's fit) is not touched by it.
+      const view = fleet.presence ? animatedView(fleet, fleetNow()) : null
+      const vAgents = view?.agents ?? agents
+      const vTools = view?.toolCalls ?? toolCalls
+      const vEdges = view?.edges ?? edges
+      const vClouds = view?.clouds ?? fleet.clouds
+      const fade = view?.fade
+      const cloudGeoms = vClouds && vClouds.length > 0 ? cloudGeometries(vClouds, vAgents) : null
       const wallNow = Date.now()
-      if (cloudGeoms && fleet.clouds) drawClouds(ctx, fleet.clouds, cloudGeoms, timeRef.current)
-      drawDiscoveryConnections(ctx, discoveries, agents)
-      drawEdges(ctx, edges, agents, toolCalls, activeEdgeIds, timeRef.current)
-      if (cloudGeoms) drawFleetLinks(ctx, edges, agents, cloudGeoms, wallNow)
-      drawToolCalls(ctx, toolCalls, timeRef.current, selectedToolCallId, cloudGeoms ? LABEL_MIN_PX - 2 : 0, screensaver)
-      drawDiscoveries(ctx, discoveries, agents, selectedDiscoveryId)
-      drawAgents(ctx, agents, selectedAgentId, hoveredAgentId, showStats, timeRef.current, !cloudGeoms, wallNow)
-      if (cloudGeoms && fleet.clouds) drawFleetLabels(ctx, fleet.clouds, cloudGeoms, agents, selectedAgentId, hoveredAgentId, !screensaver, wallNow)
-      drawMessageBubblesWorld(ctx, agents, simTimeRef.current)
-      if (showCostOverlay) drawCostLabels(ctx, agents, toolCalls)
-      drawParticles(ctx, particles, edgeMap, agents, toolCalls, timeRef.current)
-      if (cloudGeoms && fleet.pulses) drawPulses(ctx, fleet.pulses, edges, agents, cloudGeoms, wallNow)
+      if (cloudGeoms && vClouds) drawClouds(ctx, vClouds, cloudGeoms, timeRef.current, fade)
+      drawDiscoveryConnections(ctx, discoveries, vAgents)
+      drawEdges(ctx, vEdges, vAgents, vTools, activeEdgeIds, timeRef.current)
+      if (cloudGeoms) drawFleetLinks(ctx, vEdges, vAgents, cloudGeoms, wallNow)
+      drawToolCalls(ctx, vTools, timeRef.current, selectedToolCallId, cloudGeoms ? LABEL_MIN_PX - 2 : 0, screensaver)
+      drawDiscoveries(ctx, discoveries, vAgents, selectedDiscoveryId)
+      drawAgents(ctx, vAgents, selectedAgentId, hoveredAgentId, showStats, timeRef.current, !cloudGeoms, wallNow)
+      if (cloudGeoms && vClouds) drawFleetLabels(ctx, vClouds, cloudGeoms, vAgents, selectedAgentId, hoveredAgentId, !screensaver, wallNow, fade)
+      drawMessageBubblesWorld(ctx, vAgents, simTimeRef.current)
+      if (showCostOverlay) drawCostLabels(ctx, vAgents, vTools)
+      drawParticles(ctx, particles, edgeMap, vAgents, vTools, timeRef.current)
+      if (cloudGeoms && fleet.pulses) drawPulses(ctx, fleet.pulses, vEdges, vAgents, cloudGeoms, wallNow)
       drawEffects(ctx, effectsRef.current)
 
       if (selectedAgentId) {

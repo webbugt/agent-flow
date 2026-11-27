@@ -1,0 +1,165 @@
+{
+  "_note": "F3b: one session (#2) of the multi-session cloud beta-demo leaves; the others repack, the ghost keeps its place. Scenario fleet-multi, --session none. Pinned clock (?shot=1). Run: pnpm shot --task-id f3b --scenario fleet-multi --session none --plan <this>",
+  "shots": [
+    {
+      "name": "b-member-leaves-0-before",
+      "viewports": [
+        "desktop"
+      ],
+      "steps": [
+        {
+          "click": "[data-testid=\"fleet-toggle\"]"
+        },
+        {
+          "wait": 1800
+        },
+        {
+          "eval": "(async () => { for (let k = 0; k < 20; k++) { const e = document.querySelector('input[aria-label^=\"Show \"]'); if (!e) return; e.click(); await new Promise(r => setTimeout(r, 120)) } throw new Error('rows still hidden') })()"
+        },
+        {
+          "wait": 700
+        }
+      ]
+    },
+    {
+      "name": "b-member-leaves-1-t0",
+      "viewports": [
+        "desktop"
+      ],
+      "steps": [
+        {
+          "click": "[data-testid=\"fleet-toggle\"]"
+        },
+        {
+          "wait": 1800
+        },
+        {
+          "eval": "(async () => { for (let k = 0; k < 20; k++) { const e = document.querySelector('input[aria-label^=\"Show \"]'); if (!e) return; e.click(); await new Promise(r => setTimeout(r, 120)) } throw new Error('rows still hidden') })()"
+        },
+        {
+          "wait": 700
+        },
+        {
+          "eval": "window.__AF_FLEET_CLOCK__ = 2000000000000"
+        },
+        {
+          "eval": "(() => { const all = [...document.querySelectorAll('input[aria-label]')]; const i = all.findIndex(e => e.getAttribute('aria-label') === 'Hide beta demo'); if (i < 0) throw new Error('no beta row: ' + JSON.stringify(all.map(e => e.getAttribute('aria-label')))); const t = all[i + 2]; if (!/^Hide #2$/.test(t.getAttribute('aria-label'))) throw new Error('not #2: ' + t.getAttribute('aria-label')); t.click() })()"
+        },
+        {
+          "wait": 250
+        },
+        {
+          "eval": "window.__AF_FLEET_CLOCK__ = 2000000000000"
+        },
+        {
+          "wait": 300
+        }
+      ]
+    },
+    {
+      "name": "b-member-leaves-2-t150",
+      "viewports": [
+        "desktop"
+      ],
+      "steps": [
+        {
+          "click": "[data-testid=\"fleet-toggle\"]"
+        },
+        {
+          "wait": 1800
+        },
+        {
+          "eval": "(async () => { for (let k = 0; k < 20; k++) { const e = document.querySelector('input[aria-label^=\"Show \"]'); if (!e) return; e.click(); await new Promise(r => setTimeout(r, 120)) } throw new Error('rows still hidden') })()"
+        },
+        {
+          "wait": 700
+        },
+        {
+          "eval": "window.__AF_FLEET_CLOCK__ = 2000000000000"
+        },
+        {
+          "eval": "(() => { const all = [...document.querySelectorAll('input[aria-label]')]; const i = all.findIndex(e => e.getAttribute('aria-label') === 'Hide beta demo'); if (i < 0) throw new Error('no beta row: ' + JSON.stringify(all.map(e => e.getAttribute('aria-label')))); const t = all[i + 2]; if (!/^Hide #2$/.test(t.getAttribute('aria-label'))) throw new Error('not #2: ' + t.getAttribute('aria-label')); t.click() })()"
+        },
+        {
+          "wait": 250
+        },
+        {
+          "eval": "window.__AF_FLEET_CLOCK__ = 2000000000150"
+        },
+        {
+          "wait": 300
+        }
+      ]
+    },
+    {
+      "name": "b-member-leaves-3-t300",
+      "viewports": [
+        "desktop"
+      ],
+      "steps": [
+        {
+          "click": "[data-testid=\"fleet-toggle\"]"
+        },
+        {
+          "wait": 1800
+        },
+        {
+          "eval": "(async () => { for (let k = 0; k < 20; k++) { const e = document.querySelector('input[aria-label^=\"Show \"]'); if (!e) return; e.click(); await new Promise(r => setTimeout(r, 120)) } throw new Error('rows still hidden') })()"
+        },
+        {
+          "wait": 700
+        },
+        {
+          "eval": "window.__AF_FLEET_CLOCK__ = 2000000000000"
+        },
+        {
+          "eval": "(() => { const all = [...document.querySelectorAll('input[aria-label]')]; const i = all.findIndex(e => e.getAttribute('aria-label') === 'Hide beta demo'); if (i < 0) throw new Error('no beta row: ' + JSON.stringify(all.map(e => e.getAttribute('aria-label')))); const t = all[i + 2]; if (!/^Hide #2$/.test(t.getAttribute('aria-label'))) throw new Error('not #2: ' + t.getAttribute('aria-label')); t.click() })()"
+        },
+        {
+          "wait": 250
+        },
+        {
+          "eval": "window.__AF_FLEET_CLOCK__ = 2000000000300"
+        },
+        {
+          "wait": 300
+        }
+      ]
+    },
+    {
+      "name": "b-member-leaves-4-end",
+      "viewports": [
+        "desktop"
+      ],
+      "steps": [
+        {
+          "click": "[data-testid=\"fleet-toggle\"]"
+        },
+        {
+          "wait": 1800
+        },
+        {
+          "eval": "(async () => { for (let k = 0; k < 20; k++) { const e = document.querySelector('input[aria-label^=\"Show \"]'); if (!e) return; e.click(); await new Promise(r => setTimeout(r, 120)) } throw new Error('rows still hidden') })()"
+        },
+        {
+          "wait": 700
+        },
+        {
+          "eval": "window.__AF_FLEET_CLOCK__ = 2000000000000"
+        },
+        {
+          "eval": "(() => { const all = [...document.querySelectorAll('input[aria-label]')]; const i = all.findIndex(e => e.getAttribute('aria-label') === 'Hide beta demo'); if (i < 0) throw new Error('no beta row: ' + JSON.stringify(all.map(e => e.getAttribute('aria-label')))); const t = all[i + 2]; if (!/^Hide #2$/.test(t.getAttribute('aria-label'))) throw new Error('not #2: ' + t.getAttribute('aria-label')); t.click() })()"
+        },
+        {
+          "wait": 250
+        },
+        {
+          "eval": "window.__AF_FLEET_CLOCK__ = 2000000001000"
+        },
+        {
+          "wait": 300
+        }
+      ]
+    }
+  ]
+}
