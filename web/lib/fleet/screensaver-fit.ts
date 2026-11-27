@@ -1,10 +1,13 @@
 /**
- * Screensaver auto view: zoom the fleet map so every ACTIVE node is in view, keep it that way as nodes come
+ * Screensaver auto view: zoom the fleet map so every DRAWN node is in view, keep it that way as nodes come
  * and go. Pure, so the bounding math is testable without a canvas.
  *
- * "Active node" = a node drawn at full strength: agent state is not `idle` / `complete` (resource blocks and
- * session nodes use `tool_calling` while active and `idle` otherwise, see fleet-scene.ts), it is not a ghost
- * (a node that is leaving) and it is not faded out. When nothing is active, every node that is drawn counts.
+ * "Drawn node" = a node on the map after the activity filter (the activity window decides what is on the map):
+ * it is not a ghost (a node that is leaving) and it is not faded out. Its agent state does not matter: idle and
+ * complete nodes count like working ones. When every node is faded or leaving, all of them count.
+ *
+ * The fit is behind the `screensaverAutoFit` option; `screensaverCameraPlan` says what the camera does when the
+ * screensaver or that option changes.
  */
 import type { Transform } from './fleet-camera'
 
@@ -24,7 +27,6 @@ export interface FitOptions {
 /** What the screensaver fit needs of a node (a subset of `Agent`). */
 export interface FitAgentLike {
   id: string
-  state: string
   x: number
   y: number
   opacity: number
@@ -34,22 +36,55 @@ export interface FitAgentLike {
 /** Below this opacity a node is not visible enough to need room (it is fading in or out). */
 export const MIN_VISIBLE_OPACITY = 0.1
 
-export function isActiveNode(a: Pick<FitAgentLike, 'state' | 'opacity'>): boolean {
-  return a.state !== 'idle' && a.state !== 'complete' && a.opacity > MIN_VISIBLE_OPACITY
-}
-
 /**
- * The nodes the screensaver view has to keep in sight: the active ones, else every drawn one, else
- * (all faded) every node. Ghosts (leaving nodes) never count while another node is left.
+ * The nodes the screensaver view has to keep in sight: every drawn one (no filter on active/idle state), else
+ * (all faded) every node that is not leaving, else every node. Ghosts (leaving nodes) never count while another
+ * node is left.
  */
 export function pickFitAgents<A extends FitAgentLike>(agents: Iterable<A>, ghosts: ReadonlySet<string> = new Set()): A[] {
   const all = [...agents]
   const live = all.filter(a => !ghosts.has(a.id))
-  const active = live.filter(isActiveNode)
-  if (active.length > 0) return active
   const drawn = live.filter(a => a.opacity > MIN_VISIBLE_OPACITY)
   if (drawn.length > 0) return drawn
   return live.length > 0 ? live : all
+}
+
+/**
+ * What the camera does with the screensaver auto view, from the fleet map, the screensaver and the
+ * `screensaverAutoFit` option:
+ * - `fit`     screensaver on and the option on: drop the user's navigation and fit at once (also when the option
+ *             is switched on while the screensaver runs).
+ * - `hold`    screensaver on, option off: no auto zoom. The camera stays where it is (a running fit animation
+ *             stops; the user's zoom and pan keep working).
+ * - `release` not in the screensaver: back to the normal fit, as before the screensaver.
+ * - `none`    not the fleet map.
+ */
+export type ScreensaverCameraPlan = 'fit' | 'hold' | 'release' | 'none'
+
+export function screensaverCameraPlan(fleetView: boolean, screensaver: boolean, autoFit: boolean): ScreensaverCameraPlan {
+  if (!fleetView) return 'none'
+  if (!screensaver) return 'release'
+  return autoFit ? 'fit' : 'hold'
+}
+
+/** What the camera has to do when the plan changes from `prev` (null = first run) to `next`. */
+export type ScreensaverCameraStep = 'fit' | 'freeze' | 'release' | 'none'
+
+/**
+ * - `fit`     start the fit (the user's navigation is dropped first).
+ * - `freeze`  the auto view was on and is switched off: stop where the camera is and take the auto-follow away,
+ *             so nothing zooms by itself afterwards.
+ * - `release` hand the view back to the normal fit (leaving a screensaver that fitted).
+ * - `none`    nothing: with the option off the screensaver does not touch the camera at all, so entering or
+ *             leaving it keeps the view (and the user's zoom/pan state) as it is.
+ */
+export function screensaverCameraStep(prev: ScreensaverCameraPlan | null, next: ScreensaverCameraPlan): ScreensaverCameraStep {
+  switch (next) {
+    case 'none': return 'none'
+    case 'fit': return 'fit'
+    case 'hold': return prev === 'fit' ? 'freeze' : 'none'
+    case 'release': return prev === 'hold' ? 'none' : 'release'
+  }
 }
 
 /**

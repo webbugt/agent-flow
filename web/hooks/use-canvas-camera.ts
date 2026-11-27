@@ -3,7 +3,7 @@ import { Agent, ToolCallNode, Discovery, ANIM, NODE } from '@/lib/agent-types'
 import { SHOT_MODE } from '@/lib/shot-mode'
 import { cloudGeometries, type CloudView } from '@/lib/fleet/fleet-cloud-geometry'
 import { zoomAt } from '@/lib/fleet/fleet-camera'
-import { fitToNodes, pickFitAgents } from '@/lib/fleet/screensaver-fit'
+import { fitToNodes, pickFitAgents, screensaverCameraPlan, screensaverCameraStep, type ScreensaverCameraPlan } from '@/lib/fleet/screensaver-fit'
 import { INITIAL_CAMERA_STATE, transition, type CameraAction, type CameraEvent, type CameraInputKind, type CameraState } from '@/lib/fleet/camera-state'
 import { CAMERA } from '@/lib/canvas-constants'
 import { BUBBLE_HOLD, BUBBLE_FADE_OUT, BUBBLE_MAX_W, TOOL_CARD_W, TOOL_CARD_H, DISC_BOUNDS_HALF_W, DISC_BOUNDS_HALF_H } from '@/lib/canvas-constants'
@@ -18,9 +18,9 @@ const AUTOFIT_CLOUD_CAPTION = 48
 const SCREENSAVER_FIT_MARGIN_PX = 80
 /** Screensaver fit: room under a node for its label, world units. */
 const SCREENSAVER_FIT_LABEL_ROOM = 44
-/** Screensaver fit: zoom-out floor. Lower than the user's (CAMERA.minZoom): keeping every active node in sight comes first. */
+/** Screensaver fit: zoom-out floor. Lower than the user's (CAMERA.minZoom): keeping every drawn node in sight comes first. */
 const SCREENSAVER_FIT_MIN_SCALE = 0.05
-/** Screensaver fit: a lone active node is not zoomed beyond this. */
+/** Screensaver fit: a lone drawn node is not zoomed beyond this. */
 const SCREENSAVER_FIT_MAX_SCALE = 2
 
 export interface Transform {
@@ -55,10 +55,15 @@ interface CameraOptions {
    */
   fleetView?: boolean
   /**
-   * Fleet map in screensaver mode: the view is the auto-view. It keeps every ACTIVE node in sight (see
+   * Fleet map in screensaver mode: the view is the auto-view. It keeps every DRAWN node in sight (see
    * lib/fleet/screensaver-fit.ts) and the user's own zoom or pan does not switch it off.
    */
   screensaver?: boolean
+  /**
+   * The `screensaverAutoFit` option. Off: the screensaver does not zoom by itself and the camera stays where the
+   * user left it (zoom and pan work as before). Default true.
+   */
+  screensaverAutoFit?: boolean
 }
 
 export function useCanvasCamera({
@@ -71,8 +76,9 @@ export function useCanvasCamera({
   selectedAgentId,
   fleetView = false,
   screensaver = false,
+  screensaverAutoFit = true,
 }: CameraOptions) {
-  const activeFit = fleetView && screensaver
+  const activeFit = fleetView && screensaver && screensaverAutoFit
   const transformRef = useRef<Transform>({ x: 0, y: 0, scale: 1 })
   const userHasNavigatedRef = useRef(false)
   // Camera state machine (intro -> interrupted -> user control); userHasNavigatedRef mirrors its flag.
@@ -117,7 +123,7 @@ export function useCanvasCamera({
     const { agents, toolCalls, discoveries, clouds, dimensions, selectedAgentId } = drawPropsRef.current
     if (agents.size === 0) return null
 
-    // Screensaver (fleet map): the active nodes only, node radius and a screen margin included. Not cached
+    // Screensaver (fleet map): every drawn node, node radius and a screen margin included. Not cached
     // (the cache below is for the normal fit): it is cheap, and the nodes move a little every frame.
     if (activeFit) {
       const nodes = pickFitAgents(agents.values(), drawPropsRef.current.ghosts).map(a => ({
@@ -247,13 +253,21 @@ export function useCanvasCamera({
     dispatch({ type: 'layout-fit' })
   }, [zoomToFitTrigger, dispatch, fleetView])
 
-  // Entering or leaving the screensaver: the user's navigation is dropped (the screensaver is the auto-view) and
-  // entering starts the fit to the active nodes at once. Leaving hands the view back to the normal fit.
+  // Entering or leaving the screensaver, or switching the auto-fit option while it runs (screensaverCameraStep):
+  //  fit      the user's navigation is dropped (the screensaver is the auto-view) and the fit starts at once;
+  //  freeze   the option was switched off: the camera stops where it is, nothing zooms by itself from now on;
+  //  release  leaving a screensaver that fitted: back to the normal fit;
+  //  none     option off: the screensaver leaves the camera alone (zoom and pan work as before).
+  const planRef = useRef<ScreensaverCameraPlan | null>(null)
   useEffect(() => {
-    if (!fleetView) return
+    const plan = screensaverCameraPlan(fleetView, screensaver, screensaverAutoFit)
+    const step = screensaverCameraStep(planRef.current, plan)
+    planRef.current = plan
+    if (step === 'none') return
+    if (step === 'freeze') { dispatch({ type: 'input', kind: 'drag' }); return }
     dispatch({ type: 'reset' })
-    if (screensaver) dispatch({ type: 'layout-fit' })
-  }, [screensaver, fleetView, dispatch])
+    if (step === 'fit') dispatch({ type: 'layout-fit' })
+  }, [screensaver, screensaverAutoFit, fleetView, dispatch])
 
   // Re-engage auto-fit when selection changes (not in the fleet map: a click keeps the user's view)
   useEffect(() => {

@@ -71,6 +71,8 @@ export interface AgentFlowOptions {
   soundOn: boolean
   /** Fleet timeline panel shown. Default true. Was `agent-flow:fleet-timeline-visible:v1`. */
   fleetTimelineVisible: boolean
+  /** Screensaver zooms the fleet map to fit every drawn node. Default true. Off: the camera stays where the user left it. */
+  screensaverAutoFit: boolean
   /** Cost header unit chosen by the user, or null = follow the config default. Was `agentFlow.costUnit`. */
   costUnit: CostUnitChoice | null
   /** Ids of fleet agents/lanes hidden by the user (deselected). Default none. Was `agent-flow:fleet-selection:v1`. */
@@ -92,6 +94,7 @@ export function defaultOptions(): AgentFlowOptions {
     show: { single: perKind(() => true), fleet: perKind(() => true) },
     soundOn: false,
     fleetTimelineVisible: true,
+    screensaverAutoFit: true,
     costUnit: null,
     fleetDeselected: [],
     legacyMigrated: false,
@@ -104,6 +107,7 @@ export interface OptionsPatch {
   show?: Partial<Record<BlockView, Partial<Record<ResourceKind, unknown>>>>
   soundOn?: unknown
   fleetTimelineVisible?: unknown
+  screensaverAutoFit?: unknown
   /** null = follow the config default again. */
   costUnit?: unknown
   fleetDeselected?: unknown
@@ -206,6 +210,10 @@ export function validateOptions(input: unknown): ValidationResult {
     if (typeof input.fleetTimelineVisible !== 'boolean') errors.push('fleetTimelineVisible must be true or false')
     else options.fleetTimelineVisible = input.fleetTimelineVisible
   }
+  if (input.screensaverAutoFit !== undefined) {
+    if (typeof input.screensaverAutoFit !== 'boolean') errors.push('screensaverAutoFit must be true or false')
+    else options.screensaverAutoFit = input.screensaverAutoFit
+  }
   if (input.costUnit !== undefined) {
     const err = checkCostUnit(input.costUnit)
     if (err) errors.push(`costUnit ${err}`)
@@ -286,6 +294,7 @@ export function applyOptionsPatch(current: AgentFlowOptions, patch: OptionsPatch
     // Shared with `current` unless the patch replaces them (immutable by convention, see the file header).
     soundOn: current.soundOn,
     fleetTimelineVisible: current.fleetTimelineVisible,
+    screensaverAutoFit: current.screensaverAutoFit,
     costUnit: current.costUnit,
     fleetDeselected: current.fleetDeselected,
     legacyMigrated: current.legacyMigrated,
@@ -327,6 +336,10 @@ export function applyOptionsPatch(current: AgentFlowOptions, patch: OptionsPatch
   if (patch.fleetTimelineVisible !== undefined) {
     if (typeof patch.fleetTimelineVisible !== 'boolean') errors.push('fleetTimelineVisible must be true or false')
     else next.fleetTimelineVisible = patch.fleetTimelineVisible
+  }
+  if (patch.screensaverAutoFit !== undefined) {
+    if (typeof patch.screensaverAutoFit !== 'boolean') errors.push('screensaverAutoFit must be true or false')
+    else next.screensaverAutoFit = patch.screensaverAutoFit
   }
   if (patch.costUnit !== undefined) {
     const err = checkCostUnit(patch.costUnit)

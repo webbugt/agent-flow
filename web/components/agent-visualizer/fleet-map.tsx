@@ -238,6 +238,7 @@ export function FleetMap({
       <div className="absolute" style={{ left: 0, top, bottom, right: screensaver ? 0 : insetRight }}>
         <AgentCanvas
           screensaver={screensaver}
+          screensaverAutoFit={options.screensaverAutoFit}
           simulationRef={frameRef}
           selectedAgentId={selectedId}
           hoveredAgentId={screensaver ? null : hoveredId}

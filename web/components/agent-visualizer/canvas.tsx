@@ -57,6 +57,8 @@ interface CanvasProps {
   showCostOverlay?: boolean
   /** Screensaver mode: tool calls are drawn as short chips, no task text, no pointer. The UI around is hidden by the parent. */
   screensaver?: boolean
+  /** Fleet map: the `screensaverAutoFit` option. Off: the screensaver does not zoom by itself. Default true. */
+  screensaverAutoFit?: boolean
   /**
    * Fleet map mode: the plain wheel zooms, a click on a node keeps the camera where it is.
    * `controlsRef` is filled with the on-screen button actions.
@@ -76,7 +78,7 @@ export interface CanvasControls {
 export function AgentCanvas({
   simulationRef,
   selectedAgentId, hoveredAgentId, showStats, showHexGrid, zoomToFitTrigger, pauseAutoFit,
-  onAgentClick, onAgentHover, onAgentDrag, onContextMenu, onToolCallClick, selectedToolCallId, onDiscoveryClick, selectedDiscoveryId, showCostOverlay, screensaver = false, fleetView = false, controlsRef,
+  onAgentClick, onAgentHover, onAgentDrag, onContextMenu, onToolCallClick, selectedToolCallId, onDiscoveryClick, selectedDiscoveryId, showCostOverlay, screensaver = false, screensaverAutoFit = true, fleetView = false, controlsRef,
 }: CanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   // Screensaver: the cursor is hidden until the pointer moves, and hides again after 500 ms of stillness.
@@ -159,7 +161,7 @@ export function AgentCanvas({
     screenToCanvas, doZoomToFit, zoomBy, updateCamera,
   } = useCanvasCamera({
     mainCanvasRef, drawPropsRef, simTimeRef, dimensions,
-    agentCount: sim.agents.size, zoomToFitTrigger, selectedAgentId, fleetView, screensaver,
+    agentCount: sim.agents.size, zoomToFitTrigger, selectedAgentId, fleetView, screensaver, screensaverAutoFit,
   })
 
   useEffect(() => {
