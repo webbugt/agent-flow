@@ -23,11 +23,14 @@ const NAME_FLAG =
 const NAME_KV =
   '(?:api[_-]?key|apikey|secret|token|passwd|password|passphrase|credential|private[_-]?key|access[_-]?key|client[_-]?secret)'
 
+/** A `\` line continuation with the indent behind it. Bash drops it, so `-p\<newline>SECRET` is `-pSECRET`. */
+const CONT = '\\\\\\r?\\n\\s*'
 /**
- * The separator between a flag and its value: whitespace with any number of `\` line continuations in it
- * (`-p \<newline>  SECRET`), or `=`. Without the continuations VALUE would take the lone `\` as the value.
+ * The separator between a flag and its value: whitespace, `=` or nothing at all, with any number of `\` line
+ * continuations in it or right at its start (`-p \<newline>  SECRET`, `--password\<newline>SECRET`,
+ * `--password=\<newline>SECRET`). Without them VALUE would take the lone `\` as the value.
  */
-const SEP = '(?:\\s+(?:\\\\\\r?\\n\\s*)*|=)'
+const SEP = `(?:\\s+(?:${CONT})*|(?:${CONT})+|=(?:${CONT})*)`
 /** Not a value: a lone `\` (a continuation with nothing behind it), so the regex cannot settle for it. */
 const NOT_BARE_BACKSLASH = '(?!\\\\(?:\\s|$))'
 
@@ -98,7 +101,7 @@ const RULES: Array<[RegExp, Replacer]> = [
   // name=value and "name": "value" for names that say they are secret (GITHUB_TOKEN=..., "api_key": "...").
   // Only the keyword and a short suffix are matched, never an unbounded run of name characters.
   [
-    new RegExp(`(${NAME_KV}[A-Za-z0-9_-]{0,20})(["']?\\s*[:=]\\s*)(?!\\[MASKED|["']?\\[MASKED)(${VALUE}|[^\\s,}]+)`, 'gi'),
+    new RegExp(`(${NAME_KV}[A-Za-z0-9_-]{0,20})(["']?\\s*[:=]\\s*(?:${CONT})*)(?!\\[MASKED|["']?\\[MASKED)${NOT_BARE_BACKSLASH}(${VALUE}|[^\\s,}]+)`, 'gi'),
     (_m, name, sep) => `${name}${sep}${MASK}`,
   ],
   // Uppercase environment names that say they hold a secret: DB_PASS=..., MYSQL_ROOT_PASSWORD=..., SSH_KEY=...
@@ -106,7 +109,7 @@ const RULES: Array<[RegExp, Replacer]> = [
   // is bounded, so this stays linear.
   [
     new RegExp(
-      `(?<![A-Za-z0-9_])((?:[A-Z0-9]{1,20}_){0,5}${ENV_SECRET_PART}(?:_[A-Z0-9]{1,20}){0,3})(=)(?!\\[MASKED|["']\\[MASKED)(${VALUE})`,
+      `(?<![A-Za-z0-9_])((?:[A-Z0-9]{1,20}_){0,5}${ENV_SECRET_PART}(?:_[A-Z0-9]{1,20}){0,3})(=(?:${CONT})*)(?!\\[MASKED|["']\\[MASKED)${NOT_BARE_BACKSLASH}(${VALUE})`,
       'g',
     ),
     (_m, name, sep) => `${name}${sep}${MASK}`,
@@ -119,11 +122,11 @@ const RULES: Array<[RegExp, Replacer]> = [
  */
 const TOOL_RULES: Array<[test: RegExp, RegExp, Replacer]> = [
   // mysql / mariadb: the password sits right behind -p, no space: `mysql -u root -pSecret db`.
-  [/\b(?:mysql|mysqldump|mysqladmin|mariadb)\b/, /(\s-p)(?=\S)(?!\[MASKED)[^\s]+/g, (_m, flag) => `${flag}${MASK}`],
+  [/\b(?:mysql|mysqldump|mysqladmin|mariadb)\b/, new RegExp(`(\\s-p)(?:(?:${CONT})+(?!\\[MASKED)${NOT_BARE_BACKSLASH}(?:${VALUE})|(?=\\S)(?!\\[MASKED)${NOT_BARE_BACKSLASH}[^\\s]+)`, 'g'), (_m, flag) => `${flag}${MASK}`],
   // curl / wget / httpie: `-u user:pass`, `--user user:pass`, `--proxy-user user:pass`.
   [
     /\b(?:curl|wget|http|https|xh)\b/,
-    /(\s(?:-u|--user|--proxy-user|--http-user|--http-password))((?:\s+(?:\\\r?\n\s*)*|=))(?!\[MASKED)(?!\\(?:\s|$))("[^"]*"|'[^']*'|[^\s"']+)/g,
+    new RegExp(`(\\s(?:-u|--user|--proxy-user|--http-user|--http-password))(${SEP})(?!\\[MASKED)${NOT_BARE_BACKSLASH}("[^"]*"|'[^']*'|[^\\s"']+)`, 'g'),
     (_m, flag, sep, value) => (/:/.test(value) || /password/i.test(flag) ? `${flag}${sep}${MASK}` : `${flag}${sep}${value}`),
   ],
   // docker / podman / nerdctl / buildah / skopeo login: `-p VALUE`, `-pVALUE`, `-p=VALUE` (--password is a flag rule).
@@ -150,7 +153,7 @@ const TOOL_RULES: Array<[test: RegExp, RegExp, Replacer]> = [
  * flag; the value is replaced. A value that starts with `-` is not taken (`-p -x` is another flag).
  */
 function shortFlagRule(prefix: string, flag: string): RegExp {
-  return new RegExp(`(${prefix}\\s+${flag})(?:(${SEP})(?!\\[MASKED)${NOT_BARE_BACKSLASH}(${VALUE})|(?=[^\\s=-])(?!\\[MASKED)[^\\s;|&]+)`, 'g')
+  return new RegExp(`(${prefix}\\s+${flag})(?:(${SEP})(?!\\[MASKED)${NOT_BARE_BACKSLASH}(${VALUE})|(?=[^\\s=-])(?!\\[MASKED)${NOT_BARE_BACKSLASH}[^\\s;|&]+)`, 'g')
 }
 
 function maskAfterFlag(_m: string, head: string, sep?: string): string {

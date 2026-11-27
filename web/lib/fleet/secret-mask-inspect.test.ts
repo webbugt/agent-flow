@@ -91,3 +91,23 @@ test('inspection masks the value behind a backslash continuation after -p / -a /
     assert.equal(detail, command.replace('FAKE_123', MASK), `${head}: only the secret changed`)
   }
 })
+
+test('inspection masks the value behind a continuation attached directly to the flag', () => {
+  const cases: Array<[head: string, command: string]> = [
+    ['docker', 'docker login -u bob -p\\\nFAKE_123 registry.example.com'],
+    ['sshpass', 'sshpass -p\\\n  FAKE_123 ssh -p 2222 bob@host.example.com uptime'],
+    ['redis-cli', 'redis-cli -h cache.example.com -a\\\n FAKE_123 ping'],
+    ['mysql', 'mysql -u root -p\\\nFAKE_123 db'],
+    ['mytool', 'mytool run --password\\\n  FAKE_123 --verbose'],
+    ['othertool', 'othertool run --password=\\\nFAKE_123 --verbose'],
+  ]
+  const nodes = new BashUseTracker().update([session], () => cases.map(([, c], i) => bashEvent(c, 10 + i, c)), T0)
+  for (const [head, command] of cases) {
+    const node = nodes.find(n => n.head === head)
+    assert.ok(node, `a block for ${head}`)
+    assert.ok(!JSON.stringify(node).includes('FAKE_123'), `${head}: node must not hold the secret`)
+    const insp = inspectResource(`bash:${head}`, undefined, undefined, undefined, nodes)!
+    assert.ok(!JSON.stringify(insp).includes('FAKE_123'), `${head}: inspection must not hold the secret`)
+    assert.ok(insp.items[0].detail!.includes(MASK), `${head}: masked marker shown`)
+  }
+})

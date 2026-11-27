@@ -232,3 +232,54 @@ test('MASK-B2 (low): redis-cli -a is masked behind more than 16 earlier tokens',
   const filler = Array.from({ length: 30 }, (_, i) => `--opt${i}`).join(' ')
   assertMasked(`redis-cli ${filler} -a FAKE_123 ping`, ['FAKE_123'])
 })
+
+test('MASK-B3: a line continuation right behind the flag (no space) does not leak the value', () => {
+  const nl = '\\\n'
+  const gaps = [nl, `${nl}  `, `${nl}${nl}  `, '\\\r\n\t']
+  for (const gap of gaps) {
+    const label = JSON.stringify(gap)
+    // Short flags, attached continuation: bash joins `-p\<nl>SECRET` into `-pSECRET`.
+    const out = assertMasked(`docker login -u bob -p${gap}FAKE_123 registry.example.com`, ['FAKE_123'])
+    assert.match(out, /registry\.example\.com$/, `docker -p ${label}: the registry stays`)
+    assertMasked(`sshpass -p${gap}FAKE_123 ssh bob@host.example.com uptime`, ['FAKE_123'])
+    assertMasked(`redis-cli -h cache.example.com -a${gap}FAKE_123 ping`, ['FAKE_123'])
+    assertMasked(`mysql -u root -p${gap}FAKE_123 db`, ['FAKE_123'])
+    assertMasked(`curl -u${gap}bob:FAKE_123 https://x.test`, ['FAKE_123'])
+    // Long flags, attached continuation.
+    assertMasked(`cmd --password${gap}FAKE_123 --verbose`, ['FAKE_123'])
+    assertMasked(`cmd --pass${gap}FAKE_123 --verbose`, ['FAKE_123'])
+    assertMasked(`redis-cli --pass${gap}FAKE_123 ping`, ['FAKE_123'])
+    assertMasked(`cmd --token${gap}FAKE_123 run`, ['FAKE_123'])
+    // `=` followed by a continuation.
+    assertMasked(`cmd --password=${gap}FAKE_123 --verbose`, ['FAKE_123'])
+    assertMasked(`docker login -u bob -p=${gap}FAKE_123 registry.example.com`, ['FAKE_123'])
+    // name=value forms.
+    assertMasked(`PASSWORD=${gap}FAKE_123 run`, ['FAKE_123'])
+    assertMasked(`export MYSQL_ROOT_PASSWORD=${gap}FAKE_123`, ['FAKE_123'])
+    assertMasked(`api_key=${gap}FAKE_123 run`, ['FAKE_123'])
+  }
+})
+
+test('MASK-B3: the continuation forms stay idempotent and leave ports and a lone trailing backslash alone', () => {
+  const nl = '\\\n'
+  for (const c of [`docker login -p${nl}FAKE_123 r`, `sshpass -p${nl} FAKE_123 ssh h`, `cmd --password=${nl}FAKE_123`, `mysql -p${nl}FAKE_123 db`]) {
+    const once = maskSecrets(c)
+    assert.equal(maskSecrets(once), once, `idempotent: ${JSON.stringify(c)}`)
+  }
+  assertUnchanged([`docker run -p${nl} 8080:80 img`, `redis-cli -h cache -p${nl}6379 ping`, 'docker login -u bob -p\\', 'app --password\\', 'app --password=\\'])
+})
+
+test('MASK-B3: continuation runs behind a flag stay linear on hostile input', () => {
+  const nl = '\\\n'
+  const t0 = Date.now()
+  for (const input of [
+    `cmd --password${nl}`.repeat(100_000),
+    nl.repeat(200_000),
+    `docker login -p${nl}`.repeat(30_000),
+    `mysql -p${nl}`.repeat(30_000),
+    `PASSWORD=${nl}`.repeat(50_000),
+    `curl -u${nl}`.repeat(50_000),
+    `redis-cli -a${' \\\n'.repeat(100_000)}`,
+  ]) maskSecrets(input)
+  assert.ok(Date.now() - t0 < 4000, `took ${Date.now() - t0} ms`)
+})
