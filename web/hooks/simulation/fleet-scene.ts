@@ -162,7 +162,9 @@ interface Unit {
   toolCalls: ToolCallNode[]
   /** Start of the node, epoch ms, for a stable order inside the cloud. */
   start: number
-  /** Distance from the node to the farthest corner of its satellites and bubbles. */
+  /** Distance from the node to the farthest corner of its satellites and bubbles (what the halo must cover). */
+  reach: number
+  /** What the blob packs on: {@link AGENT_PAD} plus {@link SATELLITE_PACK_SHARE} of the reach beyond it. */
   radius: number
 }
 
@@ -175,6 +177,13 @@ interface Cluster {
 }
 
 const AGENT_PAD = 70
+/**
+ * Share of a node's satellite reach (the part beyond {@link AGENT_PAD}) that the blob packing counts, 0..1.
+ * Tool cards and bubbles are small on the fleet map and only show in full when zoomed in, so neighbours
+ * pack on the node plus this share of the reach and their cards may touch when zoomed in; the halo still
+ * covers the full reach. 1 = the old behaviour (nodes never closer than twice the full reach).
+ */
+export const SATELLITE_PACK_SHARE = 0.35
 /** Reach of a node's message bubbles for the blob packing, world units. */
 const BUBBLE_REACH = 130
 
@@ -209,7 +218,8 @@ function buildCluster(
   return { session: s, identity: identityFromLabel(s.label), agents, toolCalls, edges }
 }
 
-function unitRadius(agent: Agent, toolCalls: readonly ToolCallNode[]): number {
+/** Distance from the node to the farthest corner of its satellites (and a fixed share for bubbles). */
+export function unitReach(agent: Agent, toolCalls: readonly ToolCallNode[]): number {
   let r = AGENT_PAD
   // Message bubbles hang off the node to the right, but only show when the camera is zoomed in: they
   // get a fixed share of the blob (not a share per bubble), or one chatty session would blow up its cloud.
@@ -218,6 +228,11 @@ function unitRadius(agent: Agent, toolCalls: readonly ToolCallNode[]): number {
     r = Math.max(r, Math.hypot(tc.x - agent.x, tc.y - agent.y) + Math.hypot(TOOL_CARD_W, TOOL_CARD_H) / 2)
   }
   return r
+}
+
+/** The radius the blob packs a node on: the node itself plus a share of the reach beyond it. */
+export function packRadius(reach: number): number {
+  return AGENT_PAD + SATELLITE_PACK_SHARE * Math.max(0, reach - AGENT_PAD)
 }
 
 function resourceAgent(node: FleetGraph['nodes'][number], x: number, y: number): Agent {
@@ -247,9 +262,10 @@ export function buildFleetScene(input: FleetSceneInput): FleetScene {
     group.clusters.push(c)
     for (const agent of c.agents) {
       const toolCalls = c.toolCalls.filter(tc => tc.agentId === agent.id)
+      const reach = unitReach(agent, toolCalls)
       group.units.push({
         sid: s.id, agent, toolCalls, start: startOf.get(nodeInstanceId(s.id, agent.id)) ?? 0,
-        radius: unitRadius(agent, toolCalls),
+        reach, radius: packRadius(reach),
       })
     }
   }
@@ -260,7 +276,13 @@ export function buildFleetScene(input: FleetSceneInput): FleetScene {
     group.units.sort((a, b) => a.start - b.start || nodeInstanceId(a.sid, a.agent.id).localeCompare(nodeInstanceId(b.sid, b.agent.id)))
     const blobUnits: BlobUnit[] = group.units.map(u => ({ id: nodeInstanceId(u.sid, u.agent.id), radius: u.radius }))
     const blob = placeBlob(blobUnits, identity)
-    return { identity, group, blob, halo: blob.radius + HALO_PAD }
+    // The halo covers every node with its full reach (not just the packing radius), as cloudGeometry does.
+    let cover = 0
+    for (const u of group.units) {
+      const at = blob.positions.get(nodeInstanceId(u.sid, u.agent.id))!
+      cover = Math.max(cover, Math.hypot(at.x, at.y) + u.reach)
+    }
+    return { identity, group, blob, halo: cover + HALO_PAD }
   })
 
   // 2. Grid of clouds, cells sized to their own halo (plus the caption), so one big profile does not
@@ -322,7 +344,7 @@ export function buildFleetScene(input: FleetSceneInput): FleetScene {
         const tid = ns(u.sid, tc.id)
         toolCalls.set(tid, { ...tc, id: tid, agentId: id, x: tc.x + dx, y: tc.y + dy })
       }
-      members.push({ id, pad: u.radius })
+      members.push({ id, pad: u.reach })
     }
     // Edges inside a session node (to its satellites, or sub-agent spawns) keep their shape; none join two sessions.
     for (const c of group.clusters) {

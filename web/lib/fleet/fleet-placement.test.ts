@@ -64,6 +64,23 @@ test('placeBlob: grouping stays tight (radius per unit does not creep back up)',
   assert.ok(BLOB_GAP <= 8, 'gap between units')
 })
 
+test('placeBlob: a smaller packing radius gives a smaller, still gap-keeping blob, deterministically (F1b)', () => {
+  // 222 = old packing radius (node + farthest card + half its diagonal); 123 = AGENT_PAD + 0.35 of the reach beyond it.
+  for (const n of [2, 3, 5, 8, 13, 21]) {
+    const big = Array.from({ length: n }, (_, i) => ({ id: `s${i}`, radius: 221.9 }))
+    const small = Array.from({ length: n }, (_, i) => ({ id: `s${i}`, radius: 123.2 }))
+    const a = placeBlob(big, 'alpha demo')
+    const b = placeBlob(small, 'alpha demo')
+    assert.ok(b.radius < a.radius * 0.65, `n=${n}: radius ${a.radius} -> ${b.radius}`)
+    assert.ok(minEdgeGap(b, small) >= BLOB_GAP - 1e-6)
+    assert.deepEqual([...placeBlob(small, 'alpha demo').positions], [...b.positions], 'same input, same blob')
+    const first = [...b.positions.values()]
+    let nearest = Infinity
+    for (let i = 0; i < first.length; i++) for (let j = i + 1; j < first.length; j++) nearest = Math.min(nearest, Math.hypot(first[i].x - first[j].x, first[i].y - first[j].y))
+    assert.ok(Math.abs(nearest - (2 * 123.2 + BLOB_GAP)) < 1e-6, `n=${n}: closest centres at ${nearest}`)
+  }
+})
+
 test('placeBlob: a new session joins the blob without moving the existing ones relative to each other', () => {
   const rel = (blob: ReturnType<typeof placeBlob>, a: string, b: string) => {
     const p = blob.positions.get(a)!

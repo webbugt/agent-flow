@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import { strict as assert } from 'node:assert'
-import type { SimulationEvent } from '@/lib/agent-types'
+import { NODE, type SimulationEvent } from '@/lib/agent-types'
+import { cloudGeometry } from '@/lib/fleet/fleet-cloud-geometry'
 import { instancesFromSessionEvents, splitInstanceId, type FleetSelectionView, type SessionLike } from '@/lib/fleet/fleet-model'
 import { buildFleetGraph } from '@/lib/fleet/fleet-graph'
 import { defaultOptions } from '@/lib/fleet/options-registry'
@@ -11,7 +12,7 @@ import { BLOB_GAP } from '@/lib/fleet/fleet-placement'
 import { newFleetPresenceTracker, withGhosts, ghostIdsOf } from './fleet-presence-scene'
 import { positionsOf, tweenedFrame } from './fleet-tween-scene'
 import { TWEEN_MS, retarget } from '@/lib/fleet/fleet-tween'
-import { buildFleetScene, CLOUD_GAP_X, CLOUD_GAP_Y, FleetReplay, openTargetOf } from './fleet-scene'
+import { buildFleetScene, CLOUD_GAP_X, CLOUD_GAP_Y, FleetReplay, openTargetOf, packRadius, unitReach, SATELLITE_PACK_SHARE } from './fleet-scene'
 import { buildSessionItems, pickDefaultAgentId } from '@/lib/session-detail'
 import { RESTING_TOOLS_PER_AGENT } from './animate'
 
@@ -356,10 +357,22 @@ test('fleet scene: sessions of a cloud sit at least BLOB_GAP apart (no overlap) 
       for (let j = i + 1; j < c.members.length; j++) {
         const a = scene.state.agents.get(c.members[i].id)!
         const b = scene.state.agents.get(c.members[j].id)!
-        const gap = Math.hypot(a.x - b.x, a.y - b.y) - c.members[i].pad - c.members[j].pad
-        assert.ok(gap >= BLOB_GAP - 1e-6, `${c.label}: nodes ${i}/${j} gap ${gap}`)
+        // The packing counts AGENT_PAD plus SATELLITE_PACK_SHARE of the reach (member.pad is the full reach).
+        const d = Math.hypot(a.x - b.x, a.y - b.y)
+        const gap = d - packRadius(c.members[i].pad) - packRadius(c.members[j].pad)
+        assert.ok(gap >= BLOB_GAP - 1e-6, `${c.label}: nodes ${i}/${j} packing gap ${gap}`)
+        // No overlap at normal zoom: the node discs themselves (and a margin) never touch.
+        assert.ok(d >= 2 * NODE.radiusMain + BLOB_GAP, `${c.label}: nodes ${i}/${j} overlap (${d})`)
       }
     }
+    // The halo (as the canvas computes it from the drawn positions) still covers every node with its whole reach.
+    const g = cloudGeometry(c, new Map(c.members.map(m => [m.id, scene.state.agents.get(m.id)!])))!
+    for (const m of c.members) {
+      const a = scene.state.agents.get(m.id)!
+      assert.ok(Math.hypot(a.x - g.x, a.y - g.y) + m.pad <= g.r + 1e-6, `${c.label}: halo covers ${m.id}`)
+    }
+    const stored = scene.clusters.get(c.id)!
+    assert.ok(Math.abs(stored.r - g.r) < 1e-6, `${c.label}: scene halo ${stored.r} = canvas halo ${g.r}`)
   }
   // Halos of different clouds never overlap.
   const cl = [...scene.clusters.values()]
@@ -376,6 +389,61 @@ test('fleet scene: sessions of a cloud sit at least BLOB_GAP apart (no overlap) 
   const a = byId.get('alpha')!
   const b = byId.get('beta')!
   assert.ok(b.x - a.x - a.r - b.r >= CLOUD_GAP_X - 1e-6, `alpha-beta halo gap ${b.x - a.x - a.r - b.r}`)
+})
+
+test('fleet scene: packing radius = AGENT_PAD + SATELLITE_PACK_SHARE of the reach beyond it (pure, monotone, never above the reach)', () => {
+  assert.ok(SATELLITE_PACK_SHARE > 0 && SATELLITE_PACK_SHARE < 1, 'a share of the reach, not none and not all')
+  assert.equal(packRadius(70), 70, 'a node with no satellites packs on AGENT_PAD')
+  assert.equal(packRadius(10), 70, 'never below AGENT_PAD')
+  const full = 221.9
+  assert.ok(Math.abs(packRadius(full) - (70 + SATELLITE_PACK_SHARE * (full - 70))) < 1e-9)
+  for (const r of [70, 100, 130, 222, 400]) assert.ok(packRadius(r) <= r + 1e-9)
+  for (let r = 70; r < 400; r += 10) assert.ok(packRadius(r + 10) >= packRadius(r), 'monotone in the reach')
+})
+
+test('fleet scene: a node with one tool card packs on the reduced radius while the halo keeps the full reach', () => {
+  const { scene } = sceneFor({
+    sessions: [session('alpha')],
+    events: {
+      'hermes-alpha': [
+        { time: 0, type: 'agent_spawn', payload: { name: 'alpha', isMain: true, profile: 'alpha', group: 'alpha', task: 'alpha' } },
+        ...[0, 1, 2].flatMap(k => [
+          { time: 0, type: 'agent_spawn' as const, payload: { name: `alpha · S${k}`, parent: 'alpha', startedAt: T0 + k * 1000, task: 'x' } },
+          { time: 5, type: 'tool_call_start' as const, payload: { agent: `alpha · S${k}`, tool: 'Read', toolUseId: `u${k}`, args: 'a.ts', inputData: { path: 'a.ts' } } },
+          { time: 6, type: 'tool_call_end' as const, payload: { agent: `alpha · S${k}`, tool: 'Read', toolUseId: `u${k}`, result: 'ok' } },
+        ]),
+      ],
+    },
+  })
+  const cloud = scene.state.clouds![0]
+  assert.equal(cloud.members.length, 3)
+  const reach = cloud.members[0].pad
+  assert.ok(reach > 200 && reach < 240, `full reach of node + card ~222 (got ${reach})`)
+  // Neighbours sit closer than twice the full reach (the old packing), at the reduced packing radius + BLOB_GAP.
+  const ids = cloud.members.map(m => scene.state.agents.get(m.id)!)
+  const dists = [[0, 1], [0, 2], [1, 2]].map(([i, j]) => Math.hypot(ids[i].x - ids[j].x, ids[i].y - ids[j].y))
+  const min = Math.min(...dists)
+  assert.ok(min < 2 * reach - 100, `nodes at ${min}, old packing needed >= ${2 * reach}`)
+  assert.ok(Math.abs(min - (2 * packRadius(reach) + BLOB_GAP)) < 1e-6, `closest pair touches at the packing radius (${min})`)
+  // Zoomed in nothing is cut: every tool card still lies inside the halo.
+  const halo = scene.clusters.get(cloud.id)!
+  for (const t of scene.state.toolCalls.values()) assert.ok(Math.hypot(t.x - halo.x, t.y - halo.y) <= halo.r, 'card inside the halo')
+  // A tool card never lies on another node's disc at normal zoom.
+  for (const t of scene.state.toolCalls.values()) {
+    for (const a of ids) {
+      if (a.id === t.agentId) continue
+      const dx = Math.max(Math.abs(a.x - t.x) - 170 / 2, 0)
+      const dy = Math.max(Math.abs(a.y - t.y) - 36 / 2, 0)
+      assert.ok(Math.hypot(dx, dy) >= NODE.radiusSub, `card ${t.id} on node ${a.id}`)
+    }
+  }
+})
+
+test('fleet scene: unitReach is unchanged by the packing share (what the halo must cover)', () => {
+  const agent = { x: 0, y: 0, messageBubbles: [] } as unknown as Parameters<typeof unitReach>[0]
+  assert.equal(unitReach(agent, []), 70)
+  const tc = { x: 135, y: 0 } as unknown as Parameters<typeof unitReach>[1][number]
+  assert.ok(Math.abs(unitReach(agent, [tc]) - (135 + Math.hypot(170, 36) / 2)) < 1e-9)
 })
 
 test('fleet scene: pulses given to the scene reach the canvas state', () => {
