@@ -362,8 +362,9 @@ export function FleetTimelinePanel({ visible, instances, kanban, supermemory, se
           </span>
         </PanelHeader>
 
-        {/* Shorter on a phone (18vh) so the node map above keeps most of the screen. */}
-        <div className="overflow-auto min-h-0 flex-1 max-h-[max(18vh,120px)] sm:max-h-80">
+        {/* Shorter on a phone so the node map above keeps most of the screen: see .af-fleet-lanes (a landscape phone is wider than
+            `sm` but only 390 px high, and there the lanes are a few rows so the zoom buttons, the filter and Hide timeline fit above). */}
+        <div className="af-fleet-lanes overflow-auto min-h-0 flex-1">
           <div className="flex">
             <div style={{ width: LABEL_WIDTH, flexShrink: 0 }}>
               <div style={{ height: HEADER_HEIGHT }} />
