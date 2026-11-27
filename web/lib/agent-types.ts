@@ -86,6 +86,8 @@ export interface Agent {
   block?: BlockLifeView
   /** Fleet map, resource blocks: how many agents (profiles) touched the block in its window, and their names (names only). */
   badge?: { count: number; names: string[] }
+  /** Resource-anchor mode: the profile colour (hex) of a session node, drawn as a ring around it. */
+  tint?: string
 }
 
 export interface MessageBubble {
@@ -197,6 +199,11 @@ export interface Edge {
   /** resource edges (fleet map): linger and fade of the link in ms. Without them the fixed edge window applies. */
   lingerMs?: number
   fadeMs?: number
+  /**
+   * resource edges (fleet map, resource-anchor mode): scene ids of the session nodes that used the resource, busiest first.
+   * Without a halo the link leaves these nodes instead of the cloud.
+   */
+  sourceIds?: string[]
 }
 
 export interface Particle {

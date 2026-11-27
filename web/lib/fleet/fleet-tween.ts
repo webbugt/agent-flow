@@ -28,6 +28,8 @@ export interface Leg {
   to: Point
   /** Epoch ms (the Fleet clock) at which the leg started. */
   since: number
+  /** How long the leg takes, ms. Default {@link TWEEN_MS}; resource-anchor mode uses a longer one so a session drifts. */
+  ms?: number
 }
 
 export type Legs = ReadonlyMap<string, Leg>
@@ -36,7 +38,7 @@ const dist = (a: Point, b: Point) => Math.hypot(a.x - b.x, a.y - b.y)
 
 /** Progress 0..1 of a leg at `now`; a `now` before the start counts as the start. */
 function progressOf(leg: Leg, now: number): number {
-  const p = (now - leg.since) / TWEEN_MS
+  const p = (now - leg.since) / (leg.ms ?? TWEEN_MS)
   if (!(p > 0)) return 0 // NaN or before the start
   return p >= 1 ? 1 : p
 }
@@ -66,6 +68,8 @@ export function retarget(
   targets: ReadonlyMap<string, Point>,
   now: number,
   hold?: ReadonlyMap<string, unknown>,
+  /** Length of a new leg, ms (default {@link TWEEN_MS}). */
+  durationMs?: number,
 ): Map<string, Leg> {
   const out = new Map<string, Leg>()
   for (const [id, to] of targets) {
@@ -74,7 +78,7 @@ export function retarget(
     const old = prev?.get(id)
     if (old && dist(old.to, to) <= TWEEN_EPSILON && !legDone(old, now)) { out.set(id, old); continue }
     if (dist(at, to) <= TWEEN_EPSILON) continue
-    out.set(id, { from: { x: at.x, y: at.y }, to: { x: to.x, y: to.y }, since: now })
+    out.set(id, { from: { x: at.x, y: at.y }, to: { x: to.x, y: to.y }, since: now, ...(durationMs !== undefined ? { ms: durationMs } : {}) })
   }
   return out
 }

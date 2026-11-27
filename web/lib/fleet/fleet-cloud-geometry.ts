@@ -23,6 +23,11 @@ export interface CloudView {
   color: string
   status: FleetInstanceStatus
   members: CloudMember[]
+  /**
+   * Resource-anchor mode: the cloud only exists for the data (its members, the links of the profile). No halo and no
+   * caption are drawn: the profile shows as the colour of its session nodes.
+   */
+  anchor?: boolean
 }
 
 export interface CloudGeometry { x: number; y: number; r: number }

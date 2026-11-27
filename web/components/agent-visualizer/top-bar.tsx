@@ -111,6 +111,9 @@ export interface TopBarProps {
   showSessionDetail: boolean
   showTimeline: boolean
   showFleet: boolean
+  /** Resource-anchor mode (options.anchorMode) and its toggle; works in the single and the fleet view. */
+  anchorMode: boolean
+  onToggleAnchorMode: () => void
   isMuted: boolean
   onTogglePanel: (panel: 'files' | 'transcript' | 'cost' | 'session') => void
   onToggleTimeline: () => void
@@ -125,8 +128,8 @@ export const TopBar = memo(function TopBar({
   onSelectSession, onCloseSession,
   isVSCode, connectionStatus,
   agentCount, totalTokens, costText, projectOverride, projectOverrideTitle, onOpenCostSettings, showOptions, onToggleOptions,
-  showFileAttention, showTranscript, showCostOverlay, showSessionDetail, showTimeline, showFleet, isMuted,
-  onTogglePanel, onToggleTimeline, onToggleFleet, onToggleMute, onToggleScreensaver,
+  showFileAttention, showTranscript, showCostOverlay, showSessionDetail, showTimeline, showFleet, anchorMode, isMuted,
+  onTogglePanel, onToggleTimeline, onToggleFleet, onToggleAnchorMode, onToggleMute, onToggleScreensaver,
 }: TopBarProps) {
   // Re-render when the unit toggle or the loaded config (currency symbol) changes
   useSyncExternalStore(subscribeOverlayUnit, overlayUnitVersion, overlayUnitVersion)
@@ -223,6 +226,9 @@ export const TopBar = memo(function TopBar({
         {/* Independent toggles */}
         <ToggleButton active={showTimeline} onClick={onToggleTimeline}>Timeline</ToggleButton>
         <ToggleButton active={showFleet} onClick={onToggleFleet} testId="fleet-toggle">Fleet</ToggleButton>
+        <ToggleButton active={anchorMode} onClick={onToggleAnchorMode} testId="anchor-toggle">
+          <span title="Resource-anchor mode: resources are the anchors, sessions drift to the resource they use (no profile halo)" aria-label="Resource-anchor mode">Anchors</span>
+        </ToggleButton>
         {/* The bar is only shown while the screensaver is off, so this button only ever turns it on. */}
         <ToggleButton active={false} onClick={onToggleScreensaver} testId="screensaver-toggle">
           <span title="Hide all UI (S). Any key or click brings it back." aria-label="Screensaver">Screensaver</span>

@@ -46,6 +46,20 @@ export const DEFAULT_FADE_SECONDS = 15
 export const MAX_DESELECTED_IDS = 2000
 export const MAX_DESELECTED_ID_LENGTH = 300
 
+/** Resource-anchor mode: the default profile palette (hex codes; separate from the fixed resource colours, see fleet-colors.ts). */
+export const DEFAULT_PROFILE_PALETTE: readonly string[] = [
+  '#4da3ff', '#35d0c9', '#a3e635', '#f472b6', '#f97316', '#818cf8', '#94a3b8', '#7dd3fc',
+]
+/** Palette size bounds, entries of the per-profile colour map, and the longest profile name kept in it. */
+export const MAX_PALETTE_COLORS = 32
+export const MAX_PROFILE_COLORS = 200
+export const MAX_PROFILE_NAME_LENGTH = 60
+const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/
+
+export function isHexColor(v: unknown): v is string {
+  return typeof v === 'string' && HEX_COLOR_RE.test(v)
+}
+
 /** The unit the cost header toggle can show. */
 export const COST_UNITS = ['money', 'kwh', 'tokens'] as const
 export type CostUnit = (typeof COST_UNITS)[number]
@@ -75,6 +89,12 @@ export interface AgentFlowOptions {
   costUnit: CostUnitChoice | null
   /** Ids of fleet agents/lanes hidden by the user (deselected). Default none. Was `agent-flow:fleet-selection:v1`. */
   fleetDeselected: string[]
+  /** Resource-anchor mode on (resources are the anchors, sessions drift to the resource they use). Default off: the cloud layout. */
+  anchorMode: boolean
+  /** Resource-anchor mode: profile colour = palette[hash(profile name) mod palette.length]. Hex codes `#rrggbb`. */
+  profilePalette: string[]
+  /** Resource-anchor mode: per-profile colour override, profile name (lower case) to hex. Beats the palette. */
+  profileColors: Record<string, string>
   /** True once the old localStorage keys were copied in (options-migration.ts). Not editable in the panel. */
   legacyMigrated: boolean
 }
@@ -94,6 +114,9 @@ export function defaultOptions(): AgentFlowOptions {
     fleetTimelineVisible: true,
     costUnit: null,
     fleetDeselected: [],
+    anchorMode: false,
+    profilePalette: [...DEFAULT_PROFILE_PALETTE],
+    profileColors: {},
     legacyMigrated: false,
   }
 }
@@ -107,6 +130,11 @@ export interface OptionsPatch {
   /** null = follow the config default again. */
   costUnit?: unknown
   fleetDeselected?: unknown
+  anchorMode?: unknown
+  /** The whole palette (a list of `#rrggbb`). */
+  profilePalette?: unknown
+  /** The whole override map (profile name to `#rrggbb`). */
+  profileColors?: unknown
 }
 
 export interface ValidationResult {
@@ -142,6 +170,30 @@ function checkIdList(v: unknown): string | null {
     return `must hold non-empty strings of at most ${MAX_DESELECTED_ID_LENGTH} characters`
   }
   return null
+}
+
+function checkPalette(v: unknown): string | null {
+  if (!Array.isArray(v)) return 'must be a list'
+  if (v.length < 1) return 'must have at least one colour'
+  if (v.length > MAX_PALETTE_COLORS) return `must have at most ${MAX_PALETTE_COLORS} colours`
+  if (!v.every(isHexColor)) return 'must hold colours like #aabbcc'
+  return null
+}
+
+function checkProfileColors(v: unknown): string | null {
+  if (!isRecord(v)) return 'must be an object'
+  const entries = Object.entries(v)
+  if (entries.length > MAX_PROFILE_COLORS) return `must have at most ${MAX_PROFILE_COLORS} entries`
+  if (!entries.every(([k]) => k.trim() !== '' && k.length <= MAX_PROFILE_NAME_LENGTH)) return `names must be 1 to ${MAX_PROFILE_NAME_LENGTH} characters`
+  if (!entries.every(([, c]) => isHexColor(c))) return 'must hold colours like #aabbcc'
+  return null
+}
+
+/** Profile colours keyed by trimmed lower-case name, hex in lower case. */
+function cleanProfileColors(v: Record<string, unknown>): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const [k, c] of Object.entries(v)) out[k.trim().toLowerCase()] = (c as string).toLowerCase()
+  return out
 }
 
 /** De-duplicated copy, first-seen order. */
@@ -219,6 +271,20 @@ export function validateOptions(input: unknown): ValidationResult {
     if (err) errors.push(`fleetDeselected ${err}`)
     else options.fleetDeselected = uniqueIds(input.fleetDeselected as string[])
   }
+  if (input.anchorMode !== undefined) {
+    if (typeof input.anchorMode !== 'boolean') errors.push('anchorMode must be true or false')
+    else options.anchorMode = input.anchorMode
+  }
+  if (input.profilePalette !== undefined) {
+    const err = checkPalette(input.profilePalette)
+    if (err) errors.push(`profilePalette ${err}`)
+    else options.profilePalette = (input.profilePalette as string[]).map(c => c.toLowerCase())
+  }
+  if (input.profileColors !== undefined) {
+    const err = checkProfileColors(input.profileColors)
+    if (err) errors.push(`profileColors ${err}`)
+    else options.profileColors = cleanProfileColors(input.profileColors as Record<string, unknown>)
+  }
   if (input.legacyMigrated !== undefined) {
     if (typeof input.legacyMigrated !== 'boolean') errors.push('legacyMigrated must be true or false')
     else options.legacyMigrated = input.legacyMigrated
@@ -288,6 +354,9 @@ export function applyOptionsPatch(current: AgentFlowOptions, patch: OptionsPatch
     fleetTimelineVisible: current.fleetTimelineVisible,
     costUnit: current.costUnit,
     fleetDeselected: current.fleetDeselected,
+    anchorMode: current.anchorMode,
+    profilePalette: current.profilePalette,
+    profileColors: current.profileColors,
     legacyMigrated: current.legacyMigrated,
   }
   if (patch.lingerSeconds !== undefined) {
@@ -345,6 +414,23 @@ export function applyOptionsPatch(current: AgentFlowOptions, patch: OptionsPatch
       const ids = uniqueIds(patch.fleetDeselected as string[])
       if (!sameList(ids, current.fleetDeselected)) next.fleetDeselected = ids
     }
+  }
+  if (patch.anchorMode !== undefined) {
+    if (typeof patch.anchorMode !== 'boolean') errors.push('anchorMode must be true or false')
+    else next.anchorMode = patch.anchorMode
+  }
+  if (patch.profilePalette !== undefined) {
+    const err = checkPalette(patch.profilePalette)
+    if (err) errors.push(`profilePalette ${err}`)
+    else {
+      const colours = (patch.profilePalette as string[]).map(c => c.toLowerCase())
+      if (!sameList(colours, current.profilePalette)) next.profilePalette = colours
+    }
+  }
+  if (patch.profileColors !== undefined) {
+    const err = checkProfileColors(patch.profileColors)
+    if (err) errors.push(`profileColors ${err}`)
+    else next.profileColors = cleanProfileColors(patch.profileColors as Record<string, unknown>)
   }
   return errors.length > 0 ? { ok: false, errors } : { ok: true, options: next }
 }

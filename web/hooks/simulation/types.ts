@@ -41,6 +41,12 @@ export interface SimulationState {
   pulses?: FleetPulse[]
   /** Fleet map only: entry/exit stamps by scene id (nodes, clouds), see lib/fleet/fleet-presence. Absent = everything steady. */
   presence?: ReadonlyMap<string, PresenceStamp>
+  /**
+   * Resource-anchor mode (fleet map and single view): related nodes of every node, symmetric (see lib/fleet/anchor-mode).
+   * Present = the frame is drawn in anchor mode: hovering a node keeps it and its related nodes at full opacity and
+   * drops every other node to 80%. Absent = default layout, no hover dimming.
+   */
+  relations?: ReadonlyMap<string, ReadonlySet<string>>
 }
 
 /** Create an empty simulation state, optionally preserving specific fields */

@@ -9,7 +9,10 @@ import {
   KIND_LABELS, fadeHint, hiddenAgentsText, lingerHint, parseFadeInput, parseLingerInput, resourceBlockDefaultsPatch,
   type SecondsInput,
 } from '@/lib/fleet/options-panel-model'
-import { BLOCK_VIEWS, RESOURCE_KINDS, type BlockView, type OptionsPatch } from '@/lib/fleet/options-registry'
+import {
+  BLOCK_VIEWS, DEFAULT_PROFILE_PALETTE, MAX_PALETTE_COLORS, RESOURCE_KINDS, type BlockView, type OptionsPatch,
+} from '@/lib/fleet/options-registry'
+import { profileColor, profileNameKey } from '@/lib/fleet/anchor-mode'
 import { resetOptions, updateOptions } from '@/lib/options-store'
 import { useOptions } from '@/hooks/use-options'
 import type { useFleetSelection } from '@/hooks/use-fleet-selection'
@@ -85,13 +88,15 @@ export interface OptionsPanelProps {
   /** The fleet selection (same value the fleet timeline checkboxes edit). */
   selection: ReturnType<typeof useFleetSelection>
   onClose: () => void
+  /** Profile names known to the fleet (resource-anchor mode lists them to set a colour per profile). */
+  profiles?: readonly string[]
 }
 
 /**
  * The options panel: one place for the client-side settings of Agent Flow. They live in the browser only
  * (localStorage key agentflow.options.v1); no server config file, no restart. Changes apply at once.
  */
-export function OptionsPanel({ selection, onClose }: OptionsPanelProps) {
+export function OptionsPanel({ selection, onClose, profiles = [] }: OptionsPanelProps) {
   const options = useOptions()
   const unitChoice: OverlayUnit | '' = getOverlayOverride() ?? ''
 
@@ -206,6 +211,76 @@ export function OptionsPanel({ selection, onClose }: OptionsPanelProps) {
             Show all
           </button>
         </div>
+      </Section>
+
+      <Section
+        title="Resource-anchor mode"
+        note="Resources are the anchors of the map: those used together sit close, and a session drifts to the resource it uses. Profiles show as the colour of their session nodes. Off keeps the cloud layout."
+      >
+        <Check
+          checked={options.anchorMode}
+          onChange={v => apply({ anchorMode: v })}
+          label="Resource-anchor mode"
+          testId="options-anchor-mode"
+        />
+        <div style={{ ...hintStyle, margin: '10px 0 4px' }}>
+          Profile colour = palette[hash(profile name) mod palette size]. Two profiles can share a colour; set one below to tell them apart.
+        </div>
+        <div className="flex flex-wrap items-center gap-2" data-testid="options-palette">
+          {options.profilePalette.map((c, i) => (
+            <span key={i} className="inline-flex items-center gap-1">
+              <input
+                type="color" value={c} aria-label={`Palette colour ${i + 1}`} data-testid={`options-palette-${i}`}
+                onChange={e => apply({ profilePalette: options.profilePalette.map((x, j) => (j === i ? e.target.value : x)) })}
+                style={{ width: 24, height: 20, padding: 0, background: 'none', border: `1px solid ${COLORS.glassBorder}`, borderRadius: 3 }}
+              />
+              <button
+                type="button" aria-label={`Remove palette colour ${i + 1}`} data-testid={`options-palette-remove-${i}`}
+                disabled={options.profilePalette.length <= 1}
+                onClick={() => apply({ profilePalette: options.profilePalette.filter((_, j) => j !== i) })}
+                style={{ color: COLORS.textMuted, fontSize: 10, opacity: options.profilePalette.length <= 1 ? 0.4 : 1 }}
+              >✕</button>
+            </span>
+          ))}
+        </div>
+        <div className="flex items-center gap-2" style={{ marginTop: 6 }}>
+          <button
+            type="button" data-testid="options-palette-add" style={smallButton}
+            disabled={options.profilePalette.length >= MAX_PALETTE_COLORS}
+            onClick={() => apply({ profilePalette: [...options.profilePalette, '#ffffff'] })}
+          >Add colour</button>
+          <button
+            type="button" data-testid="options-palette-reset" style={smallButton}
+            onClick={() => apply({ profilePalette: [...DEFAULT_PROFILE_PALETTE], profileColors: {} })}
+          >Reset palette</button>
+        </div>
+        {profiles.length > 0 && (
+          <div style={{ marginTop: 10 }} data-testid="options-profile-colors">
+            <div style={{ ...hintStyle, marginBottom: 4 }}>Profiles (a picked colour overrides the palette):</div>
+            {profiles.map(name => {
+              const key = profileNameKey(name)
+              const own = options.profileColors[key]
+              const colour = profileColor(name, options.profilePalette, options.profileColors)
+              return (
+                <div key={name} className="flex items-center gap-2" style={{ padding: '2px 0' }}>
+                  <span style={{ width: 10, height: 10, borderRadius: 5, background: colour, display: 'inline-block' }} />
+                  <span>{name}</span>
+                  <span className="ml-auto inline-flex items-center gap-1">
+                    <input
+                      type="color" value={colour} aria-label={`Colour of ${name}`} data-testid={`options-profile-color-${key}`}
+                      onChange={e => apply({ profileColors: { ...options.profileColors, [key]: e.target.value } })}
+                      style={{ width: 24, height: 20, padding: 0, background: 'none', border: `1px solid ${COLORS.glassBorder}`, borderRadius: 3 }}
+                    />
+                    <button
+                      type="button" disabled={!own} data-testid={`options-profile-color-clear-${key}`} style={{ ...smallButton, opacity: own ? 1 : 0.4 }}
+                      onClick={() => { const next = { ...options.profileColors }; delete next[key]; apply({ profileColors: next }) }}
+                    >auto</button>
+                  </span>
+                </div>
+              )
+            })}
+          </div>
+        )}
       </Section>
 
       <Section title="Sound">

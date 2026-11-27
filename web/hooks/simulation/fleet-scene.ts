@@ -41,6 +41,11 @@ import {
 import { cloudIdOf, type FleetGraph } from '@/lib/fleet/fleet-graph'
 import { HALO_PAD, type CloudView } from '@/lib/fleet/fleet-cloud-geometry'
 import { placeBlob, placeResources, type BlobUnit, type PlacementResource } from '@/lib/fleet/fleet-placement'
+import {
+  buildRelations, coUseWeights, explicitLinkPairs, layoutWeights, placeAnchorSessions, placeAnchors, profileColor,
+  type AnchorSession, type UseItem,
+} from '@/lib/fleet/anchor-mode'
+import { DEFAULT_PROFILE_PALETTE } from '@/lib/fleet/options-registry'
 import type { FleetPulse } from '@/lib/fleet/fleet-pulses'
 import { createEmptyState, type SimulationState } from './types'
 import { processEvent, type ProcessEventContext } from './process-event'
@@ -143,6 +148,17 @@ export interface FleetSceneInput {
   moved?: ReadonlyMap<string, { x: number; y: number }>
   /** Dots to draw along the links (from a FleetPulseTracker). */
   pulses?: readonly FleetPulse[]
+  /**
+   * `cloud` (default): one cloud per profile on a grid, resources near the clouds they link to.
+   * `anchor` (resource-anchor mode): resources are the anchors, laid out by co-use; sessions sit beside the resource
+   * they use now; no halo, no grouping; profile colour from the palette.
+   */
+  layout?: 'cloud' | 'anchor'
+  /** Anchor mode: profile palette (hex codes) and per-profile overrides (lower-case name to hex). */
+  palette?: readonly string[]
+  profileColors?: Readonly<Record<string, string>>
+  /** Anchor mode: epoch ms of "now", to tell which resource a session is using now. Default: the wall clock. */
+  now?: number
 }
 
 export interface FleetScene {
@@ -269,6 +285,7 @@ export function buildFleetScene(input: FleetSceneInput): FleetScene {
       })
     }
   }
+  if (input.layout === 'anchor') return buildAnchorScene(input, byIdentity)
   // Clouds in profile-name order; units in start order, so a new session joins the rim of its blob.
   const identities = [...byIdentity.keys()].sort((a, b) => a.localeCompare(b))
   const cloudInfo = identities.map(identity => {
@@ -400,6 +417,162 @@ export function buildFleetScene(input: FleetSceneInput): FleetScene {
   const state = createEmptyState({
     agents, toolCalls, edges, keepFinished: true, isPlaying: false, currentTime, maxTimeReached: currentTime,
     clouds: cloudViews, pulses: input.pulses ? [...input.pulses] : [],
+  })
+  return { state, sessionOfAgent, clusters: centers, resourceTargets }
+}
+
+/**
+ * Resource-anchor layout (see lib/fleet/anchor-mode.ts). The same units (session nodes with their satellites) as the
+ * cloud layout, but placed by what they use:
+ *   - resources are the anchors, laid out by co-use of session nodes plus explicit links (a board and the memory of its project);
+ *   - a session node sits beside the resource it uses now, else among the ones it used before;
+ *   - no halo and no grouping: a cloud stays in the data (links, ghosts) with `anchor: true` and is not drawn;
+ *   - the profile shows as the colour of its nodes (palette[hash(name) mod length], or the override).
+ * Which node used a resource comes from the link's `sessions` (the attribution by time of fleet-graph); a link without
+ * one is attributed to the profile's newest session node, so the resource still has a user.
+ */
+function buildAnchorScene(
+  input: FleetSceneInput, byIdentity: Map<string, { clusters: Cluster[]; units: Unit[] }>,
+): FleetScene {
+  const { sessions, graph } = input
+  const now = input.now ?? Date.now()
+  const palette = input.palette ?? DEFAULT_PROFILE_PALETTE
+  const ns = (sid: string, id: string) => sceneId(sid, id)
+  const identities = [...byIdentity.keys()].sort((a, b) => a.localeCompare(b))
+  const graphCloud = new Map(graph.clouds.map(c => [c.id, c]))
+
+  // Session nodes of each profile, newest first (the fallback user of a resource), and the units by scene id.
+  interface AnchorUnit { id: string; unit: Unit; identity: string }
+  const unitsById = new Map<string, AnchorUnit>()
+  const nodesOfCloud = new Map<string, string[]>()
+  for (const identity of identities) {
+    const group = byIdentity.get(identity)!
+    group.units.sort((a, b) => b.start - a.start || nodeInstanceId(b.sid, b.agent.id).localeCompare(nodeInstanceId(a.sid, a.agent.id)))
+    const ids: string[] = []
+    for (const unit of group.units) {
+      const id = ns(unit.sid, unit.agent.id)
+      unitsById.set(id, { id, unit, identity })
+      ids.push(id)
+    }
+    nodesOfCloud.set(cloudIdOf(identity), ids)
+  }
+
+  // 1. Who used what: per session node and resource, how often and when last.
+  const resources = graph.nodes.filter(nd => nd.kind === 'kanban' || nd.kind === 'supermemory' || nd.kind === 'bash' || nd.kind === 'subsystem')
+  const resourceIds = new Set(resources.map(r => r.id))
+  const uses: UseItem[] = []
+  const usage = new Map<string, Map<string, { weight: number; lastAt: number }>>()
+  const sourcesOfEdge = new Map<string, string[]>()
+  const note = (unit: string, resource: string, weight: number, at: number) => {
+    uses.push({ unit, resource, weight })
+    const m = usage.get(unit) ?? new Map<string, { weight: number; lastAt: number }>()
+    const prev = m.get(resource)
+    m.set(resource, { weight: (prev?.weight ?? 0) + weight, lastAt: Math.max(prev?.lastAt ?? 0, at) })
+    usage.set(unit, m)
+  }
+  for (const e of graph.edges) {
+    const nodes = nodesOfCloud.get(e.from)
+    if (!nodes || !resourceIds.has(e.to)) continue
+    const known = e.sessions.filter(s => unitsById.has(s.sessionId))
+    if (known.length > 0) {
+      sourcesOfEdge.set(e.id, known.map(s => s.sessionId))
+      for (const s of known) {
+        const at = e.events.reduce((m, ev) => (ev.sessionId === s.sessionId ? Math.max(m, ev.at) : m), 0)
+        note(s.sessionId, e.to, s.weight, at || e.lastUsedAt)
+      }
+    } else {
+      sourcesOfEdge.set(e.id, [nodes[0]])
+      note(nodes[0], e.to, Math.max(e.weight, 1), e.lastUsedAt)
+    }
+  }
+
+  // 2. Anchors by co-use and explicit links; session nodes beside the resource they use.
+  const weights = layoutWeights(coUseWeights(uses), explicitLinkPairs(resources.map(r => ({ id: r.id, kind: r.kind, label: r.label }))))
+  const anchors = placeAnchors(resources.map(r => r.id), weights)
+  const anchorSessions: AnchorSession[] = [...unitsById.values()].map(u => ({
+    id: u.id, radius: u.unit.radius,
+    usage: [...(usage.get(u.id) ?? [])].map(([resource, v]) => ({ resource, weight: v.weight, lastAt: v.lastAt })),
+  }))
+  const spots = placeAnchorSessions(anchorSessions, anchors, { now })
+
+  // 3. The scene: session nodes (tinted by profile), their satellites, the resource nodes.
+  const agents = new Map<string, Agent>()
+  const toolCalls = new Map<string, ToolCallNode>()
+  const edges: Edge[] = []
+  const sessionOfAgent = new Map<string, string>()
+  const centers = new Map<string, { x: number; y: number; r: number; identity: string }>()
+  const cloudViews: CloudView[] = []
+  for (const identity of identities) {
+    const group = byIdentity.get(identity)!
+    const cloudId = cloudIdOf(identity)
+    const color = profileColor(identity, palette, input.profileColors)
+    const members: CloudView['members'] = []
+    const pts: Array<{ x: number; y: number; pad: number }> = []
+    for (const unit of group.units) {
+      const id = ns(unit.sid, unit.agent.id)
+      const at = spots.get(id)!
+      const dx = at.x - unit.agent.x
+      const dy = at.y - unit.agent.y
+      const cluster = group.clusters.find(c => c.session.id === unit.sid)!
+      agents.set(id, {
+        ...unit.agent, id,
+        parentId: unit.agent.parentId && cluster.agents.some(p => p.id === unit.agent.parentId) ? ns(unit.sid, unit.agent.parentId) : null,
+        x: at.x, y: at.y, sessionId: unit.sid, pinned: true, tint: color,
+      })
+      sessionOfAgent.set(id, unit.sid)
+      for (const tc of unit.toolCalls) {
+        const tid = ns(unit.sid, tc.id)
+        toolCalls.set(tid, { ...tc, id: tid, agentId: id, x: tc.x + dx, y: tc.y + dy })
+      }
+      members.push({ id, pad: unit.reach })
+      pts.push({ x: at.x, y: at.y, pad: unit.reach })
+    }
+    for (const c of group.clusters) {
+      for (const e of c.edges) edges.push({ ...e, id: ns(c.session.id, e.id), from: ns(c.session.id, e.from), to: ns(c.session.id, e.to) })
+    }
+    if (pts.length > 0) {
+      const x = pts.reduce((s, p) => s + p.x, 0) / pts.length
+      const y = pts.reduce((s, p) => s + p.y, 0) / pts.length
+      centers.set(cloudId, { x, y, r: pts.reduce((m, p) => Math.max(m, Math.hypot(p.x - x, p.y - y) + p.pad), 0) + HALO_PAD, identity })
+    }
+    const gc = graphCloud.get(cloudId)
+    cloudViews.push({ id: cloudId, label: identity, color, status: gc?.status ?? 'idle', members, anchor: true })
+  }
+
+  const resourceTargets = new Map<string, { x: number; y: number }>()
+  for (const node of resources) {
+    const p = input.moved?.get(node.id) ?? anchors.get(node.id)!
+    resourceTargets.set(node.id, { x: p.x, y: p.y })
+    agents.set(node.id, resourceAgent(node, p.x, p.y))
+  }
+  for (const e of graph.edges) {
+    if (!centers.has(e.from) || !agents.has(e.to)) continue
+    edges.push({
+      id: e.id, from: e.from, to: e.to, type: 'resource', opacity: 1, fromCloud: true, lastUsedAt: e.lastUsedAt,
+      ...(e.life ? { lingerMs: e.life.lingerMs, fadeMs: e.life.fadeMs } : {}),
+      color: e.kind === 'kanban' ? KANBAN_COLOR : e.kind === 'bash' ? BASH_COLOR : e.kind === 'subsystem' ? SUBSYSTEM_COLOR : SUPERMEMORY_COLOR,
+      sourceIds: sourcesOfEdge.get(e.id) ?? [],
+    })
+  }
+
+  // Dragged nodes keep their place; their satellites keep orbiting them.
+  for (const [id, pos] of input.moved ?? []) {
+    const a = agents.get(id)
+    if (!a) continue
+    const ddx = pos.x - a.x
+    const ddy = pos.y - a.y
+    agents.set(id, { ...a, x: pos.x, y: pos.y })
+    for (const [tid, tc] of toolCalls) if (tc.agentId === id) toolCalls.set(tid, { ...tc, x: tc.x + ddx, y: tc.y + ddy })
+  }
+
+  let currentTime = 0
+  for (const s of sessions) currentTime = Math.max(currentTime, input.stateOf(s.id).currentTime)
+  const relations = buildRelations({ uses, nodesOf: new Map(), weights })
+  // Resources without any use still get an (empty) entry, so a hover on them finds nothing related instead of nothing known.
+  for (const r of resources) if (!relations.has(r.id)) relations.set(r.id, new Set())
+  const state = createEmptyState({
+    agents, toolCalls, edges, keepFinished: true, isPlaying: false, currentTime, maxTimeReached: currentTime,
+    clouds: cloudViews, pulses: input.pulses ? [...input.pulses] : [], relations,
   })
   return { state, sessionOfAgent, clusters: centers, resourceTargets }
 }

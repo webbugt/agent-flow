@@ -26,6 +26,7 @@ import { createDemoResources, addDemoEvent, addDemoNodes, type DemoEventKind } f
 import { mapInsetBottom } from "@/lib/fleet/fleet-timeline-pref"
 import { getOptions, updateOptions } from "@/lib/options-store"
 import { useOptions } from "@/hooks/use-options"
+import { useSingleAnchor } from "@/hooks/use-single-anchor"
 import { OptionsPanel } from "./options-panel"
 import { useFleetSelection } from "@/hooks/use-fleet-selection"
 import { useFleetActivityFilter } from "@/hooks/use-fleet-activity-filter"
@@ -109,6 +110,11 @@ export function AgentVisualizer() {
   // Fleet timeline panel: shown by default; the choice is kept in the options registry (read after mount, so SSR
   // matches), so the options panel and this toggle edit the same value.
   const fleetTimelineVisible = useOptions().fleetTimelineVisible
+  // Resource-anchor mode: kept in the options registry too (persisted per browser), so the header toggle and the options panel edit one value.
+  const anchorMode = useOptions().anchorMode
+  const toggleAnchorMode = useCallback(() => {
+    updateOptions({ anchorMode: !getOptions().anchorMode })
+  }, [])
   const toggleFleetTimeline = useCallback(() => {
     updateOptions({ fleetTimelineVisible: !getOptions().fleetTimelineVisible })
   }, [])
@@ -200,6 +206,12 @@ export function AgentVisualizer() {
     const s = bridgeSessions.find(x => x.id === bridge.selectedSessionId)
     return s ? { id: s.id, label: s.label } : null
   }, [bridgeSessions, bridge.selectedSessionId])
+  // Resource-anchor mode in the single view (the fleet map has its own scene): the frame the canvas draws.
+  // Live sessions only: the demo (mock) scenario has no resource events.
+  const singleAnchorOn = anchorMode && !showFleet && !bridge.useMockData
+  const singleAnchor = useSingleAnchor({
+    enabled: singleAnchorOn, session: openBlockSession, eventsOf: getSessionEvents, sourceRef: frameRef, updateAgentPosition,
+  })
   // Fleet on: nodes deselected in the fleet drop out of the tab strip (the open tab always stays).
   // Fleet off: the single-profile tab strip is unchanged.
   const visibleSessions = useMemo(
@@ -508,7 +520,7 @@ export function AgentVisualizer() {
 
       {/* Canvas fills everything */}
       <AgentCanvas
-        simulationRef={frameRef}
+        simulationRef={singleAnchor.frameRef}
         selectedAgentId={selection.selectedAgentId}
         hoveredAgentId={selection.hoveredAgentId}
         showStats={showStats && !sv}
@@ -517,7 +529,7 @@ export function AgentVisualizer() {
         pauseAutoFit={selection.contextMenu !== null}
         onAgentClick={selection.handleAgentClick}
         onAgentHover={selection.setHoveredAgentId}
-        onAgentDrag={updateAgentPosition}
+        onAgentDrag={singleAnchor.onAgentDrag}
         onContextMenu={selection.handleContextMenu}
         onToolCallClick={selection.handleToolCallClick}
         selectedToolCallId={selection.selectedToolCallId}
@@ -714,6 +726,8 @@ export function AgentVisualizer() {
         showSessionDetail={showSessionDetail}
         showTimeline={showTimeline}
         showFleet={showFleet}
+        anchorMode={anchorMode}
+        onToggleAnchorMode={toggleAnchorMode}
         isMuted={isMuted}
         onTogglePanel={toggleExclusivePanel}
         onToggleTimeline={() => { setShowTimeline(prev => !prev); setShowFleet(false) }}
@@ -729,7 +743,7 @@ export function AgentVisualizer() {
       {!sv && <LimitsPanelHost sessionIds={limitSessionIds} eventsOf={getSessionEvents} />}
 
       {/* Options panel: linger/fade/show per resource kind, sound, timeline, cost unit, hidden fleet agents (browser only, no server config) */}
-      {showOptions && <OptionsPanel selection={fleetSelection} onClose={() => setShowOptions(false)} />}
+      {showOptions && <OptionsPanel selection={fleetSelection} profiles={[...new Set(fleetInstances.map(i => i.identity))].sort()} onClose={() => setShowOptions(false)} />}
 
       {/* Cost settings drawer: prices per provider/model, currency and FX (writes the user costs.json) */}
       {!sv && showCostSettings && (

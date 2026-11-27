@@ -7,6 +7,7 @@ import type { FleetGraph } from '@/lib/fleet/fleet-graph'
 import { FleetPulseTracker } from '@/lib/fleet/fleet-pulses'
 import { retarget, type Legs } from '@/lib/fleet/fleet-tween'
 import { fleetNow } from '@/lib/fleet/fleet-clock'
+import { DRIFT_MS } from '@/lib/fleet/anchor-mode'
 import { buildFleetScene, FleetReplay, type FleetScene } from './simulation/fleet-scene'
 import { ghostIdsOf, newFleetPresenceTracker, withGhosts } from './simulation/fleet-presence-scene'
 import { positionsOf, tweenedFrame } from './simulation/fleet-tween-scene'
@@ -25,6 +26,11 @@ export interface UseFleetSceneOptions {
   tick: number
   /** Shared replay: the session detail panel reads the same settled states the map draws. */
   replay?: FleetReplay
+  /** Resource-anchor mode (options): resources are the anchors, sessions drift to the resource they use. Default off. */
+  anchorMode?: boolean
+  /** Resource-anchor mode: profile palette and per-profile overrides (options). */
+  palette?: readonly string[]
+  profileColors?: Readonly<Record<string, string>>
 }
 
 const EMPTY_SCENE: FleetScene = {
@@ -40,7 +46,7 @@ const EMPTY_SCENE: FleetScene = {
  * targets) and `frameRef`, the same kind of ref the single-session canvas draws from.
  */
 export function useFleetScene(opts: UseFleetSceneOptions) {
-  const { visible, sessions, eventsOf, instances, selection, graph, columns, tick, replay: sharedReplay } = opts
+  const { visible, sessions, eventsOf, instances, selection, graph, columns, tick, replay: sharedReplay, anchorMode, palette, profileColors } = opts
   const ownReplayRef = useRef<FleetReplay | null>(null)
   if (!ownReplayRef.current) ownReplayRef.current = new FleetReplay()
   const replayRef = { current: sharedReplay ?? ownReplayRef.current }
@@ -73,13 +79,14 @@ export function useFleetScene(opts: UseFleetSceneOptions) {
     const fresh = buildFleetScene({
       sessions, stateOf: id => replay.advance(id, eventsOf(id)), instances, selection, graph, columns,
       moved: movedRef.current, pulses,
+      ...(anchorMode ? { layout: 'anchor' as const, palette, profileColors, now: fleetNow() } : {}),
     })
     const tracker = presenceRef.current as NonNullable<typeof presenceRef.current>
     // Ghosts follow the centre of their cloud when it moves (a cloud entering or leaving shifts the grid).
     return { scene: fresh, frame: withGhosts(fresh.state, tracker, fleetNow(), fresh.clusters) }
     // tick: the event buffers are refs, so React does not see new events by itself
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visible, sessions, eventsOf, instances, selection, graph, columns, tick, ghostTick])
+  }, [visible, sessions, eventsOf, instances, selection, graph, columns, tick, ghostTick, anchorMode, palette, profileColors])
   const scene = built.scene
   // Only when the scene was rebuilt: a re-render must not undo a drag that moved the frame.
   const lastSceneRef = useRef<FleetScene | null>(null)
@@ -93,7 +100,7 @@ export function useFleetScene(opts: UseFleetSceneOptions) {
     // user dragged has no leg (a drag applies at once). Satellites keep their offset from their node.
     const now = fleetNow()
     targetRef.current = built.frame
-    legsRef.current = retarget(legsRef.current, positionsOf(frameRef.current), positionsOf(built.frame), now, movedRef.current)
+    legsRef.current = retarget(legsRef.current, positionsOf(frameRef.current), positionsOf(built.frame), now, movedRef.current, anchorMode ? DRIFT_MS : undefined)
     frameRef.current = tweenedFrame(built.frame, legsRef.current, now, movedRef.current).frame
   }
 

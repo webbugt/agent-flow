@@ -151,6 +151,7 @@ export function FleetMap({
 
   const { scene, frameRef, moveNode } = useFleetScene({
     visible, sessions, eventsOf, instances, selection, graph, columns, tick, replay,
+    anchorMode: options.anchorMode, palette: options.profilePalette, profileColors: options.profileColors,
   })
 
   // Camera. Fit on first load and on real layout changes only (node count, or the free area changes

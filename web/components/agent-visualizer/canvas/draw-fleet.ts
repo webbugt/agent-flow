@@ -5,6 +5,7 @@ import { alphaHex } from '@/lib/utils'
 import { MIN_VISIBLE_OPACITY } from '@/lib/canvas-constants'
 import { EDGE_FADE_MS, EDGE_LINGER_MS, lifeAlpha } from '@/lib/fleet/fleet-edge-life'
 import { blockViewAlpha } from '@/lib/fleet/block-alpha'
+import { ANCHOR_DIM_ALPHA } from '@/lib/fleet/anchor-mode'
 import type { CloudGeometry, CloudView } from '@/lib/fleet/fleet-cloud-geometry'
 import { pulseProgress, type FleetPulse } from '@/lib/fleet/fleet-pulses'
 import { cloudScale } from '@/lib/fleet/fleet-presence'
@@ -60,6 +61,7 @@ export function drawClouds(
   fade?: ReadonlyMap<string, number>,
 ) {
   for (const cloud of clouds) {
+    if (cloud.anchor) continue // resource-anchor mode: no halo, the profile is the colour of its nodes
     const base = geometries.get(cloud.id)
     if (!base) continue
     const level = fade?.get(cloud.id) ?? 1
@@ -96,22 +98,33 @@ export function drawClouds(
 export function drawFleetLinks(
   ctx: CanvasRenderingContext2D, edges: readonly Edge[], agents: ReadonlyMap<string, Agent>,
   clouds: ReadonlyMap<string, CloudGeometry>, now: number,
+  /** Resource-anchor mode: with a hovered node, a link that does not touch it is drawn at 80%. */
+  hoveredId: string | null = null, anchorMode = false,
 ) {
   for (const edge of edges) {
     if (!edge.fromCloud) continue
     const life = lifeAlpha(edge.lastUsedAt, now, edge.lingerMs ?? EDGE_LINGER_MS, edge.fadeMs ?? EDGE_FADE_MS)
     if (life <= 0) continue
-    const ends = fleetLinkEnds(edge, agents, clouds)
-    if (!ends) continue
-    const cp = computeControlPoints(ends.fromX, ends.fromY, ends.toX, ends.toY)
-    if (!cp) continue
-    ctx.save()
-    const k = overviewBoost(ctx)
-    drawTaperedBezier(ctx, ends.fromX, ends.fromY, cp.cp1x, cp.cp1y, cp.cp2x, cp.cp2y, ends.toX, ends.toY,
-      BEAM.parentChild.startW * k, BEAM.parentChild.endW * k, edge.color ?? COLORS.holoBase, BEAM.activeAlpha * life * edge.opacity)
-    ctx.restore()
+    // Resource-anchor mode: the link leaves each session node that used the resource (no halo to leave from).
+    const sources: Array<string | undefined> = edge.sourceIds && edge.sourceIds.length > 0 ? edge.sourceIds.slice(0, MAX_LINKS_PER_EDGE) : [undefined]
+    const touches = !hoveredId || edge.to === hoveredId || edge.from === hoveredId || (edge.sourceIds?.includes(hoveredId) ?? false)
+    const dim = anchorMode && !touches ? ANCHOR_DIM_ALPHA : 1
+    for (const sourceId of sources) {
+      const ends = fleetLinkEnds(edge, agents, clouds, sourceId)
+      if (!ends) continue
+      const cp = computeControlPoints(ends.fromX, ends.fromY, ends.toX, ends.toY)
+      if (!cp) continue
+      ctx.save()
+      const k = overviewBoost(ctx)
+      drawTaperedBezier(ctx, ends.fromX, ends.fromY, cp.cp1x, cp.cp1y, cp.cp2x, cp.cp2y, ends.toX, ends.toY,
+        BEAM.parentChild.startW * k, BEAM.parentChild.endW * k, edge.color ?? COLORS.holoBase, BEAM.activeAlpha * life * edge.opacity * dim)
+      ctx.restore()
+    }
   }
 }
+
+/** Most session nodes one resource link is drawn from (resource-anchor mode); the busiest come first. */
+const MAX_LINKS_PER_EDGE = 6
 
 /** A dot travelling from the session node that did the interaction to the resource, for each new interaction, in the colour of its kind. */
 export function drawPulses(
@@ -242,6 +255,7 @@ export function drawFleetLabels(
   }
 
   for (const cloud of clouds) {
+    if (cloud.anchor) continue // resource-anchor mode: no caption under a halo that is not drawn
     const g = geometries.get(cloud.id)
     if (!g) continue
     drawLabelJob(ctx, placer, {

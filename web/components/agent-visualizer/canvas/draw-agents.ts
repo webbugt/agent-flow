@@ -1,4 +1,5 @@
 import { Agent, NODE, ANIM } from '@/lib/agent-types'
+import { hoverAlpha } from '@/lib/fleet/anchor-mode'
 import { COLORS, getStateColor, contextSegments } from '@/lib/colors'
 import {
   AGENT_DRAW, CONTEXT_BAR, CONTEXT_RING, STATS_OVERLAY,
@@ -459,6 +460,22 @@ function drawResourceNode(ctx: CanvasRenderingContext2D, agent: Agent, isHovered
   }
 }
 
+/** Resource-anchor mode: the profile colour of a session node, as a thin outer ring and a faint wash. */
+function drawTintRing(ctx: CanvasRenderingContext2D, agent: Agent, r: number) {
+  if (!agent.tint) return
+  ctx.save()
+  ctx.fillStyle = agent.tint + '22'
+  ctx.beginPath()
+  ctx.arc(agent.x, agent.y, r + 7, 0, Math.PI * 2)
+  ctx.fill()
+  ctx.strokeStyle = agent.tint
+  ctx.lineWidth = 3
+  ctx.beginPath()
+  ctx.arc(agent.x, agent.y, r + 7, 0, Math.PI * 2)
+  ctx.stroke()
+  ctx.restore()
+}
+
 export function drawAgents(
   ctx: CanvasRenderingContext2D,
   agents: Map<string, Agent>,
@@ -470,13 +487,17 @@ export function drawAgents(
   drawLabels = true,
   /** Wall clock (epoch ms): a resource block fades by its own linger/fade, not by the animation time. */
   wallNow = Date.now(),
+  /** Resource-anchor mode: related nodes of every node. With a hovered node, every node outside its relations is drawn at 80%. */
+  relations?: ReadonlyMap<string, ReadonlySet<string>>,
 ) {
+  const hoverRelated = relations && hoveredAgentId ? relations.get(hoveredAgentId) ?? new Set<string>() : undefined
   for (const [id, agent] of agents) {
+    const dim = relations ? hoverAlpha(id, hoveredAgentId, hoverRelated) : 1
     if (agent.resourceKind) {
       const life = agent.block ? blockViewAlpha(agent.block, wallNow) : 1
       if (life <= 0) continue
       ctx.save()
-      ctx.globalAlpha = agent.opacity * life
+      ctx.globalAlpha = agent.opacity * life * dim
       // Entry/exit: a resource node grows from and shrinks into its centre.
       if (agent.scale !== 1) {
         ctx.translate(agent.x, agent.y)
@@ -503,12 +524,13 @@ export function drawAgents(
     const r = radius * breathe * agent.scale
 
     ctx.save()
-    ctx.globalAlpha = agent.opacity
+    ctx.globalAlpha = agent.opacity * dim
 
     drawDepthShadow(ctx, agent, r)
     drawAgentGlow(ctx, agent, r, color, isHovered, isSelected, isWaiting)
     drawScanline(ctx, agent, r, color, isHovered, isWaiting, time)
     drawStateRing(ctx, agent, r, color, isHovered, isSelected, isWaiting, time)
+    if (agent.tint) drawTintRing(ctx, agent, r)
     drawCenterIcon(ctx, agent, r, color, isWaiting)
 
     if (agent.state === 'thinking') {
