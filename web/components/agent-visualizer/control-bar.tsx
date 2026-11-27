@@ -208,7 +208,7 @@ function ReviewControlBar({
       className="absolute bottom-4 left-4 right-4 mx-auto"
       style={{ pointerEvents: 'auto', maxWidth: POPUP.controlBarMaxWidth, zIndex: Z.controlBar }}
     >
-      <div className="glass-card px-5 py-3 flex items-center gap-3">
+      <div className="glass-card px-5 py-3 af-review-bar" data-testid="review-bar">
         {/* Play/Pause */}
         <button
           onClick={onPlayPause}
@@ -225,14 +225,14 @@ function ReviewControlBar({
         </button>
 
         {/* Time */}
-        <span className="text-xs font-mono shrink-0" style={{ color: COLORS.textPrimary, minWidth: 42 }}>
+        <span className="text-xs font-mono shrink-0 af-review-time" style={{ color: COLORS.textPrimary, minWidth: 42 }}>
           {formatTime(currentTime)}
         </span>
 
         {/* Timeline scrubber */}
         <div
           ref={scrubberRef}
-          className="flex-1 relative h-8 flex items-center group cursor-pointer"
+          className="af-review-scrubber relative h-8 flex items-center group cursor-pointer"
           data-testid="review-scrubber"
           role="slider"
           aria-label="Replay position"
@@ -287,7 +287,7 @@ function ReviewControlBar({
         </span>
 
         {/* Speed controls */}
-        <div className="flex items-center gap-0.5 shrink-0">
+        <div className="flex items-center gap-0.5 shrink-0 af-review-speeds">
           {SPEEDS.map((s) => (
             <button
               key={s}
@@ -322,6 +322,9 @@ function ReviewControlBar({
         {isReviewing && (
           <button
             onClick={onRestart}
+            aria-label="Restart replay"
+            title="Restart replay"
+            data-testid="review-restart"
             className="text-sm transition-all shrink-0 hover:scale-110"
             style={{ color: COLORS.textDim }}
           >
