@@ -137,8 +137,10 @@ export function useVSCodeBridge(): BridgeHookResult {
         ...(event.history ? { history: true } : {}),
       }
 
-      // Freshness for the top bar: a live event arrived now. One state update a second is plenty for a 60 s threshold.
-      if (!event.history) {
+      // Freshness for the top bar: a live event that shows real activity arrived now. agent_idle and the relay's quiet-timeout
+      // completion are the relay's own ticking (agent_idle repeats every second once a session goes quiet), they say nothing
+      // about data: the same rule as the fleet activity filter. One state update a second is plenty for a 60 s threshold.
+      if (!event.history && countsAsActivity(event.type, event.payload)) {
         const arrived = Date.now()
         if (arrived - lastEventStampRef.current >= 1000) {
           lastEventStampRef.current = arrived
