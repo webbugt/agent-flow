@@ -1,0 +1,165 @@
+{
+  "_note": "F3b: a cloud in the middle of the grid (fixture f-d) leaves; the clouds after it move. Scenario all. Pinned clock (?shot=1): the action happens at T0, the frame is taken at T0+dt. Run: pnpm shot --task-id f3b --scenario all --plan <this>",
+  "shots": [
+    {
+      "name": "a-cloud-leaves-0-before",
+      "viewports": [
+        "desktop"
+      ],
+      "steps": [
+        {
+          "click": "[data-testid=\"fleet-toggle\"]"
+        },
+        {
+          "wait": 1800
+        },
+        {
+          "eval": "(async () => { for (let k = 0; k < 20; k++) { const e = document.querySelector('input[aria-label^=\"Show \"]'); if (!e) return; e.click(); await new Promise(r => setTimeout(r, 120)) } throw new Error('rows still hidden') })()"
+        },
+        {
+          "wait": 700
+        }
+      ]
+    },
+    {
+      "name": "a-cloud-leaves-1-t0",
+      "viewports": [
+        "desktop"
+      ],
+      "steps": [
+        {
+          "click": "[data-testid=\"fleet-toggle\"]"
+        },
+        {
+          "wait": 1800
+        },
+        {
+          "eval": "(async () => { for (let k = 0; k < 20; k++) { const e = document.querySelector('input[aria-label^=\"Show \"]'); if (!e) return; e.click(); await new Promise(r => setTimeout(r, 120)) } throw new Error('rows still hidden') })()"
+        },
+        {
+          "wait": 700
+        },
+        {
+          "eval": "window.__AF_FLEET_CLOCK__ = 2000000000000"
+        },
+        {
+          "eval": "(() => { const e = document.querySelector('input[aria-label=\"Hide fixture f-d\"]'); if (!e) throw new Error('no fixture f-d row'); e.click() })()"
+        },
+        {
+          "wait": 250
+        },
+        {
+          "eval": "window.__AF_FLEET_CLOCK__ = 2000000000000"
+        },
+        {
+          "wait": 300
+        }
+      ]
+    },
+    {
+      "name": "a-cloud-leaves-2-t150",
+      "viewports": [
+        "desktop"
+      ],
+      "steps": [
+        {
+          "click": "[data-testid=\"fleet-toggle\"]"
+        },
+        {
+          "wait": 1800
+        },
+        {
+          "eval": "(async () => { for (let k = 0; k < 20; k++) { const e = document.querySelector('input[aria-label^=\"Show \"]'); if (!e) return; e.click(); await new Promise(r => setTimeout(r, 120)) } throw new Error('rows still hidden') })()"
+        },
+        {
+          "wait": 700
+        },
+        {
+          "eval": "window.__AF_FLEET_CLOCK__ = 2000000000000"
+        },
+        {
+          "eval": "(() => { const e = document.querySelector('input[aria-label=\"Hide fixture f-d\"]'); if (!e) throw new Error('no fixture f-d row'); e.click() })()"
+        },
+        {
+          "wait": 250
+        },
+        {
+          "eval": "window.__AF_FLEET_CLOCK__ = 2000000000150"
+        },
+        {
+          "wait": 300
+        }
+      ]
+    },
+    {
+      "name": "a-cloud-leaves-3-t300",
+      "viewports": [
+        "desktop"
+      ],
+      "steps": [
+        {
+          "click": "[data-testid=\"fleet-toggle\"]"
+        },
+        {
+          "wait": 1800
+        },
+        {
+          "eval": "(async () => { for (let k = 0; k < 20; k++) { const e = document.querySelector('input[aria-label^=\"Show \"]'); if (!e) return; e.click(); await new Promise(r => setTimeout(r, 120)) } throw new Error('rows still hidden') })()"
+        },
+        {
+          "wait": 700
+        },
+        {
+          "eval": "window.__AF_FLEET_CLOCK__ = 2000000000000"
+        },
+        {
+          "eval": "(() => { const e = document.querySelector('input[aria-label=\"Hide fixture f-d\"]'); if (!e) throw new Error('no fixture f-d row'); e.click() })()"
+        },
+        {
+          "wait": 250
+        },
+        {
+          "eval": "window.__AF_FLEET_CLOCK__ = 2000000000300"
+        },
+        {
+          "wait": 300
+        }
+      ]
+    },
+    {
+      "name": "a-cloud-leaves-4-end",
+      "viewports": [
+        "desktop"
+      ],
+      "steps": [
+        {
+          "click": "[data-testid=\"fleet-toggle\"]"
+        },
+        {
+          "wait": 1800
+        },
+        {
+          "eval": "(async () => { for (let k = 0; k < 20; k++) { const e = document.querySelector('input[aria-label^=\"Show \"]'); if (!e) return; e.click(); await new Promise(r => setTimeout(r, 120)) } throw new Error('rows still hidden') })()"
+        },
+        {
+          "wait": 700
+        },
+        {
+          "eval": "window.__AF_FLEET_CLOCK__ = 2000000000000"
+        },
+        {
+          "eval": "(() => { const e = document.querySelector('input[aria-label=\"Hide fixture f-d\"]'); if (!e) throw new Error('no fixture f-d row'); e.click() })()"
+        },
+        {
+          "wait": 250
+        },
+        {
+          "eval": "window.__AF_FLEET_CLOCK__ = 2000000001000"
+        },
+        {
+          "wait": 300
+        }
+      ]
+    }
+  ]
+}
