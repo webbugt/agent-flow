@@ -453,6 +453,8 @@ export function AgentVisualizer() {
     return Array.from(out)
   }, [agents])
 
+  /** A panel that sits on the bottom stack is open: a small screen folds the LIMITS panel to its one line meanwhile. */
+  const otherBottomPanelOpen = showFleet ? fleetTimelineVisible : showTimeline
   const selectedAgent = selection.selectedAgentId ? agents.get(selection.selectedAgentId) : null
   const selectedConversation = selection.selectedAgentId ? (conversations.get(selection.selectedAgentId) || []) : []
 
@@ -776,7 +778,7 @@ export function AgentVisualizer() {
       {!sv && <CostsConfigBanner status={costsStatus} />}
 
       {/* LIMITS panel: observed 5h / weekly, estimates with tags, and the Fable estimate when Fable was used this week */}
-      {!sv && <LimitsPanelHost sessionIds={limitSessionIds} eventsOf={getSessionEvents} collapsed={limitsCollapsed} onCollapsedChange={setLimitsCollapsed} />}
+      {!sv && <LimitsPanelHost sessionIds={limitSessionIds} eventsOf={getSessionEvents} collapsed={limitsCollapsed} onCollapsedChange={setLimitsCollapsed} otherBottomPanelOpen={otherBottomPanelOpen} />}
 
       {/* Options panel: linger/fade/show per resource kind, sound, timeline, cost unit, hidden fleet agents (browser only, no server config) */}
       {showOptions && <OptionsPanel selection={fleetSelection} profiles={[...new Set(fleetInstances.map(i => i.identity))].sort()} onClose={() => setShowOptions(false)} />}

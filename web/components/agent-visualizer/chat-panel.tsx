@@ -5,6 +5,7 @@ import { COLORS, getStateColor } from '@/lib/colors'
 import { TranscriptMessage } from './transcript-message'
 import type { ConversationMessage } from '@/hooks/simulation/types'
 import { PanelHeader, SlidingPanel, stopPropagationHandlers } from './shared-ui'
+import { STACK_BOTTOM, STACK_PANEL_MAX_HEIGHT } from '@/lib/bottom-stack'
 import { useAutoScroll } from '@/hooks/use-auto-scroll'
 
 interface ChatPanelProps {
@@ -34,12 +35,12 @@ export function AgentChatPanel({
   return (
     <SlidingPanel
       visible={visible}
-      position={{ bottom: 64, right: 12 }}
+      position={{ bottom: STACK_BOTTOM, right: 12 }}
       zIndex={Z.chatPanel}
-      width={CARD.chat.width}
+      width={`min(${CARD.chat.width}px, calc(100vw - 24px))`}
       {...stopPropagationHandlers}
     >
-      <div className="glass-card" style={{ display: 'flex', flexDirection: 'column', maxHeight: CARD.chat.maxHeight }}>
+      <div className="glass-card" style={{ display: 'flex', flexDirection: 'column', maxHeight: `min(${CARD.chat.maxHeight}px, ${STACK_PANEL_MAX_HEIGHT})` }}>
         <PanelHeader
           onClose={onClose}
           className="mb-2 flex-shrink-0"

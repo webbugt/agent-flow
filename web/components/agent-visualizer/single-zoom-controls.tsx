@@ -4,13 +4,13 @@ import type { MutableRefObject } from "react"
 import { COLORS } from "@/lib/colors"
 import { Z } from "@/lib/agent-types"
 import { BUTTON_ZOOM_STEP } from "@/lib/fleet/fleet-camera"
-import { STACK_BOTTOM } from "@/lib/bottom-stack"
 import type { CanvasControls } from "./canvas"
 
 /**
  * +, − and fit for the single-session graph (the Fleet map has its own set). A phone has no wheel and no double click, so
- * these are the only way to zoom besides a pinch. They sit bottom-left, on the bottom stack's baseline (above the control
- * bar and the LIMITS panel). A panel that opens over them (timeline) simply covers them; the node card is mid-left, above.
+ * these are the only way to zoom besides a pinch. They sit on the right edge, vertically centred: clear of the top bar, of
+ * the whole bottom stack (control bar, LIMITS, timeline, chat, resource blocks) and of the mid-left node card. A side sheet
+ * (Session, Transcript) opens over them, which is right: they zoom the graph behind it.
  */
 export function SingleZoomControls({ controlsRef, visible }: { controlsRef: MutableRefObject<CanvasControls | null>; visible: boolean }) {
   if (!visible) return null
@@ -23,7 +23,7 @@ export function SingleZoomControls({ controlsRef, visible }: { controlsRef: Muta
     <div
       data-testid="single-zoom-controls"
       className="absolute flex flex-col gap-1.5"
-      style={{ left: 12, bottom: STACK_BOTTOM, zIndex: Z.info }}
+      style={{ right: 12, top: "50%", transform: "translateY(-50%)", zIndex: Z.info }}
     >
       {buttons.map(([testid, label, glyph, onClick]) => (
         <button

@@ -5,6 +5,8 @@ import { TimelineEvent, Z, POPUP, TIMING } from '@/lib/agent-types'
 import { COLORS } from '@/lib/colors'
 import { SHOT_MODE } from '@/lib/shot-mode'
 import { scrubRatio } from '@/lib/scrub'
+import { VAR_BAR_TOP } from '@/lib/bottom-stack'
+import { usePublishInset } from '@/hooks/use-publish-inset'
 
 interface ControlBarProps {
   isPlaying: boolean
@@ -100,6 +102,8 @@ function LiveControlBar({
 }: ControlBarProps) {
   const [pulseOn, setPulseOn] = useState(true)
   const scrubberEvents = useScrubberEvents(timelineEvents, totalDuration)
+  const barRef = useRef<HTMLDivElement>(null)
+  usePublishInset(barRef, VAR_BAR_TOP)
 
   useEffect(() => {
     if (isReviewing || SHOT_MODE) return // ?shot=1: no pulsing, so screenshots repeat
@@ -109,6 +113,7 @@ function LiveControlBar({
 
   return (
     <div
+      ref={barRef}
       className="absolute bottom-4 left-4 right-4 mx-auto"
       style={{ pointerEvents: 'auto', maxWidth: POPUP.controlBarMaxWidth, zIndex: Z.controlBar }}
     >
@@ -178,6 +183,8 @@ function ReviewControlBar({
   const [isScrubbing, setIsScrubbing] = useState(false)
   const scrubberEvents = useScrubberEvents(timelineEvents, totalDuration)
   const progress = totalDuration > 0 ? currentTime / totalDuration : 0
+  const barRef = useRef<HTMLDivElement>(null)
+  usePublishInset(barRef, VAR_BAR_TOP)
 
   const scrubToClientX = useCallback((clientX: number) => {
     const rect = scrubberRef.current?.getBoundingClientRect()
@@ -205,6 +212,7 @@ function ReviewControlBar({
 
   return (
     <div
+      ref={barRef}
       className="absolute bottom-4 left-4 right-4 mx-auto"
       style={{ pointerEvents: 'auto', maxWidth: POPUP.controlBarMaxWidth, zIndex: Z.controlBar }}
     >

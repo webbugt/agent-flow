@@ -11,6 +11,8 @@ import { useActiveCostsVersion } from '@/hooks/use-costs-config'
 import { useViewportWidth } from '@/hooks/use-viewport-width'
 import { collectByTime, type LedgerEvent } from '@/lib/limits-ledger'
 import { LOCAL_CLOCK } from './claude-limits'
+import { STACK_GAP_PX, DEFAULT_BAR_TOP_PX, VAR_BAR_TOP, VAR_LIMITS_TOP, limitsAutoFolded, limitsStacked } from '@/lib/bottom-stack'
+import { usePublishInset } from '@/hooks/use-publish-inset'
 
 const AMBER = '#ffcc66'
 const TAG: Record<RowTag, { text: string; color: string }> = {
@@ -170,26 +172,39 @@ function Row({ row, narrow }: { row: LimitRow; narrow: boolean }) {
  * hover / tap explanation. DOM, not canvas, so the hover targets are real. Bottom-right on desktop, a sheet above
  * the control bar on a phone. Plan `api` or nothing to show: nothing is rendered.
  */
-export function LimitsPanel({ model, collapsed: collapsedProp, onCollapsedChange }: {
+export function LimitsPanel({ model, collapsed: collapsedProp, onCollapsedChange, otherBottomPanelOpen = false }: {
   model: LimitsPanelModel
   /** Controlled fold state (the app keeps it in its saved state). Without it the panel keeps its own, starting folded. */
   collapsed?: boolean
   onCollapsedChange?: (collapsed: boolean) => void
+  /** Another bottom panel (timeline, node card) is open: on a small screen the panel shows its one line only. */
+  otherBottomPanelOpen?: boolean
 }) {
   const width = useViewportWidth(1280)
   const narrow = width < PHONE_PX
+  // Beside the control bar only where the two cannot meet; everywhere else it sits on top of the bar and publishes its
+  // own top edge, so the timeline, node card and resource blocks stack above it instead of under it.
+  const stacked = limitsStacked(width)
   const [ownCollapsed, setOwnCollapsed] = useState(true)
-  const collapsed = collapsedProp ?? ownCollapsed
+  const stateCollapsed = collapsedProp ?? ownCollapsed
+  // The fold forced by an open bottom panel is a view of the state, not a change to it: closing the panel restores the user's choice.
+  const autoFolded = !stateCollapsed && limitsAutoFolded(width, otherBottomPanelOpen)
+  const collapsed = stateCollapsed || autoFolded
   const setCollapsed = (next: boolean) => { if (onCollapsedChange) onCollapsedChange(next); else setOwnCollapsed(next) }
+  const sectionRef = useRef<HTMLElement>(null)
+  usePublishInset(sectionRef, VAR_LIMITS_TOP, stacked && model.visible)
   if (!model.visible) return null
   return (
     <section
+      ref={sectionRef}
       data-testid="limits-panel"
       data-narrow={narrow ? '1' : '0'}
+      data-stacked={stacked ? '1' : '0'}
+      data-auto-folded={autoFolded ? '1' : '0'}
       aria-label="Claude usage limits"
       className="font-mono text-[10px] rounded"
       style={{
-        position: 'fixed', right: narrow ? 8 : 16, left: narrow ? 8 : 'auto', bottom: narrow ? 92 : 16, width: narrow ? 'auto' : 300, zIndex: Z.sidePanel + 5,
+        position: 'fixed', right: narrow ? 8 : 16, left: narrow ? 8 : 'auto', bottom: stacked ? `calc(var(${VAR_BAR_TOP}, ${DEFAULT_BAR_TOP_PX}px) + ${STACK_GAP_PX}px)` : 16, width: narrow ? 'auto' : 300, zIndex: Z.sidePanel + 5,
         background: COLORS.panelBg, border: `1px solid ${COLORS.glassBorder}`, padding: '8px 10px', color: COLORS.textPrimary, backdropFilter: 'blur(8px)',
       }}
     >
@@ -198,7 +213,7 @@ export function LimitsPanel({ model, collapsed: collapsedProp, onCollapsedChange
         <span data-testid="limits-plan" style={{ color: COLORS.textMuted, fontSize: 9, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{model.planText}</span>
         <button
           type="button" data-testid="limits-panel-toggle" onClick={() => setCollapsed(!collapsed)}
-          aria-expanded={!collapsed} aria-label={collapsed ? 'Show usage limits' : 'Hide usage limits'}
+          aria-expanded={!collapsed} aria-label={collapsed ? 'Show usage limits' : 'Hide usage limits'} disabled={autoFolded} title={autoFolded ? 'Folded while another panel is open' : undefined}
           className="ml-auto" style={{ color: COLORS.textMuted, fontSize: 11, lineHeight: 1 }}
         >
           {collapsed ? '▴' : '▾'}
@@ -211,12 +226,13 @@ export function LimitsPanel({ model, collapsed: collapsedProp, onCollapsedChange
 }
 
 /** Mounted once near the root: reads every session's ledger, the config and the observed readings. */
-export function LimitsPanelHost({ sessionIds, eventsOf, collapsed, onCollapsedChange }: {
+export function LimitsPanelHost({ sessionIds, eventsOf, collapsed, onCollapsedChange, otherBottomPanelOpen }: {
   sessionIds: readonly string[]
   eventsOf: (id: string) => readonly LedgerEvent[]
   collapsed?: boolean
   onCollapsedChange?: (collapsed: boolean) => void
+  otherBottomPanelOpen?: boolean
 }) {
   const model = useLimitsPanelModel(sessionIds, eventsOf)
-  return <LimitsPanel model={model} collapsed={collapsed} onCollapsedChange={onCollapsedChange} />
+  return <LimitsPanel model={model} collapsed={collapsed} onCollapsedChange={onCollapsedChange} otherBottomPanelOpen={otherBottomPanelOpen} />
 }
