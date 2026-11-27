@@ -263,6 +263,7 @@
   opacity: 1;
 }
 @media (pointer: coarse) {
-  /* No hover on a touch screen: the close is always drawn. */
-  .af-chip-close { opacity: 1; }
+  /* No hover on a touch screen: the close is always drawn, a few px apart from the tab so that a slightly-off tap on the
+     tab does not close the session. */
+  .af-chip-close { opacity: 1; margin-left: 6px; }
 }

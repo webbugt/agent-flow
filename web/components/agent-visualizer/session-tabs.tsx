@@ -19,17 +19,19 @@ export function SessionTabs({
   onSelectSession,
   onCloseSession,
 }: SessionTabsProps) {
-  const buttonRefs = useRef<Map<string, HTMLButtonElement>>(new Map())
+  // The refs point at the CHIP (tab + close), not at the tab button: scrolling the button alone leaves the close, which
+  // sits right of it, outside the scroll area on a 390 px phone.
+  const chipRefs = useRef<Map<string, HTMLDivElement>>(new Map())
 
-  const setButtonRef = useCallback((id: string, el: HTMLButtonElement | null) => {
-    if (el) buttonRefs.current.set(id, el)
-    else buttonRefs.current.delete(id)
+  const setChipRef = useCallback((id: string, el: HTMLDivElement | null) => {
+    if (el) chipRefs.current.set(id, el)
+    else chipRefs.current.delete(id)
   }, [])
 
-  // Scroll selected tab into view whenever it changes
+  // Scroll the selected chip (its close included) into view whenever it changes
   useEffect(() => {
     if (!selectedSessionId) return
-    const el = buttonRefs.current.get(selectedSessionId)
+    const el = chipRefs.current.get(selectedSessionId)
     el?.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' })
   }, [selectedSessionId])
 
@@ -46,6 +48,7 @@ export function SessionTabs({
         return (
           <div
             key={session.id}
+            ref={(el) => setChipRef(session.id, el)}
             className="af-chip rounded transition-all flex items-center"
             data-testid="session-chip"
             data-selected={isSelected ? 'true' : 'false'}
@@ -60,7 +63,6 @@ export function SessionTabs({
             <button
               type="button"
               aria-current={isSelected ? "true" : undefined}
-              ref={(el) => setButtonRef(session.id, el)}
               onClick={() => onSelectSession(session.id)}
               className="af-tap af-focus pl-1.5 py-0.5 flex items-center gap-1 rounded"
               style={{ color: 'inherit' }}
