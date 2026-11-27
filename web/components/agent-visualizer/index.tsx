@@ -752,6 +752,7 @@ export function AgentVisualizer() {
         connectionStatus={bridge.connectionStatus}
         showFreshness={!bridge.isVSCode && !bridge.useMockData}
         lastEventAt={bridge.lastEventAt}
+        lastActivityAt={bridge.lastActivityAt}
         connectedAt={bridge.connectedAt}
         agentCount={agents.size}
         totalTokens={totalTokens}

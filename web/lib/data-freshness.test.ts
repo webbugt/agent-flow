@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { dataFreshness, formatAgo, STALE_AFTER_MS } from './data-freshness'
+import { dataFreshness, formatAgo, stampStreamMessage, STALE_AFTER_MS, STAMP_THROTTLE_MS, type StreamStamps } from './data-freshness'
+import { countsAsActivity } from './fleet/fleet-model'
 
 const T0 = 1_700_000_000_000
 
@@ -45,7 +46,7 @@ test('a new event clears the stale marker', () => {
 test('no connection is OFFLINE, with the age of the last event when there was one', () => {
   assert.deepEqual(
     dataFreshness({ now: T0 + 5_000, connected: false, lastEventAt: T0, connectedAt: T0 }),
-    { level: 'offline', label: 'OFFLINE', detail: 'no connection, last event 5s ago', sinceMs: 5_000 },
+    { level: 'offline', label: 'OFFLINE', detail: 'no connection, last event 5s ago', short: '5s', sinceMs: 5_000 },
   )
   assert.equal(dataFreshness({ now: T0, connected: false, lastEventAt: null, connectedAt: null }).detail, 'no connection')
 })
@@ -58,4 +59,63 @@ test('a clock that went backwards never gives a negative age', () => {
 
 test('the threshold can be changed', () => {
   assert.equal(dataFreshness({ now: T0 + 11_000, connected: true, lastEventAt: T0, connectedAt: T0, staleAfterMs: 10_000 }).level, 'stale')
+})
+
+// --- Review rework: LIVE / STALE follow the stream, not only activity ------------------------------------------------
+
+/** Replay a stream through the same pure function the bridge hook uses; returns the stamps and the level at each check. */
+function runStream(msgs: { at: number; type: string; payload?: Record<string, unknown>; history?: boolean }[], checkAt: number[], connectedAt = T0) {
+  let stamps: StreamStamps = { lastEventAt: null, lastActivityAt: null }
+  for (const m of msgs) stamps = stampStreamMessage(stamps, m.at, !m.history && countsAsActivity(m.type, m.payload))
+  return { stamps, levels: checkAt.map(now => dataFreshness({ now, connected: true, connectedAt, ...stamps }).level) }
+}
+
+test('a stream of only context_update / model_detected / agent_idle stays LIVE for 5 minutes', () => {
+  const types = ['context_update', 'model_detected', 'agent_idle']
+  const msgs = Array.from({ length: 30 }, (_, i) => ({ at: T0 + (i + 1) * 10_000, type: types[i % 3] }))
+  const { stamps, levels } = runStream(msgs, [T0 + 65_000, T0 + 125_000, T0 + 300_000])
+  assert.deepEqual(levels, ['live', 'live', 'live'])
+  assert.equal(stamps.lastEventAt, T0 + 300_000)
+  assert.equal(stamps.lastActivityAt, null, 'none of these shows activity')
+  const f = dataFreshness({ now: T0 + 303_000, connected: true, connectedAt: T0, ...stamps })
+  assert.equal(f.label, 'LIVE')
+  assert.equal(f.detail, 'last event 3s ago')
+})
+
+test('the same non-activity stream going silent for 60 s turns STALE', () => {
+  const msgs = [{ at: T0 + 10_000, type: 'context_update' }, { at: T0 + 20_000, type: 'agent_idle' }]
+  const { levels } = runStream(msgs, [T0 + 79_000, T0 + 80_000])
+  assert.deepEqual(levels, ['live', 'stale'])
+})
+
+test('a history replay alone says "last event", never "no event yet", and is not activity', () => {
+  const { stamps } = runStream([{ at: T0 + 500, type: 'agent_spawn', history: true }, { at: T0 + 600, type: 'message', history: true }], [])
+  assert.equal(stamps.lastEventAt, T0 + 500)
+  assert.equal(stamps.lastActivityAt, null)
+  assert.equal(dataFreshness({ now: T0 + 2_000, connected: true, connectedAt: T0, ...stamps }).detail, 'last event 1s ago')
+})
+
+test('activity age is extra text next to the event age', () => {
+  const { stamps } = runStream([
+    { at: T0 + 1_000, type: 'tool_call_start' },
+    { at: T0 + 100_000, type: 'context_update' },
+  ], [])
+  const f = dataFreshness({ now: T0 + 104_000, connected: true, connectedAt: T0, ...stamps })
+  assert.equal(f.level, 'live')
+  assert.equal(f.detail, 'last event 4s ago \u00b7 last activity 1m 43s ago')
+  assert.equal(f.short, '4s')
+})
+
+test("the relay's quiet-timeout completion is not activity but still keeps the stream LIVE", () => {
+  const { stamps } = runStream([{ at: T0 + 1_000, type: 'agent_complete', payload: { reason: 'quiet' } }], [])
+  assert.equal(stamps.lastEventAt, T0 + 1_000)
+  assert.equal(stamps.lastActivityAt, null)
+})
+
+test('stamping is throttled to one write a second and returns the same object when nothing changes', () => {
+  const a = stampStreamMessage({ lastEventAt: null, lastActivityAt: null }, T0, true)
+  assert.deepEqual(a, { lastEventAt: T0, lastActivityAt: T0 })
+  assert.equal(stampStreamMessage(a, T0 + STAMP_THROTTLE_MS - 1, true), a)
+  const b = stampStreamMessage(a, T0 + STAMP_THROTTLE_MS, false)
+  assert.deepEqual(b, { lastEventAt: T0 + STAMP_THROTTLE_MS, lastActivityAt: T0 })
 })

@@ -4,14 +4,17 @@ import { useEffect, useState, useCallback, useRef } from 'react'
 import { vscodeBridge, type ConnectionStatus, type AgentEvent, type SessionInfo } from '@/lib/vscode-bridge'
 import { SimulationEvent } from '@/lib/agent-types'
 import { countsAsActivity } from '@/lib/fleet/fleet-model'
+import { stampStreamMessage, type StreamStamps } from '@/lib/data-freshness'
 import { loadAppState, pickInitialSession } from '@/lib/fleet/app-state'
 import { handleServerVersion } from '@/lib/auto-reload'
 
 interface BridgeHookResult {
   isVSCode: boolean
   connectionStatus: ConnectionStatus
-  /** Arrival time (ms since epoch) of the last LIVE event, null before the first; history replays do not count. Updated at most once a second. */
+  /** Arrival time (ms since epoch) of the last stream message of ANY type (history replays and agent_idle ticks included: they prove the stream is alive), null before the first. Updated at most once a second. */
   lastEventAt: number | null
+  /** Arrival time of the last live message that shows real activity (tool call, message, spawn...), null before the first. */
+  lastActivityAt: number | null
   /** When the event stream last connected (browser build), null if it never did. */
   connectedAt: number | null
   /** Events received from VS Code extension, converted to SimulationEvent format */
@@ -57,9 +60,9 @@ interface BridgeHookResult {
 export function useVSCodeBridge(): BridgeHookResult {
   const [isVSCode, setIsVSCode] = useState(false)
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('disconnected')
-  const [lastEventAt, setLastEventAt] = useState<number | null>(null)
+  const [stamps, setStamps] = useState<StreamStamps>({ lastEventAt: null, lastActivityAt: null })
   const [connectedAt, setConnectedAt] = useState<number | null>(null)
-  const lastEventStampRef = useRef(0)
+  const stampsRef = useRef<StreamStamps>(stamps)
   const [useMockData, setUseMockData] = useState(
     process.env.NEXT_PUBLIC_DEMO !== '0'
   )
@@ -137,15 +140,14 @@ export function useVSCodeBridge(): BridgeHookResult {
         ...(event.history ? { history: true } : {}),
       }
 
-      // Freshness for the top bar: a live event that shows real activity arrived now. agent_idle and the relay's quiet-timeout
-      // completion are the relay's own ticking (agent_idle repeats every second once a session goes quiet), they say nothing
-      // about data: the same rule as the fleet activity filter. One state update a second is plenty for a 60 s threshold.
-      if (!event.history && countsAsActivity(event.type, event.payload)) {
-        const arrived = Date.now()
-        if (arrived - lastEventStampRef.current >= 1000) {
-          lastEventStampRef.current = arrived
-          setLastEventAt(arrived)
-        }
+      // Freshness for the top bar: ANY message of the stream shows that the relay is alive and sending (context_update,
+      // model_detected, the relay's agent_idle ticks, history replays), so the LIVE / STALE marker follows all of them.
+      // Only a live message that shows real activity also moves the activity stamp (extra text, the same rule as the
+      // fleet activity filter). One state update a second is plenty for a 60 s threshold.
+      const nextStamps = stampStreamMessage(stampsRef.current, Date.now(), !event.history && countsAsActivity(event.type, event.payload))
+      if (nextStamps !== stampsRef.current) {
+        stampsRef.current = nextStamps
+        setStamps(nextStamps)
       }
 
       // Always buffer by session (for replay on session switch)
@@ -352,7 +354,8 @@ export function useVSCodeBridge(): BridgeHookResult {
   return {
     isVSCode,
     connectionStatus,
-    lastEventAt,
+    lastEventAt: stamps.lastEventAt,
+    lastActivityAt: stamps.lastActivityAt,
     connectedAt,
     pendingEvents: pendingEventsRef.current,
     consumeEvents,

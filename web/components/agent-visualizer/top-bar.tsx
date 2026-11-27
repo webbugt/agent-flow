@@ -92,17 +92,18 @@ const AMBER = "#ffcc66"
  * The counts next to it say nothing about whether data still arrives: a relay that went quiet looked like a calm session.
  * It ticks once a second on its own, so the rest of the bar does not re-render.
  */
-function FreshnessIndicator({ status, lastEventAt, connectedAt, narrow }: {
-  status: ConnectionStatus; lastEventAt: number | null; connectedAt: number | null; narrow: boolean
+function FreshnessIndicator({ status, lastEventAt, lastActivityAt, connectedAt, narrow }: {
+  status: ConnectionStatus; lastEventAt: number | null; lastActivityAt: number | null; connectedAt: number | null; narrow: boolean
 }) {
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 1000)
     return () => clearInterval(t)
   }, [])
-  const f = dataFreshness({ now, connected: status !== "disconnected", lastEventAt, connectedAt })
+  const f = dataFreshness({ now, connected: status !== "disconnected", lastEventAt, lastActivityAt, connectedAt })
   const color = f.level === "live" ? COLORS.complete : f.level === "stale" ? AMBER : COLORS.error
-  const text = f.level === "live" && narrow ? f.label : `${f.label} \u00b7 ${f.detail}`
+  // A phone cannot open the title, so a live state shows the short age ("LIVE 12s") instead of the label alone.
+  const text = f.level === "live" && narrow ? (f.short ? `${f.label} ${f.short}` : f.label) : `${f.label} \u00b7 ${f.detail}`
   return (
     <span
       data-testid="data-freshness"
@@ -137,8 +138,10 @@ export interface TopBarProps {
   connectionStatus: ConnectionStatus
   /** Browser build with a live stream (not VS Code, not the demo): show how fresh the data is. */
   showFreshness?: boolean
-  /** Arrival time of the last live event (ms), null before the first. */
+  /** Arrival time of the last stream message of any type (ms), null before the first. */
   lastEventAt?: number | null
+  /** Arrival time of the last message that shows real activity (ms), null before the first. */
+  lastActivityAt?: number | null
   /** When the event stream connected (ms), null if it never did. */
   connectedAt?: number | null
   // Stats
@@ -174,7 +177,7 @@ export interface TopBarProps {
 export const TopBar = memo(function TopBar({
   sessions, selectedSessionId, sessionsWithActivity,
   onSelectSession, onCloseSession,
-  isVSCode, connectionStatus, showFreshness = false, lastEventAt = null, connectedAt = null,
+  isVSCode, connectionStatus, showFreshness = false, lastEventAt = null, lastActivityAt = null, connectedAt = null,
   agentCount, totalTokens, costText, projectOverride, projectOverrideTitle, onOpenCostSettings, showOptions, onToggleOptions,
   showFileAttention, showTranscript, showCostOverlay, showSessionDetail, showTimeline, showFleet, anchorMode, isMuted,
   onTogglePanel, onToggleTimeline, onToggleFleet, onToggleAnchorMode, onToggleMute, onToggleScreensaver,
@@ -222,7 +225,7 @@ export const TopBar = memo(function TopBar({
       {/* Right-side info/controls: ml-auto pushes them right; they wrap when the bar is narrow */}
       <div className="ml-auto flex min-w-0 max-w-full flex-wrap items-center justify-end gap-x-3 gap-y-1.5 sm:gap-x-4" style={{ color: COLORS.textMuted }}>
         {isVSCode && <ConnectionIndicator status={connectionStatus} />}
-        {!isVSCode && showFreshness && <FreshnessIndicator status={connectionStatus} lastEventAt={lastEventAt} connectedAt={connectedAt} narrow={narrow} />}
+        {!isVSCode && showFreshness && <FreshnessIndicator status={connectionStatus} lastEventAt={lastEventAt} lastActivityAt={lastActivityAt} connectedAt={connectedAt} narrow={narrow} />}
         <span>{agentCount} agents</span>
         <span>
           {formatTokens(totalTokens)} tokens
