@@ -49,7 +49,8 @@ function ToggleButton({ active, onClick, children, style, activeColor, testId }:
     <button
       onClick={onClick}
       data-testid={testId}
-      className="px-1.5 py-0.5 rounded transition-all"
+      className="af-tap af-tap-fine af-focus px-1.5 py-0.5 rounded transition-all"
+      aria-pressed={active}
       style={{
         background: active ? (activeColor?.bg ?? COLORS.toggleActive) : COLORS.toggleInactive,
         border: `1px solid ${COLORS.toggleBorder}`,

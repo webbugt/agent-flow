@@ -120,7 +120,7 @@ export function OptionsPanel({ selection, onClose, profiles = [] }: OptionsPanel
     >
       <div className="flex items-center" style={{ marginBottom: 4 }}>
         <strong style={{ fontSize: 13 }}>Options</strong>
-        <button type="button" onClick={onClose} aria-label="Close options" data-testid="options-close" className="ml-auto" style={{ color: COLORS.textMuted, fontSize: 14 }}>✕</button>
+        <button type="button" onClick={onClose} aria-label="Close options" data-testid="options-close" className="af-tap af-focus ml-auto px-1" style={{ color: COLORS.textMuted, fontSize: 14 }}>✕</button>
       </div>
       <p style={{ ...hintStyle, margin: '0 0 4px' }}>
         Kept in this browser only. Changes apply at once; no server setting is touched and nothing restarts.

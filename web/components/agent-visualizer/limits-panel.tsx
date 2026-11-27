@@ -98,7 +98,7 @@ function RowTooltip({ row, anchor, narrow, onClose, pinned }: { row: LimitRow; a
       onMouseDown={e => e.stopPropagation()}
       onMouseUp={e => e.stopPropagation()}
     >
-      {pinned && <button type="button" onClick={onClose} aria-label="Close limit details" style={{ position: 'absolute', right: 8, top: 6, color: COLORS.textMuted }}>✕</button>}
+      {pinned && <button type="button" onClick={onClose} aria-label="Close limit details" className="af-tap af-focus" style={{ position: 'absolute', right: 8, top: 6, color: COLORS.textMuted }}>✕</button>}
       {f ? (
         <>
           <div style={{ fontWeight: 700, marginBottom: 4, paddingRight: 14 }}>{f.title}</div>
@@ -214,7 +214,7 @@ export function LimitsPanel({ model, collapsed: collapsedProp, onCollapsedChange
         <button
           type="button" data-testid="limits-panel-toggle" onClick={() => setCollapsed(!collapsed)}
           aria-expanded={!collapsed} aria-label={collapsed ? 'Show usage limits' : 'Hide usage limits'} disabled={autoFolded} title={autoFolded ? 'Folded while another panel is open' : undefined}
-          className="ml-auto" style={{ color: COLORS.textMuted, fontSize: 11, lineHeight: 1 }}
+          className="af-tap af-focus ml-auto px-1" style={{ color: COLORS.textMuted, fontSize: 11, lineHeight: 1 }}
         >
           {collapsed ? '▴' : '▾'}
         </button>

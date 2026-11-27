@@ -109,7 +109,7 @@ export function CostsSettingsDrawer({ status, seenProviders, onClose }: CostsSet
     >
       <div className="flex items-center" style={{ marginBottom: 4 }}>
         <strong style={{ fontSize: 13 }}>Cost settings</strong>
-        <button type="button" onClick={onClose} aria-label="Close cost settings" data-testid="costs-settings-close" className="ml-auto" style={{ color: COLORS.textMuted, fontSize: 14 }}>✕</button>
+        <button type="button" onClick={onClose} aria-label="Close cost settings" data-testid="costs-settings-close" className="af-tap af-focus ml-auto px-1" style={{ color: COLORS.textMuted, fontSize: 14 }}>✕</button>
       </div>
       <p style={{ margin: '0 0 4px', color: COLORS.textMuted, fontSize: 10 }}>
         Writes <code>{userSource?.path ?? '~/.agent-flow/costs.json'}</code>

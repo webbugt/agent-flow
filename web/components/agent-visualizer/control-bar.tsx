@@ -156,7 +156,7 @@ function LiveControlBar({
         {/* Review button */}
         <button
           onClick={onEnterReview}
-          className="px-2.5 py-1 rounded text-[11px] font-mono transition-all hover:scale-105"
+          className="af-tap af-focus px-2.5 py-1 rounded text-[11px] font-mono transition-all hover:scale-105"
           style={{
             background: COLORS.holoBg10,
             border: `1px solid ${COLORS.reviewBtnBorder}`,
@@ -220,7 +220,7 @@ function ReviewControlBar({
         {/* Play/Pause */}
         <button
           onClick={onPlayPause}
-          className="w-9 h-9 rounded-full flex items-center justify-center transition-all shrink-0 hover:scale-110"
+          className="af-tap af-focus w-9 h-9 rounded-full flex items-center justify-center transition-all shrink-0 hover:scale-110"
           style={{
             background: isPlaying ? COLORS.playBtnActiveBg : COLORS.playBtnBg,
             border: `1.5px solid ${COLORS.playBtnBorder}`,
@@ -300,7 +300,7 @@ function ReviewControlBar({
             <button
               key={s}
               onClick={() => onSpeedChange(s)}
-              className="px-2 py-0.5 rounded text-[11px] font-mono transition-all"
+              className="af-tap af-tap-fine af-focus px-2 py-0.5 rounded text-[11px] font-mono transition-all"
               style={{
                 background: speed === s ? COLORS.playBtnActiveBg : 'transparent',
                 color: speed === s ? COLORS.textPrimary : COLORS.textMuted,
@@ -315,7 +315,7 @@ function ReviewControlBar({
         {isReviewing && (
           <button
             onClick={onResumeLive}
-            className="px-2.5 py-1 rounded text-[11px] font-mono font-semibold transition-all hover:scale-105 shrink-0"
+            className="af-tap af-focus px-2.5 py-1 rounded text-[11px] font-mono font-semibold transition-all hover:scale-105 shrink-0"
             style={{
               background: COLORS.liveResumeBg,
               border: `1px solid ${COLORS.liveResumeBorder}`,
@@ -333,7 +333,7 @@ function ReviewControlBar({
             aria-label="Restart replay"
             title="Restart replay"
             data-testid="review-restart"
-            className="text-sm transition-all shrink-0 hover:scale-110"
+            className="af-tap af-focus text-sm transition-all shrink-0 hover:scale-110 px-1"
             style={{ color: COLORS.textDim }}
           >
             ⟲

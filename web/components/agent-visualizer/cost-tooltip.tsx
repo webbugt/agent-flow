@@ -28,7 +28,7 @@ export function CostTooltipView({ cost, cfg, onClose }: { cost: AgentCost; cfg: 
           {BADGE_LABEL[flavor]}
         </span>
         {onClose && (
-          <button type="button" onClick={onClose} aria-label="Close cost details" className="ml-auto" style={{ color: COLORS.textMuted }}>✕</button>
+          <button type="button" onClick={onClose} aria-label="Close cost details" className="af-tap af-focus ml-auto px-1" style={{ color: COLORS.textMuted }}>✕</button>
         )}
       </div>
       <dl style={{ margin: 0 }}>
