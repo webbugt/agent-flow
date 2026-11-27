@@ -5,6 +5,7 @@ import { vscodeBridge, type ConnectionStatus, type AgentEvent, type SessionInfo 
 import { SimulationEvent } from '@/lib/agent-types'
 import { countsAsActivity } from '@/lib/fleet/fleet-model'
 import { loadAppState, pickInitialSession } from '@/lib/fleet/app-state'
+import { handleServerVersion } from '@/lib/auto-reload'
 
 interface BridgeHookResult {
   isVSCode: boolean
@@ -92,6 +93,8 @@ export function useVSCodeBridge(): BridgeHookResult {
     es.onmessage = (e) => {
       try {
         const data = JSON.parse(e.data)
+        // The relay announces its build commit; a different one than this bundle's reloads the page once.
+        if (data?.type === 'server-version') { handleServerVersion(data); return }
         window.postMessage(data, '*')
       } catch {}
     }
