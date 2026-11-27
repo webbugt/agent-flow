@@ -3,6 +3,7 @@ import { Agent, ToolCallNode, Discovery, ANIM, NODE } from '@/lib/agent-types'
 import { SHOT_MODE } from '@/lib/shot-mode'
 import { cloudGeometries, type CloudView } from '@/lib/fleet/fleet-cloud-geometry'
 import { zoomAt } from '@/lib/fleet/fleet-camera'
+import { fitToNodes, pickFitAgents } from '@/lib/fleet/screensaver-fit'
 import { INITIAL_CAMERA_STATE, transition, type CameraAction, type CameraEvent, type CameraInputKind, type CameraState } from '@/lib/fleet/camera-state'
 import { CAMERA } from '@/lib/canvas-constants'
 import { BUBBLE_HOLD, BUBBLE_FADE_OUT, BUBBLE_MAX_W, TOOL_CARD_W, TOOL_CARD_H, DISC_BOUNDS_HALF_W, DISC_BOUNDS_HALF_H } from '@/lib/canvas-constants'
@@ -12,6 +13,15 @@ const AUTOFIT_AGENT_PADDING = 22
 
 /** Room under a cloud halo for its caption, world units (fleet map). */
 const AUTOFIT_CLOUD_CAPTION = 48
+
+/** Screensaver fit: screen margin kept free around the active nodes, px. */
+const SCREENSAVER_FIT_MARGIN_PX = 80
+/** Screensaver fit: room under a node for its label, world units. */
+const SCREENSAVER_FIT_LABEL_ROOM = 44
+/** Screensaver fit: zoom-out floor. Lower than the user's (CAMERA.minZoom): keeping every active node in sight comes first. */
+const SCREENSAVER_FIT_MIN_SCALE = 0.05
+/** Screensaver fit: a lone active node is not zoomed beyond this. */
+const SCREENSAVER_FIT_MAX_SCALE = 2
 
 export interface Transform {
   x: number
@@ -27,6 +37,8 @@ interface CameraOptions {
     discoveries: Discovery[]
     /** Fleet map only: agent clouds; the fit keeps every halo and its caption in view. */
     clouds?: CloudView[]
+    /** Fleet map: ids of nodes that are leaving (drawn, but not worth keeping in view). */
+    ghosts?: ReadonlySet<string>
     dimensions: { width: number; height: number }
     selectedAgentId: string | null
     pauseAutoFit?: boolean
@@ -42,6 +54,11 @@ interface CameraOptions {
    * so a click never undoes the user's zoom or pan.
    */
   fleetView?: boolean
+  /**
+   * Fleet map in screensaver mode: the view is the auto-view. It keeps every ACTIVE node in sight (see
+   * lib/fleet/screensaver-fit.ts) and the user's own zoom or pan does not switch it off.
+   */
+  screensaver?: boolean
 }
 
 export function useCanvasCamera({
@@ -53,7 +70,9 @@ export function useCanvasCamera({
   zoomToFitTrigger,
   selectedAgentId,
   fleetView = false,
+  screensaver = false,
 }: CameraOptions) {
+  const activeFit = fleetView && screensaver
   const transformRef = useRef<Transform>({ x: 0, y: 0, scale: 1 })
   const userHasNavigatedRef = useRef(false)
   // Camera state machine (intro -> interrupted -> user control); userHasNavigatedRef mirrors its flag.
@@ -97,6 +116,18 @@ export function useCanvasCamera({
   const computeFitTransform = useCallback((): Transform | null => {
     const { agents, toolCalls, discoveries, clouds, dimensions, selectedAgentId } = drawPropsRef.current
     if (agents.size === 0) return null
+
+    // Screensaver (fleet map): the active nodes only, node radius and a screen margin included. Not cached
+    // (the cache below is for the normal fit): it is cheap, and the nodes move a little every frame.
+    if (activeFit) {
+      const nodes = pickFitAgents(agents.values(), drawPropsRef.current.ghosts).map(a => ({
+        x: a.x, y: a.y, r: (a.isMain ? NODE.radiusMain : NODE.radiusSub) + AUTOFIT_AGENT_PADDING,
+      }))
+      return fitToNodes(nodes, dimensions, {
+        marginPx: SCREENSAVER_FIT_MARGIN_PX, labelRoom: SCREENSAVER_FIT_LABEL_ROOM,
+        minScale: SCREENSAVER_FIT_MIN_SCALE, maxScale: SCREENSAVER_FIT_MAX_SCALE,
+      })
+    }
 
     // Return cached result if inputs haven't changed (reference equality —
     // React creates new Map/array objects on state updates, so same ref = same data)
@@ -182,7 +213,7 @@ export function useCanvasCamera({
     }
     fitCacheRef.current = { agents, toolCalls, discoveries, selectedAgentId, result }
     return result
-  }, [getDescendantIds, drawPropsRef, simTimeRef, fleetView])
+  }, [getDescendantIds, drawPropsRef, simTimeRef, fleetView, activeFit])
 
   /** Run a camera event through the state machine and carry out the animation action it asks for. */
   const dispatch = useCallback((event: CameraEvent): CameraAction => {
@@ -215,6 +246,14 @@ export function useCanvasCamera({
     if (!fleetView) dispatch({ type: 'reset' })
     dispatch({ type: 'layout-fit' })
   }, [zoomToFitTrigger, dispatch, fleetView])
+
+  // Entering or leaving the screensaver: the user's navigation is dropped (the screensaver is the auto-view) and
+  // entering starts the fit to the active nodes at once. Leaving hands the view back to the normal fit.
+  useEffect(() => {
+    if (!fleetView) return
+    dispatch({ type: 'reset' })
+    if (screensaver) dispatch({ type: 'layout-fit' })
+  }, [screensaver, fleetView, dispatch])
 
   // Re-engage auto-fit when selection changes (not in the fleet map: a click keeps the user's view)
   useEffect(() => {
@@ -257,8 +296,8 @@ export function useCanvasCamera({
       }
     }
 
-    // Auto-fit
-    if (!userHasNavigatedRef.current && !isDragging && !pauseAutoFit) {
+    // Auto-fit (the screensaver keeps fitting whatever the user zoomed or panned)
+    if ((activeFit || !userHasNavigatedRef.current) && !isDragging && !pauseAutoFit) {
       const fit = computeFitTransform()
       if (fit) targetTransformRef.current = fit
     }
@@ -280,7 +319,7 @@ export function useCanvasCamera({
         transformRef.current = { x: nx, y: ny, scale: ns }
       }
     }
-  }, [computeFitTransform, dispatch])
+  }, [computeFitTransform, dispatch, activeFit])
 
   return {
     transformRef,
