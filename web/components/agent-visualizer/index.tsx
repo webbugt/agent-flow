@@ -750,6 +750,9 @@ export function AgentVisualizer() {
         onCloseSession={handleCloseSession}
         isVSCode={bridge.isVSCode}
         connectionStatus={bridge.connectionStatus}
+        showFreshness={!bridge.isVSCode && !bridge.useMockData}
+        lastEventAt={bridge.lastEventAt}
+        connectedAt={bridge.connectedAt}
         agentCount={agents.size}
         totalTokens={totalTokens}
         costText={costText}

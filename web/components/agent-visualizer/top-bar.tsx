@@ -1,6 +1,6 @@
 "use client"
 
-import { memo, useLayoutEffect, useRef, useSyncExternalStore } from "react"
+import { memo, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react"
 import { Z } from "@/lib/agent-types"
 import { COLORS } from "@/lib/colors"
 import { formatTokens } from "@/lib/utils"
@@ -12,6 +12,7 @@ import { LimitsChip } from "./claude-limits"
 import { useViewportWidth } from "@/hooks/use-viewport-width"
 import { SessionTabs } from "./session-tabs"
 import type { SessionInfo, ConnectionStatus } from "@/lib/bridge-types"
+import { dataFreshness } from "@/lib/data-freshness"
 
 // ─── Mute/Unmute SVG Icons ───────────────────────────────────────────────────
 
@@ -82,6 +83,46 @@ function ConnectionIndicator({ status }: { status: ConnectionStatus }) {
   )
 }
 
+// ─── Data freshness (browser build) ─────────────────────────────────────────
+
+const AMBER = "#ffcc66"
+
+/**
+ * LIVE / STALE / OFFLINE plus "last event Ns ago" for the browser build, which has no editor status bar to show it.
+ * The counts next to it say nothing about whether data still arrives: a relay that went quiet looked like a calm session.
+ * It ticks once a second on its own, so the rest of the bar does not re-render.
+ */
+function FreshnessIndicator({ status, lastEventAt, connectedAt, narrow }: {
+  status: ConnectionStatus; lastEventAt: number | null; connectedAt: number | null; narrow: boolean
+}) {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(t)
+  }, [])
+  const f = dataFreshness({ now, connected: status !== "disconnected", lastEventAt, connectedAt })
+  const color = f.level === "live" ? COLORS.complete : f.level === "stale" ? AMBER : COLORS.error
+  const text = f.level === "live" && narrow ? f.label : `${f.label} \u00b7 ${f.detail}`
+  return (
+    <span
+      data-testid="data-freshness"
+      data-level={f.level}
+      role="status"
+      title={f.detail}
+      className="flex items-center gap-1.5"
+      style={{ color: f.level === "live" ? undefined : color }}
+    >
+      <span
+        aria-hidden
+        className="w-1.5 h-1.5 rounded-full"
+        style={{ background: color, boxShadow: `0 0 4px ${color}` }}
+      />
+      {f.level === "stale" && <span aria-hidden>{"\u26a0"}</span>}
+      {text}
+    </span>
+  )
+}
+
 // ─── Top Bar ────────────────────────────────────────────────────────────────
 
 export interface TopBarProps {
@@ -94,6 +135,12 @@ export interface TopBarProps {
   // Connection
   isVSCode: boolean
   connectionStatus: ConnectionStatus
+  /** Browser build with a live stream (not VS Code, not the demo): show how fresh the data is. */
+  showFreshness?: boolean
+  /** Arrival time of the last live event (ms), null before the first. */
+  lastEventAt?: number | null
+  /** When the event stream connected (ms), null if it never did. */
+  connectedAt?: number | null
   // Stats
   agentCount: number
   totalTokens: number
@@ -127,7 +174,7 @@ export interface TopBarProps {
 export const TopBar = memo(function TopBar({
   sessions, selectedSessionId, sessionsWithActivity,
   onSelectSession, onCloseSession,
-  isVSCode, connectionStatus,
+  isVSCode, connectionStatus, showFreshness = false, lastEventAt = null, connectedAt = null,
   agentCount, totalTokens, costText, projectOverride, projectOverrideTitle, onOpenCostSettings, showOptions, onToggleOptions,
   showFileAttention, showTranscript, showCostOverlay, showSessionDetail, showTimeline, showFleet, anchorMode, isMuted,
   onTogglePanel, onToggleTimeline, onToggleFleet, onToggleAnchorMode, onToggleMute, onToggleScreensaver,
@@ -175,6 +222,7 @@ export const TopBar = memo(function TopBar({
       {/* Right-side info/controls: ml-auto pushes them right; they wrap when the bar is narrow */}
       <div className="ml-auto flex min-w-0 max-w-full flex-wrap items-center justify-end gap-x-3 gap-y-1.5 sm:gap-x-4" style={{ color: COLORS.textMuted }}>
         {isVSCode && <ConnectionIndicator status={connectionStatus} />}
+        {!isVSCode && showFreshness && <FreshnessIndicator status={connectionStatus} lastEventAt={lastEventAt} connectedAt={connectedAt} narrow={narrow} />}
         <span>{agentCount} agents</span>
         <span>
           {formatTokens(totalTokens)} tokens

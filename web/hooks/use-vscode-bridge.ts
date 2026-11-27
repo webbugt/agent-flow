@@ -10,6 +10,10 @@ import { handleServerVersion } from '@/lib/auto-reload'
 interface BridgeHookResult {
   isVSCode: boolean
   connectionStatus: ConnectionStatus
+  /** Arrival time (ms since epoch) of the last LIVE event, null before the first; history replays do not count. Updated at most once a second. */
+  lastEventAt: number | null
+  /** When the event stream last connected (browser build), null if it never did. */
+  connectedAt: number | null
   /** Events received from VS Code extension, converted to SimulationEvent format */
   pendingEvents: readonly SimulationEvent[]
   /** Call after consuming events to clear the queue */
@@ -53,6 +57,9 @@ interface BridgeHookResult {
 export function useVSCodeBridge(): BridgeHookResult {
   const [isVSCode, setIsVSCode] = useState(false)
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('disconnected')
+  const [lastEventAt, setLastEventAt] = useState<number | null>(null)
+  const [connectedAt, setConnectedAt] = useState<number | null>(null)
+  const lastEventStampRef = useRef(0)
   const [useMockData, setUseMockData] = useState(
     process.env.NEXT_PUBLIC_DEMO !== '0'
   )
@@ -88,6 +95,7 @@ export function useVSCodeBridge(): BridgeHookResult {
 
     es.onopen = () => {
       setConnectionStatus('connected')
+      setConnectedAt(Date.now())
       setUseMockData(false)
     }
     es.onmessage = (e) => {
@@ -127,6 +135,15 @@ export function useVSCodeBridge(): BridgeHookResult {
         payload: event.payload,
         sessionId: event.sessionId,
         ...(event.history ? { history: true } : {}),
+      }
+
+      // Freshness for the top bar: a live event arrived now. One state update a second is plenty for a 60 s threshold.
+      if (!event.history) {
+        const arrived = Date.now()
+        if (arrived - lastEventStampRef.current >= 1000) {
+          lastEventStampRef.current = arrived
+          setLastEventAt(arrived)
+        }
       }
 
       // Always buffer by session (for replay on session switch)
@@ -333,6 +350,8 @@ export function useVSCodeBridge(): BridgeHookResult {
   return {
     isVSCode,
     connectionStatus,
+    lastEventAt,
+    connectedAt,
     pendingEvents: pendingEventsRef.current,
     consumeEvents,
     useMockData,
