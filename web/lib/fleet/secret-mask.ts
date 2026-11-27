@@ -23,6 +23,14 @@ const NAME_FLAG =
 const NAME_KV =
   '(?:api[_-]?key|apikey|secret|token|passwd|password|passphrase|credential|private[_-]?key|access[_-]?key|client[_-]?secret)'
 
+/**
+ * The separator between a flag and its value: whitespace with any number of `\` line continuations in it
+ * (`-p \<newline>  SECRET`), or `=`. Without the continuations VALUE would take the lone `\` as the value.
+ */
+const SEP = '(?:\\s+(?:\\\\\\r?\\n\\s*)*|=)'
+/** Not a value: a lone `\` (a continuation with nothing behind it), so the regex cannot settle for it. */
+const NOT_BARE_BACKSLASH = '(?!\\\\(?:\\s|$))'
+
 /** A value: a double-quoted string, a single-quoted string, or a run without spaces and shell separators. */
 const VALUE = `"[^"]*"|'[^']*'|[^\\s"';|&)]+`
 
@@ -84,7 +92,7 @@ const RULES: Array<[RegExp, Replacer]> = [
   // Flags that take a secret: `--password hunter2`, `--token=abc`, `-token abc`, `--api-key "a b"`. The name must end
   // at the flag's end, so `--token-file path` is not touched by this rule.
   [
-    new RegExp(`(\\s--?${NAME_FLAG}s?)(\\s+|=)(?!\\[MASKED)(${VALUE})`, 'gi'),
+    new RegExp(`(\\s--?${NAME_FLAG}s?)(${SEP})(?!\\[MASKED)${NOT_BARE_BACKSLASH}(${VALUE})`, 'gi'),
     (_m, flag, sep) => `${flag}${sep}${MASK}`,
   ],
   // name=value and "name": "value" for names that say they are secret (GITHUB_TOKEN=..., "api_key": "...").
@@ -115,7 +123,7 @@ const TOOL_RULES: Array<[test: RegExp, RegExp, Replacer]> = [
   // curl / wget / httpie: `-u user:pass`, `--user user:pass`, `--proxy-user user:pass`.
   [
     /\b(?:curl|wget|http|https|xh)\b/,
-    /(\s(?:-u|--user|--proxy-user|--http-user|--http-password))(\s+|=)(?!\[MASKED)("[^"]*"|'[^']*'|[^\s"']+)/g,
+    /(\s(?:-u|--user|--proxy-user|--http-user|--http-password))((?:\s+(?:\\\r?\n\s*)*|=))(?!\[MASKED)(?!\\(?:\s|$))("[^"]*"|'[^']*'|[^\s"']+)/g,
     (_m, flag, sep, value) => (/:/.test(value) || /password/i.test(flag) ? `${flag}${sep}${MASK}` : `${flag}${sep}${value}`),
   ],
   // docker / podman / nerdctl / buildah / skopeo login: `-p VALUE`, `-pVALUE`, `-p=VALUE` (--password is a flag rule).
@@ -131,7 +139,7 @@ const TOOL_RULES: Array<[test: RegExp, RegExp, Replacer]> = [
   // redis-cli / valkey-cli -a VALUE (--pass is a flag rule).
   [
     /\b(?:redis-cli|valkey-cli)\b/,
-    shortFlagRule('\\b(?:redis-cli|valkey-cli)\\b(?:\\s+[^\\s;|&]+){0,16}?', '-a'),
+    shortFlagRule('\\b(?:redis-cli|valkey-cli)\\b(?:\\s+[^\\s;|&]+){0,64}?', '-a'),
     maskAfterFlag,
   ],
 ]
@@ -142,7 +150,7 @@ const TOOL_RULES: Array<[test: RegExp, RegExp, Replacer]> = [
  * flag; the value is replaced. A value that starts with `-` is not taken (`-p -x` is another flag).
  */
 function shortFlagRule(prefix: string, flag: string): RegExp {
-  return new RegExp(`(${prefix}\\s+${flag})(?:(\\s+|=)(?!\\[MASKED)(${VALUE})|(?=[^\\s=-])(?!\\[MASKED)[^\\s;|&]+)`, 'g')
+  return new RegExp(`(${prefix}\\s+${flag})(?:(${SEP})(?!\\[MASKED)${NOT_BARE_BACKSLASH}(${VALUE})|(?=[^\\s=-])(?!\\[MASKED)[^\\s;|&]+)`, 'g')
 }
 
 function maskAfterFlag(_m: string, head: string, sep?: string): string {

@@ -203,3 +203,32 @@ test('new rules stay linear on hostile input', () => {
   for (const input of inputs) maskSecrets(input)
   assert.ok(Date.now() - t0 < 4000, `took ${Date.now() - t0} ms`)
 })
+
+test('MASK-B2: a backslash line continuation between the flag and its value does not leak the value', () => {
+  const gaps = [' \\\n  ', ' \\\r\n\t', ' \\\n  \\\n    ', '  \\\n']
+  for (const gap of gaps) {
+    const label = JSON.stringify(gap)
+    let out = assertMasked(`docker login -u bob -p${gap}FAKE_123 registry.example.com`, ['FAKE_123'])
+    assert.match(out, /registry\.example\.com$/, `docker -p ${label}: the registry stays`)
+    assertMasked(`docker login -u bob -p${gap}"FAKE 123" registry.example.com`, ['FAKE 123'])
+    assertMasked(`sshpass -p${gap}FAKE_123 ssh bob@host.example.com uptime`, ['FAKE_123'])
+    out = assertMasked(`redis-cli -h cache.example.com -a${gap}FAKE_123 ping`, ['FAKE_123'])
+    assert.match(out, / ping$/, `redis -a ${label}: the command stays`)
+    assertMasked(`redis-cli --pass${gap}FAKE_123 ping`, ['FAKE_123'])
+    assertMasked(`app --password${gap}FAKE_123 --verbose`, ['FAKE_123'])
+    assertMasked(`app --token${gap}FAKE_123 run`, ['FAKE_123'])
+    assertMasked(`curl -u${gap}bob:FAKE_123 https://x.test`, ['FAKE_123'])
+  }
+})
+
+test('MASK-B2: a lone backslash is never taken as the value, and the ssh port after the password stays', () => {
+  const out = assertMasked('sshpass -p \\\n  FAKE_123 \\\n  ssh -p 2222 bob@host', ['FAKE_123'])
+  assert.ok(out.includes('ssh -p 2222'), `ssh port stays: ${out}`)
+  assert.equal(maskSecrets('app --password \\'), 'app --password \\', 'a trailing lone backslash is left alone')
+  assertUnchanged(['docker run \\\n  -p 8080:80 img', 'redis-cli -h cache \\\n  -p 6379 ping'])
+})
+
+test('MASK-B2 (low): redis-cli -a is masked behind more than 16 earlier tokens', () => {
+  const filler = Array.from({ length: 30 }, (_, i) => `--opt${i}`).join(' ')
+  assertMasked(`redis-cli ${filler} -a FAKE_123 ping`, ['FAKE_123'])
+})
