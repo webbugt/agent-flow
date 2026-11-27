@@ -8,6 +8,9 @@ import type { PublicKanbanBoardNode } from '@/lib/fleet/kanban-source'
 import type { SupermemoryNamespaceNode } from '@/lib/fleet/supermemory-source'
 import { anonymizeToolInput, createAnonymizePolicy, isAnonymized } from '@/lib/content-privacy'
 import { BLOB_GAP } from '@/lib/fleet/fleet-placement'
+import { newFleetPresenceTracker, withGhosts, ghostIdsOf } from './fleet-presence-scene'
+import { positionsOf, tweenedFrame } from './fleet-tween-scene'
+import { TWEEN_MS, retarget } from '@/lib/fleet/fleet-tween'
 import { buildFleetScene, CLOUD_GAP_X, CLOUD_GAP_Y, FleetReplay, openTargetOf } from './fleet-scene'
 import { buildSessionItems, pickDefaultAgentId } from '@/lib/session-detail'
 import { RESTING_TOOLS_PER_AGENT } from './animate'
@@ -448,4 +451,80 @@ test('fleet scene: every link event names a session node that is on the map (a p
   const events = graph.edges.flatMap(e => e.events)
   assert.ok(events.length >= 3)
   for (const ev of events) assert.ok(scene.state.agents.has(ev.sessionId!), `${ev.key} leaves from ${ev.sessionId}, a node of the scene`)
+})
+
+// ─── Position tween on a rebuilt scene (F3b) ────────────────────────────────
+
+function threeProfiles(names: string[]) {
+  const sessions = names.map(n => session(n))
+  const events: Record<string, SimulationEvent[]> = {}
+  for (const n of names) events[`hermes-${n}`] = profileEvents(n, `${n} · Node`, [{ tool: 'Read', hermesTool: 'read_file', input: { path: `/x/${n}.md` } }], false)
+  return { sessions, events }
+}
+
+test('position tween: a cloud in the middle of the grid leaves, the clouds after it shift in the scene, and glide to the new place instead of jumping', () => {
+  const T = 9_000_000
+  // 4 clouds on a 2 x 2 grid in name order: alpha beta / gamma delta. beta leaves: gamma and delta move.
+  const before = sceneFor(threeProfiles(['alpha', 'beta', 'gamma', 'delta'])).scene
+  const afterEvents = threeProfiles(['alpha', 'gamma', 'delta'])
+  const after = sceneFor(afterEvents).scene
+  const tracker = newFleetPresenceTracker()
+  const live1 = withGhosts(before.state, tracker, T - 5000, before.clusters)
+  const live2 = withGhosts(after.state, tracker, T, after.clusters)
+
+  const id = (n: string) => `hermes-${n}::${n} · Node`
+  const moved = ['gamma', 'delta'].filter(n => {
+    const a = before.state.agents.get(id(n))!
+    const b = after.state.agents.get(id(n))!
+    return Math.hypot(a.x - b.x, a.y - b.y) > 1
+  })
+  assert.ok(moved.length >= 1, 'the scene itself moves the clouds that stay (this is the snap the tween removes)')
+
+  const legs = retarget(null, positionsOf(live1), positionsOf(live2), T)
+  for (const n of moved) assert.ok(legs.has(id(n)), `${n} gets a leg`)
+  // First drawn frame = where it was; last = the scene's place; in between never outside the box of both.
+  for (const n of moved) {
+    const a = before.state.agents.get(id(n))!
+    const b = after.state.agents.get(id(n))!
+    const f0 = tweenedFrame(live2, legs, T).frame.agents.get(id(n))!
+    assert.deepEqual([f0.x, f0.y], [a.x, a.y])
+    const fm = tweenedFrame(live2, legs, T + TWEEN_MS / 2).frame.agents.get(id(n))!
+    assert.ok(fm.x >= Math.min(a.x, b.x) - 1e-6 && fm.x <= Math.max(a.x, b.x) + 1e-6)
+    assert.ok(fm.y >= Math.min(a.y, b.y) - 1e-6 && fm.y <= Math.max(a.y, b.y) + 1e-6)
+    assert.ok(Math.hypot(fm.x - a.x, fm.y - a.y) > 0.1, 'half way it is on its way')
+    const f1 = tweenedFrame(live2, legs, T + TWEEN_MS)
+    assert.deepEqual([f1.frame.agents.get(id(n))!.x, f1.frame.agents.get(id(n))!.y], [b.x, b.y])
+    assert.equal(f1.settled, true)
+  }
+  // Its satellites move with it (the offset the scene gave them is kept).
+  const sat = [...live2.toolCalls.values()].find(tc => tc.agentId === id('gamma'))!
+  const own = live2.agents.get(id('gamma'))!
+  const mid = tweenedFrame(live2, legs, T + 100).frame
+  const midSat = mid.toolCalls.get(sat.id)!
+  const midOwn = mid.agents.get(id('gamma'))!
+  assert.ok(Math.abs((midSat.x - midOwn.x) - (sat.x - own.x)) < 1e-9)
+})
+
+test('position tween: a session of a multi-session cloud leaves: the others glide, the ghost keeps its cloud and follows its centre', () => {
+  const T = 9_000_000
+  const base = threeProfiles(['alpha', 'beta'])
+  // beta gets a second session node (its own session id, same profile name).
+  base.sessions.push(session('beta', { id: 'hermes-beta-2' }))
+  base.events['hermes-beta-2'] = profileEvents('beta', 'beta · Two', [{ tool: 'Read', hermesTool: 'read_file', input: { path: '/x/two.md' } }], false)
+  const before = sceneFor(base).scene
+  const smaller = { sessions: base.sessions.filter(s => s.id !== 'hermes-beta-2'), events: base.events }
+  const after = sceneFor(smaller).scene
+  const tracker = newFleetPresenceTracker()
+  withGhosts(before.state, tracker, T - 5000, before.clusters)
+  const live = withGhosts(after.state, tracker, T, after.clusters)
+
+  const gone = 'hermes-beta-2::beta · Two'
+  assert.ok(live.agents.has(gone), 'its ghost is in the frame')
+  assert.ok(live.clouds!.find(c => c.id.includes('beta'))!.members.some(m => m.id === gone), 'and stays a member of its cloud')
+  const cb = before.clusters.get([...before.clusters.keys()].find(k => k.includes('beta'))!)!
+  const ca = after.clusters.get([...after.clusters.keys()].find(k => k.includes('beta'))!)!
+  const ghost = live.agents.get(gone)!
+  const was = before.state.agents.get(gone)!
+  assert.ok(Math.abs(ghost.x - (was.x + ca.x - cb.x)) < 1e-9 && Math.abs(ghost.y - (was.y + ca.y - cb.y)) < 1e-9, 'old place plus the cloud centre delta')
+  assert.deepEqual(ghostIdsOf(live), new Set([gone]))
 })

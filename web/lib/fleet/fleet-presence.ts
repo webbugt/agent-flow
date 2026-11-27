@@ -164,6 +164,13 @@ export class PresenceTracker<T> {
     return ghosts
   }
 
+  /** Forget everything (the map was hidden): the next update is a first one again, so showing it animates nothing. */
+  reset(): void {
+    this.stamps_.clear()
+    this.last.clear()
+    this.started = false
+  }
+
   /** When the next ghost is over (epoch ms), or null when none is on its way out. */
   nextExpiry(): number | null {
     let next: number | null = null

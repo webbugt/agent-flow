@@ -211,3 +211,18 @@ test('durations come from the id: clouds are slower than nodes', () => {
   assert.equal(t.stamps.get('n')?.duration, NODE_EXIT_MS)
   assert.equal(t.nextExpiry(), T + 6_000 + NODE_EXIT_MS, 'the soonest end')
 })
+
+test('reset: after the map was hidden the next update is a first one again (nothing enters, no ghosts left)', () => {
+  const tracker = new PresenceTracker<string>()
+  tracker.update(new Map([['a', 'A'], ['b', 'B']]), T)
+  const ghosts = tracker.update(new Map([['a', 'A']]), T + 1000)
+  assert.deepEqual([...ghosts.keys()], ['b'])
+  tracker.reset()
+  assert.equal(tracker.stamps.size, 0)
+  assert.equal(tracker.nextExpiry(), null)
+  // Shown again with different content: no entry for the newcomer, no ghost of what left while hidden.
+  const after = tracker.update(new Map([['a', 'A'], ['c', 'C']]), T + 2000)
+  assert.equal(after.size, 0)
+  assert.equal(tracker.stamps.get('c')!.dir, 'steady')
+  assert.equal(tracker.stamps.has('b'), false)
+})

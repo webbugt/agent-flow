@@ -1,6 +1,7 @@
 import { useState, useCallback, useRef, useEffect, type MutableRefObject } from 'react'
 import { Agent, ToolCallNode, Discovery, ANIM } from '@/lib/agent-types'
 import { CAMERA } from '@/lib/canvas-constants'
+import { solidAgents, solidToolCalls } from '@/hooks/simulation/fleet-presence-scene'
 import {
   findAgentAt as findAgentAtPure,
   findToolCallAt as findToolCallAtPure,
@@ -38,6 +39,8 @@ interface InteractionOptions {
     agents: Map<string, Agent>
     toolCalls: Map<string, ToolCallNode>
     discoveries: Discovery[]
+    /** Fleet map: ids of ghosts (leaving nodes), which are drawn but cannot be hovered, clicked or dragged. */
+    ghosts?: ReadonlySet<string>
   } & InteractionCallbacks>
   transformRef: MutableRefObject<Transform>
   /** Any user input tells the camera, which stops a running intro animation at once. */
@@ -78,15 +81,18 @@ export function useCanvasInteraction({
   // ─── Hit detection wrappers ─────────────────────────────────────────────
 
   const findAgentAt = useCallback((x: number, y: number): string | null => {
-    return findAgentAtPure(x, y, drawPropsRef.current.agents)
+    const { agents, ghosts } = drawPropsRef.current
+    return findAgentAtPure(x, y, ghosts ? solidAgents(agents, ghosts) : agents)
   }, [drawPropsRef])
 
   const findToolCallAt = useCallback((x: number, y: number): string | null => {
-    return findToolCallAtPure(x, y, drawPropsRef.current.toolCalls)
+    const { toolCalls, ghosts } = drawPropsRef.current
+    return findToolCallAtPure(x, y, ghosts ? solidToolCalls(toolCalls, ghosts) : toolCalls)
   }, [drawPropsRef])
 
   const findBubbleAgentAt = useCallback((x: number, y: number): string | null => {
-    return findBubbleAgentAtPure(x, y, drawPropsRef.current.agents, simTimeRef.current)
+    const { agents, ghosts } = drawPropsRef.current
+    return findBubbleAgentAtPure(x, y, ghosts ? solidAgents(agents, ghosts) : agents, simTimeRef.current)
   }, [drawPropsRef, simTimeRef])
 
   const findDiscoveryAt = useCallback((x: number, y: number): string | null => {

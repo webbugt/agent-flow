@@ -3,7 +3,7 @@ import { strict as assert } from 'node:assert'
 import { emptyContextBreakdown, type Agent, type Edge, type ToolCallNode } from '@/lib/agent-types'
 import type { CloudView } from '@/lib/fleet/fleet-cloud-geometry'
 import { NODE_ENTER_MS, NODE_EXIT_MS, CLOUD_EXIT_MS, NODE_SCALE_MIN } from '@/lib/fleet/fleet-presence'
-import { animatedView, newFleetPresenceTracker, withGhosts } from './fleet-presence-scene'
+import { animatedView, ghostIdsOf, newFleetPresenceTracker, solidAgents, solidToolCalls, withGhosts } from './fleet-presence-scene'
 import { createEmptyState, type SimulationState } from './types'
 
 const T = 5_000_000
@@ -215,4 +215,34 @@ test('the frame is a new state: the input scene is not mutated', () => {
   const state = withGhosts(without, tracker, T + 10)
   assert.equal(without.agents.size, sizeBefore)
   assert.ok(state.agents.size > sizeBefore)
+})
+
+test('ghostIdsOf / solidAgents / solidToolCalls: what is on its way out is drawn but cannot be hit', () => {
+  const tracker = newFleetPresenceTracker()
+  withGhosts(scene(full()), tracker, T)
+  const left = full()
+  left.agents = left.agents!.filter(a => a.id !== 's1')
+  left.tools = []
+  left.edges = left.edges!.filter(e => e.id !== 'e-tool')
+  left.clouds = [cloud('cloud:p', 's2')]
+  const state = withGhosts(scene(left), tracker, T + 100)
+  assert.ok(state.agents.has('s1') && state.toolCalls.has('s1::t1'), 'drawn as a ghost')
+
+  const ghosts = ghostIdsOf(state)
+  assert.deepEqual([...ghosts], ['s1'])
+  const agents = solidAgents(state.agents, ghosts)
+  assert.equal(agents.has('s1'), false, 'no hover, click or drag on a ghost')
+  assert.equal(agents.has('s2'), true)
+  assert.equal(solidToolCalls(state.toolCalls, ghosts).has('s1::t1'), false, 'nor on its satellites')
+  assert.equal(state.agents.has('s1'), true, 'the frame itself is not changed')
+  // No ghosts: the very same maps, nothing is copied per mouse move.
+  const steady = withGhosts(scene(full()), newFleetPresenceTracker(), T)
+  assert.equal(ghostIdsOf(steady).size, 0)
+  assert.equal(solidAgents(steady.agents, ghostIdsOf(steady)), steady.agents)
+  // Entering things are hit-testable (only ghosts are not).
+  const grown = full()
+  grown.agents!.push(agent('s3', 200, 0))
+  const t2 = newFleetPresenceTracker()
+  withGhosts(scene(full()), t2, T)
+  assert.equal(ghostIdsOf(withGhosts(scene(grown), t2, T + 10)).size, 0)
 })

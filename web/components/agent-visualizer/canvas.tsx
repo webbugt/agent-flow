@@ -7,7 +7,7 @@ import { getStateColor } from '@/lib/colors'
 import { ANIM_SPEED, PERF_OVERLAY, PERF_OVERLAY_ENABLED } from '@/lib/canvas-constants'
 import { cloudGeometries } from '@/lib/fleet/fleet-cloud-geometry'
 import { fleetNow } from '@/lib/fleet/fleet-clock'
-import { animatedView } from '@/hooks/simulation/fleet-presence-scene'
+import { animatedView, ghostIdsOf } from '@/hooks/simulation/fleet-presence-scene'
 import { LABEL_MIN_PX } from '@/lib/fleet/fleet-labels'
 import { BloomRenderer } from './bloom-renderer'
 import { createDepthParticles, updateDepthParticles, drawBackground } from './background-layer'
@@ -129,10 +129,17 @@ export function AgentCanvas({
   // Simulation data (agents, particles, etc.) is synced from simulationRef
   // at the top of each draw frame, so it's always fresh even without re-renders.
   const sim = simulationRef.current
+  // Ghosts (leaving nodes) are drawn but not hit-testable. Recomputed only when the presence stamps are a new map.
+  const ghostCacheRef = useRef<{ presence: SimulationState['presence']; ids: ReadonlySet<string> }>({ presence: undefined, ids: new Set() })
+  const ghostsOf = (s: SimulationState): ReadonlySet<string> => {
+    const c = ghostCacheRef.current
+    if (c.presence !== s.presence) ghostCacheRef.current = { presence: s.presence, ids: ghostIdsOf(s) }
+    return ghostCacheRef.current.ids
+  }
   const makeDrawProps = (prev?: { isDragging: boolean }) => ({
     agents: sim.agents, toolCalls: sim.toolCalls,
     particles: sim.particles, edges: sim.edges, discoveries: sim.discoveries,
-    clouds: sim.clouds,
+    clouds: sim.clouds, ghosts: ghostsOf(sim),
     selectedAgentId, hoveredAgentId, showStats, showHexGrid,
     showCostOverlay, selectedToolCallId, selectedDiscoveryId, screensaver,
     simTime: sim.currentTime, pauseAutoFit, dimensions,
@@ -232,6 +239,7 @@ export function AgentCanvas({
         p.particles = s.particles
         p.edges = s.edges
         p.discoveries = s.discoveries
+        p.ghosts = ghostsOf(s)
         p.simTime = s.currentTime
       }
 
