@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useRef, memo } from 'react'
 import { TimelineEvent, Z, POPUP, TIMING } from '@/lib/agent-types'
 import { COLORS } from '@/lib/colors'
 import { SHOT_MODE } from '@/lib/shot-mode'
-import { scrubRatio } from '@/lib/scrub'
+import { scrubRatio, scrubKeyTarget } from '@/lib/scrub'
 import { VAR_BAR_TOP } from '@/lib/bottom-stack'
 import { usePublishInset } from '@/hooks/use-publish-inset'
 
@@ -210,6 +210,15 @@ function ReviewControlBar({
     setIsScrubbing(false)
   }, [])
 
+  // The slider role promises the keyboard: Tab reaches the track, the arrows, PageUp / PageDown, Home and End move it.
+  const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (!onSeek || e.altKey || e.ctrlKey || e.metaKey) return
+    const target = scrubKeyTarget(e.key, currentTime, totalDuration)
+    if (target === null) return
+    e.preventDefault()
+    onSeek(target)
+  }, [onSeek, currentTime, totalDuration])
+
   return (
     <div
       ref={barRef}
@@ -240,9 +249,10 @@ function ReviewControlBar({
         {/* Timeline scrubber */}
         <div
           ref={scrubberRef}
-          className="af-review-scrubber relative h-8 flex items-center group cursor-pointer"
+          className="af-review-scrubber af-focus relative h-8 flex items-center group cursor-pointer"
           data-testid="review-scrubber"
           role="slider"
+          tabIndex={0}
           aria-label="Replay position"
           aria-valuemin={0}
           aria-valuemax={Math.round(totalDuration)}
@@ -254,6 +264,7 @@ function ReviewControlBar({
           onPointerMove={handlePointerMove}
           onPointerUp={handlePointerEnd}
           onPointerCancel={handlePointerEnd}
+          onKeyDown={handleKeyDown}
         >
           <div
             className="w-full rounded-full relative transition-all duration-150 group-hover:h-2"
