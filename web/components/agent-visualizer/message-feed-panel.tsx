@@ -18,6 +18,8 @@ interface MessageFeedPanelProps {
   agents: Map<string, Agent>
   onAgentClick: (agentId: string | null) => void
   selectedAgentId: string | null
+  /** The collapsed one-line card steps aside (small screen with a bottom panel or Fleet open: it would sit under that panel). */
+  tuckedAway?: boolean
 }
 
 // Only show text messages (assistant, user, thinking) — tool calls visible via agent selection
@@ -43,6 +45,7 @@ export function MessageFeedPanel({
   agents,
   onAgentClick,
   selectedAgentId,
+  tuckedAway = false,
 }: MessageFeedPanelProps) {
   const [expanded, setExpanded] = useState(false)
   const [activeTab, setActiveTab] = useState<string>('all')
@@ -194,7 +197,9 @@ export function MessageFeedPanel({
 
   // ── Collapsed ──
   if (!expanded) {
-    if (!latestMessage) return null
+    // On a small screen the one-line card would sit under the timeline panel or the Fleet filter: it steps aside until
+    // that panel is closed. An expanded panel (the user opened it) stays.
+    if (!latestMessage || tuckedAway) return null
     const agent = agents.get(latestMessage.agentId)
     const agentName = agent?.name ?? latestMessage.agentId
     const role = ROLE_COLORS[latestMessage.type] ?? ROLE_COLORS.assistant
@@ -235,11 +240,13 @@ export function MessageFeedPanel({
             MESSAGES
           </span>
           <button
+            type="button"
             onClick={() => setExpanded(false)}
-            className="text-[11px] transition-colors"
+            aria-label="Collapse messages"
+            className="af-tap af-focus text-[11px] transition-colors"
             style={{ color: COLORS.textMuted }}
           >
-            ▴
+            <span aria-hidden>▴</span>
           </button>
         </div>
 
@@ -323,8 +330,10 @@ function TabButton({ label, active, onClick, color, hasUnread }: {
 }) {
   return (
     <button
+      type="button"
       onClick={onClick}
-      className="px-2 py-0.5 rounded text-[11px] font-mono transition-all shrink-0 relative"
+      aria-pressed={active}
+      className="af-tap af-tap-fine af-focus px-2 py-0.5 rounded text-[11px] font-mono transition-all shrink-0 relative"
       style={{
         background: active ? color + '20' : 'transparent',
         color: active ? color : COLORS.textMuted,

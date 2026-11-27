@@ -54,7 +54,7 @@ import { LimitsPanelHost } from "./limits-panel"
 import { useCostsConfig } from "@/hooks/use-costs-config"
 import { useLimitsFeed } from "@/hooks/use-limits"
 import { useAudioEffects } from "@/hooks/use-audio-effects"
-import { useViewportWidth } from "@/hooks/use-viewport-width"
+import { useViewportWidth, useViewportHeight } from "@/hooks/use-viewport-width"
 import { useAppStatePersistence } from "@/hooks/use-app-state"
 import type { AppState } from "@/lib/fleet/app-state"
 import { detailInset } from "@/lib/session-detail"
@@ -138,6 +138,7 @@ export function AgentVisualizer() {
   const singleCanvasControlsRef = useRef<CanvasControls | null>(null)
   if (!fleetReplayRef.current) fleetReplayRef.current = new FleetReplay()
   const viewportWidth = useViewportWidth(1280)
+  const viewportHeight = useViewportHeight(900)
 
   // The latest app state (open tab, mode, panels, LIMITS fold) is kept in localStorage and restored after mount,
   // so the server and the first client frame render the same. Screensaver mode, the options, the fleet timeline
@@ -584,6 +585,8 @@ export function AgentVisualizer() {
           agents={agents}
           onAgentClick={selection.handleAgentClick}
           selectedAgentId={selection.selectedAgentId}
+          // A phone (390 wide) or a landscape phone (390 high) has no room for the card next to a bottom panel or the Fleet filter.
+          tuckedAway={(viewportWidth < 480 || viewportHeight < 500) && (showTimeline || showFleet)}
         />
       )}
 
