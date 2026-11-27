@@ -23,12 +23,12 @@ const inputStyle: React.CSSProperties = {
 }
 const badStyle: React.CSSProperties = { borderColor: '#ff6677' }
 const smallButton: React.CSSProperties = { color: COLORS.complete, border: `1px solid ${COLORS.glassBorder}`, borderRadius: 4, padding: '2px 8px' }
-const hintStyle: React.CSSProperties = { color: COLORS.textMuted, fontSize: 9 }
+const hintStyle: React.CSSProperties = { color: COLORS.textMuted, fontSize: 11 }
 
 function Section({ title, note, children }: { title: string; note?: string; children: React.ReactNode }) {
   return (
     <section style={{ borderTop: `1px solid ${COLORS.glassBorder}`, padding: '10px 0' }}>
-      <h3 style={{ margin: '0 0 6px', color: COLORS.textMuted, fontSize: 9, letterSpacing: 1, textTransform: 'uppercase' }}>{title}</h3>
+      <h3 style={{ margin: '0 0 6px', color: COLORS.textMuted, fontSize: 11, letterSpacing: 1, textTransform: 'uppercase' }}>{title}</h3>
       {note && <p style={{ ...hintStyle, margin: '0 0 6px' }}>{note}</p>}
       {children}
     </section>
@@ -73,7 +73,7 @@ function SecondsField({ value, parse, onCommit, label, testId }: {
         onBlur={() => { setDraft(null); setError(null) }}
         style={{ ...inputStyle, ...(error ? badStyle : null) }}
       />
-      {error && <span role="alert" style={{ color: '#ff8896', fontSize: 9, textAlign: 'right', lineHeight: 1.25 }}>{error}</span>}
+      {error && <span role="alert" style={{ color: '#ff8896', fontSize: 11, textAlign: 'right', lineHeight: 1.25 }}>{error}</span>}
     </span>
   )
 }
@@ -138,7 +138,7 @@ export function OptionsPanel({ selection, onClose, profiles = [] }: OptionsPanel
             {BLOCK_VIEWS.map(v => <col key={v} style={{ width: 52 }} />)}
           </colgroup>
           <thead>
-            <tr style={{ color: COLORS.textMuted, fontSize: 9, textAlign: 'left' }}>
+            <tr style={{ color: COLORS.textMuted, fontSize: 11, textAlign: 'left' }}>
               <th style={{ fontWeight: 'normal', paddingBottom: 4 }}>Kind</th>
               <th style={{ fontWeight: 'normal', textAlign: 'right', paddingRight: 2 }}>Linger (s)</th>
               {BLOCK_VIEWS.map(v => <th key={v} style={{ fontWeight: 'normal', textAlign: 'center' }}>{viewLabel(v)}</th>)}
