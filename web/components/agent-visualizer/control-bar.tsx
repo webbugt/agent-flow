@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useRef, memo } from 'react'
 import { TimelineEvent, Z, POPUP, TIMING } from '@/lib/agent-types'
 import { COLORS } from '@/lib/colors'
 import { SHOT_MODE } from '@/lib/shot-mode'
+import { scrubRatio } from '@/lib/scrub'
 
 interface ControlBarProps {
   isPlaying: boolean
@@ -181,21 +182,26 @@ function ReviewControlBar({
   const scrubToClientX = useCallback((clientX: number) => {
     const rect = scrubberRef.current?.getBoundingClientRect()
     if (!rect || !onSeek) return
-    const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width))
-    onSeek(ratio * totalDuration)
+    onSeek(scrubRatio(clientX, rect.left, rect.width) * totalDuration)
   }, [onSeek, totalDuration])
 
-  useEffect(() => {
-    if (!isScrubbing) return
-    const handleMove = (e: MouseEvent) => scrubToClientX(e.clientX)
-    const handleUp = () => setIsScrubbing(false)
-    window.addEventListener('mousemove', handleMove)
-    window.addEventListener('mouseup', handleUp)
-    return () => {
-      window.removeEventListener('mousemove', handleMove)
-      window.removeEventListener('mouseup', handleUp)
-    }
-  }, [isScrubbing, scrubToClientX])
+  // Pointer events with pointer capture, not mouse events: a finger drag gives no mouse events, so the track only
+  // answered a tap. Capture keeps the drag going when the finger or the mouse leaves the track, and ends it on
+  // pointerup / pointercancel (no window listeners to leak).
+  const handlePointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.pointerType === 'mouse' && e.button !== 0) return
+    e.preventDefault()
+    try { e.currentTarget.setPointerCapture(e.pointerId) } catch { /* the pointer is already gone */ }
+    setIsScrubbing(true)
+    scrubToClientX(e.clientX)
+  }, [scrubToClientX])
+  const handlePointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) scrubToClientX(e.clientX)
+  }, [scrubToClientX])
+  const handlePointerEnd = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId)
+    setIsScrubbing(false)
+  }, [])
 
   return (
     <div
@@ -227,11 +233,19 @@ function ReviewControlBar({
         <div
           ref={scrubberRef}
           className="flex-1 relative h-8 flex items-center group cursor-pointer"
-          onMouseDown={(e) => {
-            e.preventDefault()
-            setIsScrubbing(true)
-            scrubToClientX(e.clientX)
-          }}
+          data-testid="review-scrubber"
+          role="slider"
+          aria-label="Replay position"
+          aria-valuemin={0}
+          aria-valuemax={Math.round(totalDuration)}
+          aria-valuenow={Math.round(currentTime)}
+          aria-valuetext={`${formatTime(currentTime)} of ${formatTime(totalDuration)}`}
+          // touch-action: none, or the browser claims the finger for page scroll / zoom and sends pointercancel.
+          style={{ touchAction: 'none' }}
+          onPointerDown={handlePointerDown}
+          onPointerMove={handlePointerMove}
+          onPointerUp={handlePointerEnd}
+          onPointerCancel={handlePointerEnd}
         >
           <div
             className="w-full rounded-full relative transition-all duration-150 group-hover:h-2"
