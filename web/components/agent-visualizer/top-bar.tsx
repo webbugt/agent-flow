@@ -38,20 +38,24 @@ function UnmutedIcon() {
 
 // ─── Toggle Button ──────────────────────────────────────────────────────────
 
-function ToggleButton({ active, onClick, children, style, activeColor, testId }: {
+function ToggleButton({ active, onClick, children, style, activeColor, testId, label }: {
   active: boolean
   onClick: () => void
   children: React.ReactNode
   style?: React.CSSProperties
   activeColor?: { bg: string; text: string }
   testId?: string
+  /** Accessible name, for a button that shows only an icon. With it the button is not a pressed/unpressed toggle: the name says what a press does. */
+  label?: string
 }) {
   return (
     <button
       onClick={onClick}
       data-testid={testId}
       className="af-tap af-tap-fine af-focus px-1.5 py-0.5 rounded transition-all"
-      aria-pressed={active}
+      aria-pressed={label ? undefined : active}
+      aria-label={label}
+      title={label}
       style={{
         background: active ? (activeColor?.bg ?? COLORS.toggleActive) : COLORS.toggleInactive,
         border: `1px solid ${COLORS.toggleBorder}`,
@@ -285,7 +289,7 @@ export const TopBar = memo(function TopBar({
         <ToggleButton active={false} onClick={onToggleScreensaver} testId="screensaver-toggle">
           <span title="Hide all UI (S). Any key or click brings it back." aria-label="Screensaver">Screensaver</span>
         </ToggleButton>
-        <ToggleButton active={!isMuted} onClick={onToggleMute} style={{ border: `1px solid ${COLORS.toggleBorder}` }}>
+        <ToggleButton active={!isMuted} onClick={onToggleMute} testId="mute-toggle" label={isMuted ? "Unmute sound" : "Mute sound"} style={{ border: `1px solid ${COLORS.toggleBorder}` }}>
           {isMuted ? <MutedIcon /> : <UnmutedIcon />}
         </ToggleButton>
         <ToggleButton active={showOptions} onClick={onToggleOptions} testId="options-toggle">
