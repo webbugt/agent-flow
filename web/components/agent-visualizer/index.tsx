@@ -8,7 +8,8 @@ import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts"
 import { useScreensaver } from "@/hooks/use-screensaver"
 import { useViewUrlSync } from "@/hooks/use-view-url"
 import { parseViewParams } from "@/lib/fleet/url-view"
-import { AgentCanvas } from "./canvas"
+import { AgentCanvas, type CanvasControls } from "./canvas"
+import { SingleZoomControls } from "./single-zoom-controls"
 import { agentCostOf } from "./canvas/draw-cost"
 import { effectiveCosts } from "@/lib/costs/active"
 import { buildTopBarCost, describeSources } from "@/lib/costs/overlay"
@@ -133,6 +134,8 @@ export function AgentVisualizer() {
   // (finished and idle nodes keep their history there), not the single-view simulation.
   const [detailFleetSessionId, setDetailFleetSessionId] = useState<string | null>(null)
   const fleetReplayRef = useRef<FleetReplay | null>(null)
+  /** On-screen zoom buttons of the single-session graph (the canvas fills it). */
+  const singleCanvasControlsRef = useRef<CanvasControls | null>(null)
   if (!fleetReplayRef.current) fleetReplayRef.current = new FleetReplay()
   const viewportWidth = useViewportWidth(1280)
 
@@ -568,7 +571,9 @@ export function AgentVisualizer() {
         selectedDiscoveryId={selection.selectedDiscoveryId}
         showCostOverlay={showCostOverlay && !sv}
         screensaver={sv}
+        controlsRef={singleCanvasControlsRef}
       />
+      <SingleZoomControls controlsRef={singleCanvasControlsRef} visible={!sv && !showFleet} />
 
       {/* Message feed panel (top-left) */}
       {!sv && (
