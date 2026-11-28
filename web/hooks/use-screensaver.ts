@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { loadScreensaver, saveScreensaver, shouldExitScreensaver } from '@/lib/fleet/screensaver-pref'
 import { swallowGesture } from '@/lib/fleet/swallow-gesture'
+import { parseViewParams } from '@/lib/fleet/url-view'
 
 export interface Screensaver {
   /** Screensaver mode is on: the UI is hidden, the map and its activity animation stay. */
@@ -31,9 +32,12 @@ export function useScreensaver(): Screensaver {
     setOn(next)
   }, [])
 
-  // Restored after mount: only a mode the user left on comes back.
+  // Restored after mount: only a mode the user left on comes back. `?screensaver=1|0` in the URL wins over the stored
+  // choice (and is saved, so the stored choice matches what is shown); without it the stored choice applies.
   useEffect(() => {
-    if (loadScreensaver(window.localStorage)) {
+    const fromUrl = parseViewParams(window.location.search).screensaver
+    if (fromUrl !== undefined) saveScreensaver(window.localStorage, fromUrl)
+    if (fromUrl ?? loadScreensaver(window.localStorage)) {
       enteredAtRef.current = performance.now()
       onRef.current = true
       setOn(true)

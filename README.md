@@ -137,6 +137,22 @@ You can also point Agent Flow at a JSONL event log file:
 |----------|--------|
 | `Cmd+Alt+A` (Mac) / `Ctrl+Alt+A` (Win/Linux) | Open Agent Flow |
 
+## URL Parameters
+
+The Fleet view and the screensaver mode can be set from the address bar:
+
+| Parameter | Values | Effect |
+|-----------|--------|--------|
+| `fleet` | `1` / `0` | Fleet view on / off |
+| `screensaver` | `1` / `0` | Screensaver mode (all UI hidden) on / off |
+
+- `http://localhost:3000/?fleet=1` opens the Fleet view. `http://localhost:3000/?screensaver=1` opens straight into screensaver mode.
+- `?fleet=1&screensaver=0` sets both at once.
+- A parameter in the URL wins over the choice the browser stored last time. Without it (for example a first visit to `/`), the stored choice applies, as before. After load, the app writes both parameters to the address bar, so the URL always shows the view in use.
+- `on` / `off` and `true` / `false` are accepted as well. Any other value is ignored.
+- The address bar follows the view. Toggling Fleet or the screensaver (the `s` key, the header button, or any key or click that leaves the screensaver) rewrites `fleet` and `screensaver` in the URL without adding a history entry. Other parameters (`shot`, `stress`) are left unchanged, so a bookmark or a shared link reopens the same view.
+- Changing the URL by hand after the page has loaded does not change the view. Reload the page to apply it.
+
 ## Settings
 
 | Setting | Default | Description |

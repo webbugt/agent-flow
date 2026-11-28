@@ -6,6 +6,8 @@ import { useVSCodeBridge } from "@/hooks/use-vscode-bridge"
 import { useSelectionState } from "@/hooks/use-selection-state"
 import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts"
 import { useScreensaver } from "@/hooks/use-screensaver"
+import { useViewUrlSync } from "@/hooks/use-view-url"
+import { parseViewParams } from "@/lib/fleet/url-view"
 import { AgentCanvas } from "./canvas"
 import { agentCostOf } from "./canvas/draw-cost"
 import { effectiveCosts } from "@/lib/costs/active"
@@ -141,7 +143,8 @@ export function AgentVisualizer() {
   useAppStatePersistence(
     { showFleet, showTimeline, showStats, showHexGrid, showCostOverlay, showFileAttention, showTranscript, limitsCollapsed, selectedSessionId: bridge.selectedSessionId },
     useCallback((s: AppState) => {
-      setShowFleet(s.showFleet)
+      // `?fleet=1|0` in the URL wins over the stored Fleet choice; without it the stored choice applies.
+      setShowFleet(parseViewParams(window.location.search).fleet ?? s.showFleet)
       setShowTimeline(s.showTimeline)
       setShowStats(s.showStats)
       setShowHexGrid(s.showHexGrid)
@@ -151,6 +154,12 @@ export function AgentVisualizer() {
       setLimitsCollapsed(s.limitsCollapsed)
     }, []),
   )
+
+  // The Fleet view and screensaver mode are kept in the URL (`?fleet=`, `?screensaver=`, see lib/fleet/url-view.ts).
+  // Written only after the restore above has run (same mount pass), so the URL is read before it is rewritten.
+  const [viewUrlReady, setViewUrlReady] = useState(false)
+  useEffect(() => { setViewUrlReady(true) }, [])
+  useViewUrlSync({ fleet: showFleet, screensaver: sv }, viewUrlReady)
 
   // Fleet view: agent instances grouped by identity + Kanban/Supermemory lanes.
   // Selection only hides things from the views; it never stops a session.
