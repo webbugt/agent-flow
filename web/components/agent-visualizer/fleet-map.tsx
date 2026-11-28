@@ -332,7 +332,7 @@ export function FleetMap({
           data-testid="fleet-timeline-toggle"
           aria-pressed={timelineVisible}
           onClick={onToggleTimeline}
-          className="absolute font-mono text-xs px-2 py-1 rounded"
+          className="af-fleet-toggle absolute font-mono text-xs px-2 py-1 rounded"
           style={{
             right: insetRight + 12, bottom: controlsBottom + 8, zIndex: 6,
             background: 'rgba(8,12,24,0.88)', border: `1px solid ${COLORS.holoBase}66`, color: COLORS.textPrimary,
