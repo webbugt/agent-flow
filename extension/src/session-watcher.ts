@@ -544,7 +544,8 @@ export class SessionWatcher implements AgentSessionWatcher {
         this.emit({
           time: this.elapsed(sessionId),
           type: 'agent_complete',
-          payload: { name: ORCHESTRATOR_NAME },
+          // `reason: 'quiet'` marks this completion as the absence of activity: the page's freshness age keeps growing.
+          payload: { name: ORCHESTRATOR_NAME, reason: 'quiet' },
         }, sessionId)
         this._onSessionLifecycle.fire({ type: 'ended', sessionId, label: session.label })
       }
