@@ -202,3 +202,105 @@
 .scrollbar-hide::-webkit-scrollbar {
   display: none;
 }
+
+/* ─── Review (replay) bar ─────────────────────────────────────────────────────
+   One row from 480 px up. Under 480 px (a phone) the scrubber moves to its own full-width row with a 120 px
+   minimum, the speed buttons to a row below it, and the restart / ▶ LIVE buttons stay in the first row with
+   play and the time, so nothing runs past the right edge of the viewport. */
+.af-review-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+.af-review-scrubber {
+  flex: 1 1 120px;
+  min-width: 120px;
+}
+@media (max-width: 479px) {
+  .af-review-bar { padding-left: 12px; padding-right: 12px; }
+  .af-review-time { margin-right: auto; }
+  .af-review-scrubber { order: 10; flex-basis: 100%; }
+  .af-review-speeds { order: 11; margin-left: auto; margin-right: auto; }
+}
+
+
+/* ─── Hit areas (WCAG 2.2 AA 2.5.8 Target Size, minimum 24x24 CSS px) ───────────
+   `.af-tap` makes a small control at least 24x24 px to hit without changing how it looks or how the row lays out: the
+   padding is a pseudo-element centred on the control. Under a coarse pointer (a finger) the primary controls get 44 px.
+   `.af-tap-fine` keeps 24 px there (dense secondary controls, where 44 px targets would overlap each other). */
+.af-tap {
+  position: relative;
+}
+.af-tap::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: max(100%, 24px);
+  height: max(100%, 24px);
+  transform: translate(-50%, -50%);
+}
+@media (pointer: coarse) {
+  .af-tap:not(.af-tap-fine)::after {
+    width: max(100%, 44px);
+    height: max(100%, 44px);
+  }
+}
+/* App root: clip, not hidden (a hidden box is still scrollable by scrollIntoView / focus, which slid the app 8 px left); a browser
+   without overflow: clip (Safari before 16) keeps the `hidden` of the first declaration. */
+.af-app-root { overflow: hidden; overflow: clip; }
+/* Single view zoom buttons (+, -, fit): a column centred on the right edge; on a short screen a row just under the top bar. */
+.af-single-zoom {
+  top: 50%;
+  transform: translateY(-50%);
+}
+@media (max-height: 500px) {
+  .af-single-zoom {
+    flex-direction: row;
+    top: calc(var(--af-top-bar-bottom, 48px) + 8px);
+    transform: none;
+  }
+}
+/* Single view Timeline panel on a short screen: the zoom buttons are a row right under the top bar at the right edge and the
+   panel (flush right at 16 px) used to cover the lower part of them. The panel stops left of the zoom column instead:
+   3 buttons x 40 px + 2 gaps x 6 px = 132 px, + the 12 px right offset + an 8 px gap = 152 px, rounded up to 160. The zoom row
+   keeps its place (it is what the user reaches for while the panel is open) and no panel height has to give way.
+   Only where the two can meet: the panel is centred and at most 700 px wide, so its right edge is at 50% + 350 px and the zoom
+   row starts 152 px from the right edge; they cannot overlap from 1004 px wide up, and a wide short desktop window keeps the
+   panel centred. 1024 px is that limit with a margin. */
+@media (max-height: 500px) and (max-width: 1024px) {
+  .af-timeline-panel { right: 160px !important; }
+}
+/* Lanes of the Fleet timeline: 18 vh (at least 120 px) on a phone, 320 px from `sm` up, a few rows on a short screen. */
+.af-fleet-lanes { max-height: max(18vh, 120px); }
+@media (min-width: 640px) { .af-fleet-lanes { max-height: 20rem; } }
+/* Short screen: the axis spacer (HEADER_HEIGHT 20) + one full lane row (ROW_HEIGHT 24) + a 10 px peek of the next row, which says
+   the list scrolls. The legend is dropped there (see .af-fleet-legend) to pay for it, so the zoom row above the panel stays clear. */
+@media (max-height: 500px) { .af-fleet-lanes { max-height: 54px; } .af-fleet-legend { display: none; } }
+/* Fleet map zoom buttons: a column bottom-left; on a short screen a row, so they need 40 px of height instead of 132. */
+@media (max-height: 500px) {
+  .af-fleet-zoom { flex-direction: row; }
+  /* The activity filter sits top right, so Show / Hide timeline moves next to the zoom row on the left instead of under it. */
+  .af-fleet-toggle { right: auto !important; left: 156px; }
+}
+/* A visible focus ring for the controls the app draws itself. */
+.af-focus:focus-visible {
+  outline: 2px solid #aaeeff;
+  outline-offset: 1px;
+}
+/* The close button of a tab chip: shown on the selected chip, on hover and when anything in the chip has focus. */
+.af-chip-close {
+  opacity: 0;
+}
+.af-chip:hover .af-chip-close,
+.af-chip:focus-within .af-chip-close,
+.af-chip[data-selected="true"] .af-chip-close,
+.af-chip-close:focus-visible {
+  opacity: 1;
+}
+@media (pointer: coarse) {
+  /* No hover on a touch screen: the close is always drawn, a few px apart from the tab so that a slightly-off tap on the
+     tab does not close the session. */
+  .af-chip-close { opacity: 1; margin-left: 6px; }
+}

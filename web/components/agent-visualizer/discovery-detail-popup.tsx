@@ -28,7 +28,7 @@ export function DiscoveryDetailPopup({ discovery, position, onClose }: Discovery
     <DetailPopup position={position} width={POPUP.discovery.width} estimatedHeight={POPUP.discovery.estimatedHeight} onClose={onClose}>
       <PanelHeader onClose={onClose}>
         <span
-          className="text-[9px] font-mono font-bold px-1.5 py-0.5 rounded"
+          className="text-[11px] font-mono font-bold px-1.5 py-0.5 rounded"
           style={{ background: typeColor + '20', color: typeColor, border: `1px solid ${typeColor}30` }}
         >
           {typeLabel}
@@ -46,7 +46,7 @@ export function DiscoveryDetailPopup({ discovery, position, onClose }: Discovery
       {/* Content */}
       {discovery.content && (
         <div
-          className="rounded px-2 py-1.5 text-[9px] font-mono whitespace-pre-wrap"
+          className="rounded px-2 py-1.5 text-[11px] font-mono whitespace-pre-wrap"
           style={{
             background: COLORS.holoBg03,
             border: `1px solid ${COLORS.holoBorder08}`,
@@ -60,7 +60,7 @@ export function DiscoveryDetailPopup({ discovery, position, onClose }: Discovery
       )}
 
       {/* Agent attribution */}
-      <div className="mt-1.5 text-[9px] font-mono" style={{ color: COLORS.textMuted }}>
+      <div className="mt-1.5 text-[11px] font-mono" style={{ color: COLORS.textMuted }}>
         agent: {discovery.agentId}
       </div>
     </DetailPopup>

@@ -8,9 +8,11 @@ import { effectiveCosts } from '@/lib/costs/active'
 import { buildLimitsPanel, type LimitRow, type LimitsPanelModel, type RowTag } from '@/lib/costs/limits-model'
 import { useLimits, useMinuteTick } from '@/hooks/use-limits'
 import { useActiveCostsVersion } from '@/hooks/use-costs-config'
-import { useViewportWidth } from '@/hooks/use-viewport-width'
+import { useViewportHeight, useViewportWidth } from '@/hooks/use-viewport-width'
 import { collectByTime, type LedgerEvent } from '@/lib/limits-ledger'
 import { LOCAL_CLOCK } from './claude-limits'
+import { STACK_GAP_PX, DEFAULT_BAR_TOP_PX, VAR_BAR_TOP, VAR_LIMITS_TOP, limitsAutoFolded, limitsStacked } from '@/lib/bottom-stack'
+import { usePublishInset } from '@/hooks/use-publish-inset'
 
 const AMBER = '#ffcc66'
 const TAG: Record<RowTag, { text: string; color: string }> = {
@@ -49,7 +51,7 @@ function EstIcon() {
 function Tag({ tag, id }: { tag: RowTag; id: string }) {
   const t = TAG[tag]
   return (
-    <span data-testid={`limits-row-${id}-tag`} style={{ color: t.color, border: `1px solid ${t.color}66`, borderRadius: 4, padding: '0 4px', fontSize: 9 }}>{t.text}</span>
+    <span data-testid={`limits-row-${id}-tag`} style={{ color: t.color, border: `1px solid ${t.color}66`, borderRadius: 4, padding: '0 4px', fontSize: 11 }}>{t.text}</span>
   )
 }
 
@@ -86,7 +88,7 @@ function RowTooltip({ row, anchor, narrow, onClose, pinned }: { row: LimitRow; a
       ref={ref}
       role="tooltip"
       data-testid={f ? 'fable-estimate-tooltip' : 'limits-row-tooltip'}
-      className="font-mono text-[10px] rounded"
+      className="font-mono text-[11px] rounded"
       style={{
         position: 'fixed', left: pos?.left ?? -9999, top: pos?.top ?? -9999, width: `min(${TIP_WIDTH}px, calc(100vw - ${MARGIN * 2}px))`, zIndex: Z.detailCard + 5,
         background: 'rgba(8, 12, 24, 0.97)', border: `1px solid ${COLORS.glassBorder}`, boxShadow: '0 4px 24px rgba(0,0,0,0.5)', padding: '8px 10px',
@@ -96,7 +98,7 @@ function RowTooltip({ row, anchor, narrow, onClose, pinned }: { row: LimitRow; a
       onMouseDown={e => e.stopPropagation()}
       onMouseUp={e => e.stopPropagation()}
     >
-      {pinned && <button type="button" onClick={onClose} aria-label="Close limit details" style={{ position: 'absolute', right: 8, top: 6, color: COLORS.textMuted }}>✕</button>}
+      {pinned && <button type="button" onClick={onClose} aria-label="Close limit details" className="af-tap af-focus" style={{ position: 'absolute', right: 8, top: 6, color: COLORS.textMuted }}>✕</button>}
       {f ? (
         <>
           <div style={{ fontWeight: 700, marginBottom: 4, paddingRight: 14 }}>{f.title}</div>
@@ -153,13 +155,13 @@ function Row({ row, narrow }: { row: LimitRow; narrow: boolean }) {
         <strong data-testid={`limits-row-${row.id}-value`} style={{ fontSize: 13, color: row.tag ? COLORS.textPrimary : COLORS.textMuted }}>{row.valueText}</strong>
         {row.estimate && <EstIcon />}
         {row.tag && <Tag tag={row.tag} id={row.id} />}
-        {row.asOfText && <span data-testid={`limits-row-${row.id}-asof`} style={{ color: AMBER, fontSize: 10 }}>{row.asOfText}</span>}
-        <span style={{ color: COLORS.textMuted, fontSize: 10, marginLeft: 'auto', textAlign: 'right' }}>{row.resetText}</span>
+        {row.asOfText && <span data-testid={`limits-row-${row.id}-asof`} style={{ color: AMBER, fontSize: 11 }}>{row.asOfText}</span>}
+        <span style={{ color: COLORS.textMuted, fontSize: 11, marginLeft: 'auto', textAlign: 'right' }}>{row.resetText}</span>
       </div>
       <div aria-hidden style={{ height: 4, borderRadius: 2, background: 'rgba(255,255,255,0.08)', marginTop: 3, overflow: 'hidden' }}>
         <div style={{ width: `${barPct}%`, height: '100%', background: row.tag === 'stale' ? `${AMBER}99` : row.estimate ? `${color}aa` : color }} />
       </div>
-      {row.hint && <div data-testid={`limits-row-${row.id}-hint`} style={{ color: COLORS.textMuted, fontSize: 9, marginTop: 2 }}>{row.hint}</div>}
+      {row.hint && <div data-testid={`limits-row-${row.id}-hint`} style={{ color: COLORS.textMuted, fontSize: 11, marginTop: 2 }}>{row.hint}</div>}
       {open && anchor && <RowTooltip row={row} anchor={anchor} narrow={narrow} pinned={pinned} onClose={() => { setPinned(false); setHover(false) }} />}
     </div>
   )
@@ -170,53 +172,68 @@ function Row({ row, narrow }: { row: LimitRow; narrow: boolean }) {
  * hover / tap explanation. DOM, not canvas, so the hover targets are real. Bottom-right on desktop, a sheet above
  * the control bar on a phone. Plan `api` or nothing to show: nothing is rendered.
  */
-export function LimitsPanel({ model, collapsed: collapsedProp, onCollapsedChange }: {
+export function LimitsPanel({ model, collapsed: collapsedProp, onCollapsedChange, otherBottomPanelOpen = false }: {
   model: LimitsPanelModel
   /** Controlled fold state (the app keeps it in its saved state). Without it the panel keeps its own, starting folded. */
   collapsed?: boolean
   onCollapsedChange?: (collapsed: boolean) => void
+  /** Another bottom panel (timeline, node card) is open: on a small screen the panel shows its one line only. */
+  otherBottomPanelOpen?: boolean
 }) {
   const width = useViewportWidth(1280)
+  const height = useViewportHeight(900)
   const narrow = width < PHONE_PX
+  // Beside the control bar only where the two cannot meet; everywhere else it sits on top of the bar and publishes its
+  // own top edge, so the timeline, node card and resource blocks stack above it instead of under it.
+  const stacked = limitsStacked(width)
   const [ownCollapsed, setOwnCollapsed] = useState(true)
-  const collapsed = collapsedProp ?? ownCollapsed
+  const stateCollapsed = collapsedProp ?? ownCollapsed
+  // The fold forced by an open bottom panel is a view of the state, not a change to it: closing the panel restores the user's choice.
+  const autoFolded = !stateCollapsed && limitsAutoFolded(width, otherBottomPanelOpen, height)
+  const collapsed = stateCollapsed || autoFolded
   const setCollapsed = (next: boolean) => { if (onCollapsedChange) onCollapsedChange(next); else setOwnCollapsed(next) }
+  const sectionRef = useRef<HTMLElement>(null)
+  usePublishInset(sectionRef, VAR_LIMITS_TOP, stacked && model.visible)
   if (!model.visible) return null
   return (
     <section
+      ref={sectionRef}
       data-testid="limits-panel"
       data-narrow={narrow ? '1' : '0'}
+      data-stacked={stacked ? '1' : '0'}
+      data-auto-folded={autoFolded ? '1' : '0'}
       aria-label="Claude usage limits"
-      className="font-mono text-[10px] rounded"
+      className="font-mono text-[11px] rounded"
       style={{
-        position: 'fixed', right: narrow ? 8 : 16, left: narrow ? 8 : 'auto', bottom: narrow ? 92 : 16, width: narrow ? 'auto' : 300, zIndex: Z.sidePanel + 5,
+        position: 'fixed', right: narrow ? 8 : 16, left: narrow ? 8 : 'auto', bottom: stacked ? `calc(var(${VAR_BAR_TOP}, ${DEFAULT_BAR_TOP_PX}px) + ${STACK_GAP_PX}px)` : 16, width: narrow ? 'auto' : 300, zIndex: Z.sidePanel + 5,
         background: COLORS.panelBg, border: `1px solid ${COLORS.glassBorder}`, padding: '8px 10px', color: COLORS.textPrimary, backdropFilter: 'blur(8px)',
       }}
     >
       <div className="flex items-baseline gap-2" style={{ marginBottom: collapsed ? 0 : 6 }}>
-        <h3 style={{ margin: 0, color: COLORS.textMuted, fontSize: 9, letterSpacing: 1, textTransform: 'uppercase' }}>Limits</h3>
-        <span data-testid="limits-plan" style={{ color: COLORS.textMuted, fontSize: 9, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{model.planText}</span>
+        <h3 style={{ margin: 0, color: COLORS.textMuted, fontSize: 11, letterSpacing: 1, textTransform: 'uppercase' }}>Limits</h3>
+        <span data-testid="limits-plan" style={{ color: COLORS.textMuted, fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{model.planText}</span>
         <button
           type="button" data-testid="limits-panel-toggle" onClick={() => setCollapsed(!collapsed)}
-          aria-expanded={!collapsed} aria-label={collapsed ? 'Show usage limits' : 'Hide usage limits'}
-          className="ml-auto" style={{ color: COLORS.textMuted, fontSize: 11, lineHeight: 1 }}
+          aria-expanded={!collapsed} aria-label={collapsed ? 'Show usage limits' : 'Hide usage limits'} disabled={autoFolded} title={autoFolded ? 'Folded while another panel is open' : undefined}
+          className="af-tap af-focus ml-auto px-1" style={{ color: COLORS.textMuted, fontSize: 11, lineHeight: 1 }}
         >
           {collapsed ? '▴' : '▾'}
         </button>
       </div>
       {!collapsed && model.rows.map(r => <Row key={r.id} row={r} narrow={narrow} />)}
-      {!collapsed && model.notes.map((n, i) => <p key={i} data-testid="limits-panel-note" style={{ margin: '4px 0 0', color: COLORS.textMuted, fontSize: 9, lineHeight: 1.4 }}>{n}</p>)}
+      {!collapsed && model.notes.map((n, i) => <p key={i} data-testid="limits-panel-note" style={{ margin: '4px 0 0', color: COLORS.textMuted, fontSize: 11, lineHeight: 1.4 }}>{n}</p>)}
     </section>
   )
 }
 
 /** Mounted once near the root: reads every session's ledger, the config and the observed readings. */
-export function LimitsPanelHost({ sessionIds, eventsOf, collapsed, onCollapsedChange }: {
+export function LimitsPanelHost({ sessionIds, eventsOf, collapsed, onCollapsedChange, otherBottomPanelOpen }: {
   sessionIds: readonly string[]
   eventsOf: (id: string) => readonly LedgerEvent[]
   collapsed?: boolean
   onCollapsedChange?: (collapsed: boolean) => void
+  otherBottomPanelOpen?: boolean
 }) {
   const model = useLimitsPanelModel(sessionIds, eventsOf)
-  return <LimitsPanel model={model} collapsed={collapsed} onCollapsedChange={onCollapsedChange} />
+  return <LimitsPanel model={model} collapsed={collapsed} onCollapsedChange={onCollapsedChange} otherBottomPanelOpen={otherBottomPanelOpen} />
 }

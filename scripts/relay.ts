@@ -211,13 +211,17 @@ function resetInactivityTimer(sessionId: string) {
       broadcastEvent({
         time: elapsed(sessionId),
         type: 'agent_complete',
-        payload: { name: ORCHESTRATOR_NAME },
+        // `reason: 'quiet'` marks this completion as the absence of activity: the page's freshness age keeps growing.
+        payload: { name: ORCHESTRATOR_NAME, reason: 'quiet' },
         sessionId,
       })
       broadcastSessionLifecycle('ended', sessionId, session.label)
     }
   }, INACTIVITY_TIMEOUT_MS)
 }
+
+/** Test hook (scripts/relay-inactivity.test.ts): the session table, the event buffer and the inactivity timer. */
+export const __testing = { sessions, eventBuffer, resetInactivityTimer }
 
 function watchSession(sessionId: string, filePath: string) {
   const defaultLabel = `Session ${sessionId.slice(0, SESSION_ID_DISPLAY)}`

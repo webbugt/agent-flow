@@ -26,11 +26,15 @@ interface CloseButtonProps {
 export function CloseButton({ onClick, className = '' }: CloseButtonProps) {
   return (
     <button
+      type="button"
       onClick={onClick}
-      className={`text-xs transition-colors ${className}`}
+      aria-label="Close"
+      title="Close"
+      // 24 px hit area (44 px on a touch screen) around the 12 px glyph: the glyph used to be the whole target.
+      className={`af-tap af-focus text-xs transition-colors px-1 ${className}`}
       style={{ color: COLORS.textMuted }}
     >
-      ✕
+      <span aria-hidden>✕</span>
     </button>
   )
 }

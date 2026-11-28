@@ -64,7 +64,7 @@ export function FleetInspector({ inspection, now, onClose, right, top, narrow, p
               {pinned ? 'Pinned' : 'Pin'}
             </button>
           )}
-          <button type="button" aria-label="Close inspector" data-testid="fleet-inspector-close" onClick={onClose} style={{ color: COLORS.textMuted }}>
+          <button type="button" aria-label="Close inspector" data-testid="fleet-inspector-close" className="af-tap af-focus px-1" onClick={onClose} style={{ color: COLORS.textMuted }}>
             ✕
           </button>
         </span>

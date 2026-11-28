@@ -470,7 +470,10 @@ export function AgentCanvas({
     <div ref={containerRef} className="relative w-full h-full overflow-hidden" style={{ cursor: cursorHidden ? 'none' : isDragging ? 'grabbing' : 'grab' }}>
       <canvas
         ref={mainCanvasRef}
-        style={{ width: dimensions.width, height: dimensions.height }}
+        // touch-action: none: the canvas handles one-finger pan and two-finger pinch itself, so the browser must not
+        // scroll or zoom the page under the fingers.
+        style={{ width: dimensions.width, height: dimensions.height, touchAction: 'none' }}
+        data-testid="agent-canvas"
         {...handlers}
         className="w-full h-full"
       />

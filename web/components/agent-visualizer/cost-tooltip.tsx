@@ -23,12 +23,12 @@ export function CostTooltipView({ cost, cfg, onClose }: { cost: AgentCost; cfg: 
         <span style={{ color: COLORS.textPrimary, fontWeight: 700 }}>{model.title}</span>
         <span
           data-testid="cost-tooltip-badge"
-          style={{ color, background: color + '26', border: `1px solid ${color}66`, borderRadius: 4, padding: '0 5px', fontSize: 9 }}
+          style={{ color, background: color + '26', border: `1px solid ${color}66`, borderRadius: 4, padding: '0 5px', fontSize: 11 }}
         >
           {BADGE_LABEL[flavor]}
         </span>
         {onClose && (
-          <button type="button" onClick={onClose} aria-label="Close cost details" className="ml-auto" style={{ color: COLORS.textMuted }}>✕</button>
+          <button type="button" onClick={onClose} aria-label="Close cost details" className="af-tap af-focus ml-auto px-1" style={{ color: COLORS.textMuted }}>✕</button>
         )}
       </div>
       <dl style={{ margin: 0 }}>
@@ -48,7 +48,7 @@ export function CostTooltipView({ cost, cfg, onClose }: { cost: AgentCost; cfg: 
         ))}
       </dl>
       {model.footnotes.length > 0 && (
-        <ul style={{ margin: '6px 0 0', padding: 0, listStyle: 'none', color: COLORS.textMuted, fontSize: 9 }}>
+        <ul style={{ margin: '6px 0 0', padding: 0, listStyle: 'none', color: COLORS.textMuted, fontSize: 11 }}>
           {model.footnotes.map((f, i) => <li key={i} style={{ marginBottom: 2 }}>{f}</li>)}
         </ul>
       )}
@@ -85,7 +85,7 @@ export function CostTooltip({ cost, anchor, pinned, onClose }: { cost: AgentCost
     <div
       ref={ref}
       role="tooltip"
-      className="font-mono text-[10px] rounded"
+      className="font-mono text-[11px] rounded"
       style={{
         position: 'fixed', left: pos?.left ?? -9999, top: pos?.top ?? -9999, width: `min(${WIDTH}px, calc(100vw - ${MARGIN * 2}px))`, zIndex: Z.detailCard + 5,
         background: 'rgba(8, 12, 24, 0.96)', border: `1px solid ${COLORS.glassBorder}`, boxShadow: '0 4px 24px rgba(0,0,0,0.5)', padding: '8px 10px',

@@ -29,7 +29,7 @@ export function FileAttentionPanel({ visible, fileAttention, onClose, onOpenFile
     >
       <div className="glass-card relative">
         <PanelHeader onClose={onClose}>
-          <span className="text-[10px] font-mono tracking-wider" style={{ color: COLORS.textPrimary }}>
+          <span className="text-[11px] font-mono tracking-wider" style={{ color: COLORS.textPrimary }}>
             FILE ATTENTION
           </span>
         </PanelHeader>
@@ -37,7 +37,7 @@ export function FileAttentionPanel({ visible, fileAttention, onClose, onOpenFile
         {/* File list */}
         <div className="space-y-1 max-h-[300px] overflow-y-auto">
           {files.length === 0 && (
-            <div className="text-[9px] font-mono py-2 text-center" style={{ color: COLORS.textMuted }}>
+            <div className="text-[11px] font-mono py-2 text-center" style={{ color: COLORS.textMuted }}>
               No files accessed yet
             </div>
           )}
@@ -63,10 +63,10 @@ export function FileAttentionPanel({ visible, fileAttention, onClose, onOpenFile
               >
                 {/* Filename */}
                 <div className="flex items-center justify-between">
-                  <span className="text-[9px] font-mono truncate" style={{ color: heatColor, maxWidth: 160 }}>
+                  <span className="text-[11px] font-mono truncate" style={{ color: heatColor, maxWidth: 160 }}>
                     {displayPath}
                   </span>
-                  <span className="text-[9px] font-mono" style={{ color: COLORS.textMuted }}>
+                  <span className="text-[11px] font-mono" style={{ color: COLORS.textMuted }}>
                     {file.totalTokens > 0 ? formatTokens(file.totalTokens) : '—'}
                   </span>
                 </div>
@@ -78,17 +78,17 @@ export function FileAttentionPanel({ visible, fileAttention, onClose, onOpenFile
                 {/* Stats row */}
                 <div className="flex items-center gap-2 mt-1">
                   {file.reads > 0 && (
-                    <span className="text-[9px] font-mono" style={{ color: COLORS.holoBase + '80' }}>
+                    <span className="text-[11px] font-mono" style={{ color: COLORS.holoBase + '80' }}>
                       {file.reads} read{file.reads > 1 ? 's' : ''}
                     </span>
                   )}
                   {file.edits > 0 && (
-                    <span className="text-[9px] font-mono" style={{ color: COLORS.tool + '80' }}>
+                    <span className="text-[11px] font-mono" style={{ color: COLORS.tool + '80' }}>
                       {file.edits} edit{file.edits > 1 ? 's' : ''}
                     </span>
                   )}
                   {file.agents.length > 0 && (
-                    <span className="text-[9px] font-mono" style={{ color: COLORS.textMuted }}
+                    <span className="text-[11px] font-mono" style={{ color: COLORS.textMuted }}
                       title={file.agents.join(', ')}
                     >
                       {file.agents.length} agent{file.agents.length > 1 ? 's' : ''}
@@ -102,7 +102,7 @@ export function FileAttentionPanel({ visible, fileAttention, onClose, onOpenFile
 
         {/* Summary */}
         {files.length > 0 && (
-          <div className="mt-2 pt-2 flex justify-between text-[9px] font-mono" style={{
+          <div className="mt-2 pt-2 flex justify-between text-[11px] font-mono" style={{
             borderTop: `1px solid ${COLORS.holoBorder08}`,
             color: COLORS.textMuted,
           }}>

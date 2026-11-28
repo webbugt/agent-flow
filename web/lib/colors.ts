@@ -43,8 +43,9 @@ export const COLORS = {
   // UI Chrome
   nodeInterior: 'rgba(10, 15, 40, 0.5)',
   textPrimary: '#aaeeff',
-  textDim: '#66ccff90',
-  textMuted: '#66ccff50',
+  // Both are body text on the dark chrome: 4.5:1 (WCAG 1.4.3) against #0a0a1a and #050510, see colors-contrast.test.ts.
+  textDim: '#66ccffd9',
+  textMuted: '#66ccffb3',
 
   // Glass card
   glassBg: 'rgba(10, 15, 30, 0.7)',

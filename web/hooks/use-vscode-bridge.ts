@@ -4,43 +4,12 @@ import { useEffect, useState, useCallback, useRef } from 'react'
 import { vscodeBridge, type ConnectionStatus, type AgentEvent, type SessionInfo } from '@/lib/vscode-bridge'
 import { SimulationEvent } from '@/lib/agent-types'
 import { countsAsActivity } from '@/lib/fleet/fleet-model'
+import { showsLiveActivity, stampStreamMessage, type StreamStamps } from '@/lib/data-freshness'
 import { loadAppState, pickInitialSession } from '@/lib/fleet/app-state'
 import { handleServerVersion } from '@/lib/auto-reload'
+import type { BridgeHookResult } from './bridge-hook-result'
 
-interface BridgeHookResult {
-  isVSCode: boolean
-  connectionStatus: ConnectionStatus
-  /** Events received from VS Code extension, converted to SimulationEvent format */
-  pendingEvents: readonly SimulationEvent[]
-  /** Call after consuming events to clear the queue */
-  consumeEvents: () => void
-  /** Whether to show mock data (standalone mode or explicit config) */
-  useMockData: boolean
-  /** Whether CLAUDE_CODE_DISABLE_1M_CONTEXT=1 is set — caps context window to 200k */
-  disable1MContext: boolean
-  /** Open a file in the VS Code editor */
-  bridgeOpenFile: (filePath: string, line?: number) => void
-  /** Known sessions from the extension */
-  sessions: SessionInfo[]
-  /** Currently selected session ID */
-  selectedSessionId: string | null
-  /** Select a session to view (does not flush events — call flushSessionEvents after state swap). */
-  selectSession: (sessionId: string | null) => void
-  /** Flush buffered events for a session into pending. Call from useLayoutEffect after state swap. */
-  flushSessionEvents: (sessionId: string, fromIndex?: number) => void
-  /** Get the current event count for a session (for save/restore) */
-  getSessionEventCount: (sessionId: string) => number
-  /** Ref to the currently selected session ID — updated synchronously, not via React state */
-  selectedSessionIdRef: React.RefObject<string | null>
-  /** Session IDs that have received events while not selected */
-  sessionsWithActivity: Set<string>
-  /** Remove a session from the list */
-  removeSession: (sessionId: string) => void
-  /** Every event buffered for a session (all sessions are buffered, not only the open tab). */
-  getSessionEvents: (sessionId: string) => readonly SimulationEvent[]
-  /** Sessions whose tab was closed. They are still running, so the fleet view lists them. */
-  getDismissedSessions: () => SessionInfo[]
-}
+export type { BridgeHookResult }
 
 /**
  * Connects the VS Code bridge to the React app.
@@ -53,6 +22,9 @@ interface BridgeHookResult {
 export function useVSCodeBridge(): BridgeHookResult {
   const [isVSCode, setIsVSCode] = useState(false)
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('disconnected')
+  const [stamps, setStamps] = useState<StreamStamps>({ lastEventAt: null, lastActivityAt: null })
+  const [connectedAt, setConnectedAt] = useState<number | null>(null)
+  const stampsRef = useRef<StreamStamps>(stamps)
   const [useMockData, setUseMockData] = useState(
     process.env.NEXT_PUBLIC_DEMO !== '0'
   )
@@ -88,6 +60,7 @@ export function useVSCodeBridge(): BridgeHookResult {
 
     es.onopen = () => {
       setConnectionStatus('connected')
+      setConnectedAt(Date.now())
       setUseMockData(false)
     }
     es.onmessage = (e) => {
@@ -127,6 +100,18 @@ export function useVSCodeBridge(): BridgeHookResult {
         payload: event.payload,
         sessionId: event.sessionId,
         ...(event.history ? { history: true } : {}),
+      }
+
+      // Freshness for the top bar. ANY message of the stream shows that the relay is alive and sending (context_update,
+      // model_detected, the relay's agent_idle ticks, history replays), so it moves the liveness stamp (LIVE / STALE).
+      // The visible age is the age of the last REAL activity: only a live message that showsLiveActivity moves that stamp
+      // (the fleet activity filter's rule plus context_update, which the relay sends only after a model call), so agent_idle ticks (one per quiet session per second) and the
+      // quiet-timeout completion never reset it (every inactivity completion of the relay, the VS Code extension, the Codex
+      // watcher and the Hermes log watcher carries `reason: 'quiet'`). One state update a second is plenty for a 60 s threshold.
+      const nextStamps = stampStreamMessage(stampsRef.current, Date.now(), showsLiveActivity(event.type, event.payload, event.history))
+      if (nextStamps !== stampsRef.current) {
+        stampsRef.current = nextStamps
+        setStamps(nextStamps)
       }
 
       // Always buffer by session (for replay on session switch)
@@ -333,6 +318,9 @@ export function useVSCodeBridge(): BridgeHookResult {
   return {
     isVSCode,
     connectionStatus,
+    lastEventAt: stamps.lastEventAt,
+    lastActivityAt: stamps.lastActivityAt,
+    connectedAt,
     pendingEvents: pendingEventsRef.current,
     consumeEvents,
     useMockData,

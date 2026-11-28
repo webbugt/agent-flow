@@ -5,6 +5,7 @@ import { TimelineEntry, Z } from '@/lib/agent-types'
 import { COLORS } from '@/lib/colors'
 import { formatTimelineModels } from '@/lib/timeline-models'
 import { PanelHeader, SlidingPanel } from './shared-ui'
+import { STACK_BOTTOM, STACK_PANEL_MAX_HEIGHT } from '@/lib/bottom-stack'
 
 interface TimelinePanelProps {
   visible: boolean
@@ -18,6 +19,8 @@ interface TimelinePanelProps {
 const ROW_HEIGHT = 22
 const HEADER_HEIGHT = 20
 const LABEL_WIDTH = 90
+/** Room right of the track for the last axis label (centred on the end of the track, it was cut in half). */
+const RIGHT_PAD = 16
 const FONT = '9px monospace'
 const MODEL_FONT = '8px monospace'
 
@@ -77,7 +80,7 @@ function drawTimeline(
     if (end > maxTime) maxTime = end
   }
   const timeSpan = Math.max(maxTime - minTime, 1)
-  const barWidth = width - LABEL_WIDTH
+  const barWidth = Math.max(width - LABEL_WIDTH - RIGHT_PAD, 1)
 
   // Time markers
   const markerInterval = timeSpan > 60 ? 10 : timeSpan > 20 ? 5 : timeSpan > 10 ? 2 : 1
@@ -222,31 +225,33 @@ export function TimelinePanel({ visible, timelineEntries, currentTime, onClose }
   return (
     <SlidingPanel
       visible={visible}
-      position={{ bottom: 72, left: 16, right: 16 }}
+      position={{ bottom: STACK_BOTTOM, left: 16, right: 16 }}
       axis="Y"
       zIndex={Z.sidePanel}
-      className="mx-auto"
+      className="mx-auto af-timeline-panel"
       style={{ maxWidth: 700 }}
     >
-      <div className="glass-card relative">
-        <PanelHeader onClose={onClose}>
-          <span className="text-[10px] font-mono tracking-wider" style={{ color: COLORS.textPrimary }}>
+      {/* A flex column capped to the free height: the title row (with the close control) and the legend stay put,
+          only the rows scroll. On a 390 px high landscape phone the panel used to end above the screen. */}
+      <div className="glass-card relative flex flex-col" data-testid="timeline-panel" style={{ maxHeight: STACK_PANEL_MAX_HEIGHT }}>
+        <PanelHeader onClose={onClose} className="mb-2 flex-shrink-0">
+          <span className="text-[11px] font-mono tracking-wider" style={{ color: COLORS.textPrimary }}>
             EXECUTION TIMELINE
           </span>
         </PanelHeader>
 
-        <div className="overflow-auto" style={{ maxHeight: 300 }}>
+        <div className="overflow-auto min-h-0 flex-1" style={{ maxHeight: 300 }}>
           <canvas ref={canvasRef} style={{ display: 'block' }} onMouseMove={handleMouseMove} />
         </div>
 
         {/* Legend (static DOM) */}
-        <div className="flex items-center gap-3 px-3 py-1.5" style={{ borderTop: `1px solid ${COLORS.holoBorder06}` }}>
-          <div style={{ width: LABEL_WIDTH, flexShrink: 0 }} />
-          <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 px-3 py-1.5 flex-shrink-0" style={{ borderTop: `1px solid ${COLORS.holoBorder06}` }}>
+          <div className="hidden sm:block" style={{ width: LABEL_WIDTH, flexShrink: 0 }} />
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 min-w-0">
             {LEGEND_ITEMS.map(item => (
               <div key={item.label} className="flex items-center gap-1">
                 <div className="w-2 h-2 rounded-sm" style={{ background: item.color + '70' }} />
-                <span className="text-[9px] font-mono" style={{ color: COLORS.textMuted }}>{item.label}</span>
+                <span className="text-[11px] font-mono" style={{ color: COLORS.textMuted }}>{item.label}</span>
               </div>
             ))}
           </div>

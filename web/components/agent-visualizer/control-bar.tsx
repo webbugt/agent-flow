@@ -4,6 +4,9 @@ import { useState, useEffect, useCallback, useRef, memo } from 'react'
 import { TimelineEvent, Z, POPUP, TIMING } from '@/lib/agent-types'
 import { COLORS } from '@/lib/colors'
 import { SHOT_MODE } from '@/lib/shot-mode'
+import { scrubRatio, scrubKeyTarget } from '@/lib/scrub'
+import { VAR_BAR_TOP } from '@/lib/bottom-stack'
+import { usePublishInset } from '@/hooks/use-publish-inset'
 
 interface ControlBarProps {
   isPlaying: boolean
@@ -99,6 +102,8 @@ function LiveControlBar({
 }: ControlBarProps) {
   const [pulseOn, setPulseOn] = useState(true)
   const scrubberEvents = useScrubberEvents(timelineEvents, totalDuration)
+  const barRef = useRef<HTMLDivElement>(null)
+  usePublishInset(barRef, VAR_BAR_TOP)
 
   useEffect(() => {
     if (isReviewing || SHOT_MODE) return // ?shot=1: no pulsing, so screenshots repeat
@@ -108,6 +113,7 @@ function LiveControlBar({
 
   return (
     <div
+      ref={barRef}
       className="absolute bottom-4 left-4 right-4 mx-auto"
       style={{ pointerEvents: 'auto', maxWidth: POPUP.controlBarMaxWidth, zIndex: Z.controlBar }}
     >
@@ -122,7 +128,7 @@ function LiveControlBar({
               opacity: pulseOn ? 1 : 0.6,
             }}
           />
-          <span className="text-[10px] font-mono font-semibold tracking-wider" style={{ color: COLORS.liveText }}>
+          <span className="text-[11px] font-mono font-semibold tracking-wider" style={{ color: COLORS.liveText }}>
             LIVE
           </span>
         </div>
@@ -143,14 +149,14 @@ function LiveControlBar({
         </div>
 
         {/* Event count */}
-        <span className="text-[10px] font-mono shrink-0" style={{ color: COLORS.textMuted }}>
+        <span className="text-[11px] font-mono shrink-0" style={{ color: COLORS.textMuted }}>
           {eventCount}
         </span>
 
         {/* Review button */}
         <button
           onClick={onEnterReview}
-          className="px-2.5 py-1 rounded text-[10px] font-mono transition-all hover:scale-105"
+          className="af-tap af-focus px-2.5 py-1 rounded text-[11px] font-mono transition-all hover:scale-105"
           style={{
             background: COLORS.holoBg10,
             border: `1px solid ${COLORS.reviewBtnBorder}`,
@@ -177,36 +183,53 @@ function ReviewControlBar({
   const [isScrubbing, setIsScrubbing] = useState(false)
   const scrubberEvents = useScrubberEvents(timelineEvents, totalDuration)
   const progress = totalDuration > 0 ? currentTime / totalDuration : 0
+  const barRef = useRef<HTMLDivElement>(null)
+  usePublishInset(barRef, VAR_BAR_TOP)
 
   const scrubToClientX = useCallback((clientX: number) => {
     const rect = scrubberRef.current?.getBoundingClientRect()
     if (!rect || !onSeek) return
-    const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width))
-    onSeek(ratio * totalDuration)
+    onSeek(scrubRatio(clientX, rect.left, rect.width) * totalDuration)
   }, [onSeek, totalDuration])
 
-  useEffect(() => {
-    if (!isScrubbing) return
-    const handleMove = (e: MouseEvent) => scrubToClientX(e.clientX)
-    const handleUp = () => setIsScrubbing(false)
-    window.addEventListener('mousemove', handleMove)
-    window.addEventListener('mouseup', handleUp)
-    return () => {
-      window.removeEventListener('mousemove', handleMove)
-      window.removeEventListener('mouseup', handleUp)
-    }
-  }, [isScrubbing, scrubToClientX])
+  // Pointer events with pointer capture, not mouse events: a finger drag gives no mouse events, so the track only
+  // answered a tap. Capture keeps the drag going when the finger or the mouse leaves the track, and ends it on
+  // pointerup / pointercancel (no window listeners to leak).
+  const handlePointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.pointerType === 'mouse' && e.button !== 0) return
+    e.preventDefault()
+    try { e.currentTarget.setPointerCapture(e.pointerId) } catch { /* the pointer is already gone */ }
+    setIsScrubbing(true)
+    scrubToClientX(e.clientX)
+  }, [scrubToClientX])
+  const handlePointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) scrubToClientX(e.clientX)
+  }, [scrubToClientX])
+  const handlePointerEnd = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId)
+    setIsScrubbing(false)
+  }, [])
+
+  // The slider role promises the keyboard: Tab reaches the track, the arrows, PageUp / PageDown, Home and End move it.
+  const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (!onSeek || e.altKey || e.ctrlKey || e.metaKey) return
+    const target = scrubKeyTarget(e.key, currentTime, totalDuration)
+    if (target === null) return
+    e.preventDefault()
+    onSeek(target)
+  }, [onSeek, currentTime, totalDuration])
 
   return (
     <div
+      ref={barRef}
       className="absolute bottom-4 left-4 right-4 mx-auto"
       style={{ pointerEvents: 'auto', maxWidth: POPUP.controlBarMaxWidth, zIndex: Z.controlBar }}
     >
-      <div className="glass-card px-5 py-3 flex items-center gap-3">
+      <div className="glass-card px-5 py-3 af-review-bar" data-testid="review-bar">
         {/* Play/Pause */}
         <button
           onClick={onPlayPause}
-          className="w-9 h-9 rounded-full flex items-center justify-center transition-all shrink-0 hover:scale-110"
+          className="af-tap af-focus w-9 h-9 rounded-full flex items-center justify-center transition-all shrink-0 hover:scale-110"
           style={{
             background: isPlaying ? COLORS.playBtnActiveBg : COLORS.playBtnBg,
             border: `1.5px solid ${COLORS.playBtnBorder}`,
@@ -219,19 +242,29 @@ function ReviewControlBar({
         </button>
 
         {/* Time */}
-        <span className="text-xs font-mono shrink-0" style={{ color: COLORS.textPrimary, minWidth: 42 }}>
+        <span className="text-xs font-mono shrink-0 af-review-time" style={{ color: COLORS.textPrimary, minWidth: 42 }}>
           {formatTime(currentTime)}
         </span>
 
         {/* Timeline scrubber */}
         <div
           ref={scrubberRef}
-          className="flex-1 relative h-8 flex items-center group cursor-pointer"
-          onMouseDown={(e) => {
-            e.preventDefault()
-            setIsScrubbing(true)
-            scrubToClientX(e.clientX)
-          }}
+          className="af-review-scrubber af-focus relative h-8 flex items-center group cursor-pointer"
+          data-testid="review-scrubber"
+          role="slider"
+          tabIndex={0}
+          aria-label="Replay position"
+          aria-valuemin={0}
+          aria-valuemax={Math.round(totalDuration)}
+          aria-valuenow={Math.round(currentTime)}
+          aria-valuetext={`${formatTime(currentTime)} of ${formatTime(totalDuration)}`}
+          // touch-action: none, or the browser claims the finger for page scroll / zoom and sends pointercancel.
+          style={{ touchAction: 'none' }}
+          onPointerDown={handlePointerDown}
+          onPointerMove={handlePointerMove}
+          onPointerUp={handlePointerEnd}
+          onPointerCancel={handlePointerEnd}
+          onKeyDown={handleKeyDown}
         >
           <div
             className="w-full rounded-full relative transition-all duration-150 group-hover:h-2"
@@ -268,17 +301,17 @@ function ReviewControlBar({
         </div>
 
         {/* Duration */}
-        <span className="text-[10px] font-mono shrink-0" style={{ color: COLORS.textMuted }}>
+        <span className="text-[11px] font-mono shrink-0" style={{ color: COLORS.textMuted }}>
           {formatTime(totalDuration)}
         </span>
 
         {/* Speed controls */}
-        <div className="flex items-center gap-0.5 shrink-0">
+        <div className="flex items-center gap-0.5 shrink-0 af-review-speeds">
           {SPEEDS.map((s) => (
             <button
               key={s}
               onClick={() => onSpeedChange(s)}
-              className="px-2 py-0.5 rounded text-[10px] font-mono transition-all"
+              className="af-tap af-tap-fine af-focus px-2 py-0.5 rounded text-[11px] font-mono transition-all"
               style={{
                 background: speed === s ? COLORS.playBtnActiveBg : 'transparent',
                 color: speed === s ? COLORS.textPrimary : COLORS.textMuted,
@@ -293,7 +326,7 @@ function ReviewControlBar({
         {isReviewing && (
           <button
             onClick={onResumeLive}
-            className="px-2.5 py-1 rounded text-[10px] font-mono font-semibold transition-all hover:scale-105 shrink-0"
+            className="af-tap af-focus px-2.5 py-1 rounded text-[11px] font-mono font-semibold transition-all hover:scale-105 shrink-0"
             style={{
               background: COLORS.liveResumeBg,
               border: `1px solid ${COLORS.liveResumeBorder}`,
@@ -308,7 +341,10 @@ function ReviewControlBar({
         {isReviewing && (
           <button
             onClick={onRestart}
-            className="text-sm transition-all shrink-0 hover:scale-110"
+            aria-label="Restart replay"
+            title="Restart replay"
+            data-testid="review-restart"
+            className="af-tap af-focus text-sm transition-all shrink-0 hover:scale-110 px-1"
             style={{ color: COLORS.textDim }}
           >
             ⟲
