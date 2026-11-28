@@ -544,9 +544,9 @@ export function AgentVisualizer() {
 
   return (
     <OpenFileProvider value={bridge.isVSCode ? openFile : null}>
-    {/* overflow-clip, not -hidden: a hidden panel parked 20 px past the right edge makes this box scrollable, and a
+    {/* .af-app-root (globals.css): overflow clip, with hidden as the fallback for a browser without clip. Not plain hidden: a hidden panel parked 20 px past the right edge makes this box scrollable, and a
         scrollIntoView on a tab chip (or a focus) then slid the whole app 8 px left, taking the Session sheet off the edge. */}
-    <div className="h-screen w-screen relative overflow-clip" style={{ background: COLORS.void }}>
+    <div className="h-screen w-screen relative af-app-root" style={{ background: COLORS.void }}>
       {/* Empty state when no demo and no live data */}
       {isEmpty && !sv && (
         <div className="absolute inset-0 flex items-center justify-center z-10 pointer-events-none">

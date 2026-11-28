@@ -247,6 +247,9 @@
     height: max(100%, 44px);
   }
 }
+/* App root: clip, not hidden (a hidden box is still scrollable by scrollIntoView / focus, which slid the app 8 px left); a browser
+   without overflow: clip (Safari before 16) keeps the `hidden` of the first declaration. */
+.af-app-root { overflow: hidden; overflow: clip; }
 /* Single view zoom buttons (+, -, fit): a column centred on the right edge; on a short screen a row just under the top bar. */
 .af-single-zoom {
   top: 50%;
@@ -262,8 +265,11 @@
 /* Single view Timeline panel on a short screen: the zoom buttons are a row right under the top bar at the right edge and the
    panel (flush right at 16 px) used to cover the lower part of them. The panel stops left of the zoom column instead:
    3 buttons x 40 px + 2 gaps x 6 px = 132 px, + the 12 px right offset + an 8 px gap = 152 px, rounded up to 160. The zoom row
-   keeps its place (it is what the user reaches for while the panel is open) and no panel height has to give way. */
-@media (max-height: 500px) {
+   keeps its place (it is what the user reaches for while the panel is open) and no panel height has to give way.
+   Only where the two can meet: the panel is centred and at most 700 px wide, so its right edge is at 50% + 350 px and the zoom
+   row starts 152 px from the right edge; they cannot overlap from 1004 px wide up, and a wide short desktop window keeps the
+   panel centred. 1024 px is that limit with a margin. */
+@media (max-height: 500px) and (max-width: 1024px) {
   .af-timeline-panel { right: 160px !important; }
 }
 /* Lanes of the Fleet timeline: 18 vh (at least 120 px) on a phone, 320 px from `sm` up, a few rows on a short screen. */
