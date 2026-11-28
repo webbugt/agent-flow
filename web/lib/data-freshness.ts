@@ -1,14 +1,16 @@
 /**
- * How fresh the data of the browser build is, for the top bar (review item: the bar showed counts only, so a relay that
- * silently stopped sending looked exactly like a quiet session). Pure, so it is tested without a DOM or a clock.
+ * How fresh the data of the browser build is, for the top bar. Pure, so it is tested without a DOM or a clock.
  *
- * Inputs are what the app already has: whether the event stream is connected, when the last message of the stream arrived
- * (ANY message: context_update, model_detected, agent_idle and history replays all prove that the relay is alive and
- * sending) and when the stream connected. Real activity (a tool call, a message) is tracked separately and shown as
- * extra text: a calm but healthy session is LIVE, not STALE.
+ * Two different clocks, on purpose:
+ *  - LIVE / STALE / OFFLINE answers "is the relay up and talking to this page?". It follows ANY stream message
+ *    (context_update, model_detected, the relay's one-per-second agent_idle ticks, history replays) and the connection.
+ *    A stream that goes silent turns STALE after STALE_AFTER_MS; a dropped connection is OFFLINE.
+ *  - The visible age is the age of the last REAL activity (a tool call, a message, a spawn: `countsAsActivity`). The relay's
+ *    agent_idle ticks and its quiet-timeout completion are NOT activity, so a session that went quiet reads
+ *    "LIVE · last activity 3m 04s ago" and the age grows, instead of "last event 0s ago" forever.
  */
 
-/** No event for this long while connected: the data is called stale, ms. */
+/** No stream message for this long while connected: the stream is called stale, ms. */
 export const STALE_AFTER_MS = 60_000
 
 export type FreshnessLevel = 'live' | 'stale' | 'offline'
@@ -17,20 +19,24 @@ export interface Freshness {
   level: FreshnessLevel
   /** Short label for the indicator: LIVE, STALE or OFFLINE. */
   label: string
-  /** "last event 12s ago", "no event yet (connected 8s ago)" or "no connection"; plus " · last activity 3m 04s ago" when known. */
+  /**
+   * LIVE: "last activity 12s ago" (or "no activity since connect (8s ago)"). STALE: "no message from the relay for 1m 12s",
+   * plus " · last activity ..." when known. OFFLINE: "no connection", plus the age of the last message and of the last activity.
+   */
   detail: string
-  /** Just the age, "12s": for a narrow screen, where the title attribute cannot be opened by touch. Empty when unknown. */
+  /** Just an age, for a narrow screen, where the title attribute cannot be opened by touch: the age of the last activity when
+   * LIVE, of the silence when STALE, of the last message when OFFLINE. Empty when unknown. */
   short: string
-  /** Milliseconds since the last event (or since the connection when none arrived yet); null when there is neither. */
+  /** Milliseconds since the last stream message (or since the connection when none arrived yet); null when there is neither. */
   sinceMs: number | null
 }
 
 export interface FreshnessInput {
   now: number
   connected: boolean
-  /** Arrival time of the last stream message of any type, ms since epoch; null = none since the page loaded. */
+  /** Arrival time of the last stream message of ANY type (liveness of the relay), ms since epoch; null = none since the page loaded. */
   lastEventAt: number | null
-  /** Arrival time of the last message that shows real activity (tool call, message, spawn...), for the extra text only. */
+  /** Arrival time of the last message that shows real activity (tool call, message, spawn...): this is the age that is shown. */
   lastActivityAt?: number | null
   /** When the stream last connected, ms since epoch; null = never. */
   connectedAt: number | null
@@ -49,32 +55,37 @@ export function formatAgo(ms: number): string {
 }
 
 export function dataFreshness({ now, connected, lastEventAt, lastActivityAt = null, connectedAt, staleAfterMs = STALE_AFTER_MS }: FreshnessInput): Freshness {
-  const activity = lastActivityAt !== null ? ` \u00b7 last activity ${formatAgo(Math.max(0, now - lastActivityAt))} ago` : ''
+  const activityMs = lastActivityAt !== null ? Math.max(0, now - lastActivityAt) : null
+  const activity = activityMs !== null ? ` \u00b7 last activity ${formatAgo(activityMs)} ago` : ''
   if (!connected) {
     const sinceMs = lastEventAt !== null ? Math.max(0, now - lastEventAt) : null
     return {
       level: 'offline',
       label: 'OFFLINE',
-      detail: sinceMs !== null ? `no connection, last event ${formatAgo(sinceMs)} ago` : 'no connection',
+      detail: (sinceMs !== null ? `no connection, last message ${formatAgo(sinceMs)} ago` : 'no connection') + activity,
       short: sinceMs !== null ? formatAgo(sinceMs) : '',
       sinceMs,
     }
   }
-  // The age counts from the last event, or from the connection when none arrived yet.
+  // Liveness counts from the last stream message, or from the connection when none arrived yet.
   const base = lastEventAt ?? connectedAt
   const sinceMs = base === null ? null : Math.max(0, now - base)
-  const detail = lastEventAt !== null
-    ? `last event ${formatAgo(sinceMs ?? 0)} ago${activity}`
-    : sinceMs !== null ? `no event yet (connected ${formatAgo(sinceMs)} ago)` : 'no event yet'
-  const stale = sinceMs !== null && sinceMs >= staleAfterMs
-  return { level: stale ? 'stale' : 'live', label: stale ? 'STALE' : 'LIVE', detail, short: sinceMs !== null ? formatAgo(sinceMs) : '', sinceMs }
+  if (sinceMs !== null && sinceMs >= staleAfterMs) {
+    return { level: 'stale', label: 'STALE', detail: `no message from the relay for ${formatAgo(sinceMs)}${activity}`, short: formatAgo(sinceMs), sinceMs }
+  }
+  // Live: the age shown is the age of the last real activity, never the age of an idle tick.
+  const sinceConnect = connectedAt !== null ? Math.max(0, now - connectedAt) : null
+  const detail = activityMs !== null
+    ? `last activity ${formatAgo(activityMs)} ago`
+    : sinceConnect !== null ? `no activity since connect (${formatAgo(sinceConnect)} ago)` : 'no activity yet'
+  return { level: 'live', label: 'LIVE', detail, short: activityMs !== null ? formatAgo(activityMs) : '', sinceMs }
 }
 
 /** What the top bar remembers about the stream. */
 export interface StreamStamps {
-  /** Last stream message of any type. */
+  /** Last stream message of any type, agent_idle ticks included: liveness of the relay only, never shown as an age. */
   lastEventAt: number | null
-  /** Last message that shows real activity. */
+  /** Last live message that shows real activity (not an agent_idle tick, not a history replay): the age that is shown. */
   lastActivityAt: number | null
 }
 
@@ -83,8 +94,9 @@ export const STAMP_THROTTLE_MS = 1000
 
 /**
  * New stamps after one stream message, or `prev` itself (same object) when nothing needs to be written. Every message
- * refreshes `lastEventAt`: the freshness marker answers "is the stream alive", and agent_idle ticks, context_update,
- * model_detected and history replays all prove it is. Only `activity` messages refresh `lastActivityAt`.
+ * refreshes `lastEventAt`, which only drives LIVE / STALE ("is the relay still talking"): agent_idle ticks, context_update,
+ * model_detected and history replays all prove it is. Only `activity` messages refresh `lastActivityAt`, the age that is
+ * shown, so the relay's agent_idle ticks (one per quiet session per second) never reset it.
  * `activity` is `countsAsActivity(type, payload)` and is false for a history replay (it says nothing about now).
  */
 export function stampStreamMessage(prev: StreamStamps, now: number, activity: boolean): StreamStamps {

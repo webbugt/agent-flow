@@ -92,7 +92,8 @@ function ConnectionIndicator({ status }: { status: ConnectionStatus }) {
 const AMBER = "#ffcc66"
 
 /**
- * LIVE / STALE / OFFLINE plus "last event Ns ago" for the browser build, which has no editor status bar to show it.
+ * LIVE / STALE / OFFLINE plus "last activity Ns ago" for the browser build, which has no editor status bar to show it.
+ * LIVE / STALE follows the relay's stream (any message); the age is the age of the last real activity, not of an idle tick.
  * The counts next to it say nothing about whether data still arrives: a relay that went quiet looked like a calm session.
  * It ticks once a second on its own, so the rest of the bar does not re-render.
  */
@@ -106,8 +107,8 @@ function FreshnessIndicator({ status, lastEventAt, lastActivityAt, connectedAt, 
   }, [])
   const f = dataFreshness({ now, connected: status !== "disconnected", lastEventAt, lastActivityAt, connectedAt })
   const color = f.level === "live" ? COLORS.complete : f.level === "stale" ? AMBER : COLORS.error
-  // A phone cannot open the title, so a live state shows the short age ("LIVE 12s") instead of the label alone.
-  const text = f.level === "live" && narrow ? (f.short ? `${f.label} ${f.short}` : f.label) : `${f.label} \u00b7 ${f.detail}`
+  // A phone cannot open the title, so a live state shows the short activity age ("LIVE · active 12s ago") instead of the label alone.
+  const text = f.level === "live" && narrow ? (f.short ? `${f.label} \u00b7 active ${f.short} ago` : f.label) : `${f.label} \u00b7 ${f.detail}`
   return (
     <span
       data-testid="data-freshness"

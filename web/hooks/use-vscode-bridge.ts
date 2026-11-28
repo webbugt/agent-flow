@@ -140,10 +140,11 @@ export function useVSCodeBridge(): BridgeHookResult {
         ...(event.history ? { history: true } : {}),
       }
 
-      // Freshness for the top bar: ANY message of the stream shows that the relay is alive and sending (context_update,
-      // model_detected, the relay's agent_idle ticks, history replays), so the LIVE / STALE marker follows all of them.
-      // Only a live message that shows real activity also moves the activity stamp (extra text, the same rule as the
-      // fleet activity filter). One state update a second is plenty for a 60 s threshold.
+      // Freshness for the top bar. ANY message of the stream shows that the relay is alive and sending (context_update,
+      // model_detected, the relay's agent_idle ticks, history replays), so it moves the liveness stamp (LIVE / STALE).
+      // The visible age is the age of the last REAL activity: only a live message that countsAsActivity moves that stamp
+      // (same rule as the fleet activity filter), so agent_idle ticks (one per quiet session per second) and the
+      // quiet-timeout completion never reset it. One state update a second is plenty for a 60 s threshold.
       const nextStamps = stampStreamMessage(stampsRef.current, Date.now(), !event.history && countsAsActivity(event.type, event.payload))
       if (nextStamps !== stampsRef.current) {
         stampsRef.current = nextStamps
