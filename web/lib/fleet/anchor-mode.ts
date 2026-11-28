@@ -23,9 +23,16 @@ export const ANCHOR_DIM_ALPHA = 0.8
 /** Weight of an explicit link (a Kanban board and the memory namespace of the same project), in co-use units. */
 export const EXPLICIT_LINK_WEIGHT = 3
 /** How long a session node drifts to a new place, ms (longer than the normal scene tween, so it reads as drift). */
-export const DRIFT_MS = 1600
+export const DRIFT_MS = 2400
 /** A use counts as "current" for this long after it happened, ms. */
 export const CURRENT_USE_MS = 120_000
+/**
+ * A node that is beside a resource stays there until another resource was used this much more recently, ms. Without
+ * it a session that alternates between two resources hops between them on every event.
+ */
+export const SWITCH_MARGIN_MS = 15_000
+/** A remembered slot stays valid while it overlaps a neighbour or a resource by at most this much, world units. */
+export const KEEP_SLOT_SLACK = 12
 
 // ─── Colour ─────────────────────────────────────────────────────────────────
 
@@ -197,9 +204,33 @@ export function layoutWeights(coUse: ReadonlyMap<string, number>, explicit: Read
 export interface AnchorLayoutOptions {
   /** Least distance between two anchor centres, world units. Default leaves room for sessions to sit beside an anchor. */
   minSeparation?: number
-  /** Solver passes. */
+  /** Solver passes (cold start). A warm start uses {@link WARM_ITERATIONS} unless this is set. */
   iterations?: number
+  /**
+   * Where the resources were laid out last time (the previous build). The solver then starts from those places and only
+   * relaxes (low temperature), so a changed weight, a new or a removed resource moves the others a little instead of
+   * re-solving the whole map from the hash seeds. Same inputs plus the same `prev` still give the same map.
+   */
+  prev?: ReadonlyMap<string, Point>
+  /** Warm start only: the furthest a resource that was on the map may move in one build, world units. Default {@link WARM_MAX_MOVE} x least separation. */
+  maxMove?: number
 }
+
+/** Solver passes of a warm start, and the temperature it starts at (a cold start is 1). */
+export const WARM_ITERATIONS = 200
+export const WARM_TEMPERATURE = 0.25
+/** Furthest a resource moves in one warm build, in least separations (see {@link AnchorLayoutOptions.maxMove}). */
+export const WARM_MAX_MOVE = 0.4
+/**
+ * Fraction of the net force applied per pass. A full step (1) overshoots and oscillates where the 1/d repulsion is steep,
+ * so the layout never settled and any change of input landed in another local state (the nodes jumped). A damped step
+ * relaxes to a real equilibrium: unchanged weights give back the same map, a small change a small move.
+ */
+export const SOLVER_DT = 0.3
+/** Two anchors further apart than this many least-separations do not push each other. */
+const REPEL_RANGE = 1.8
+const COLD_ITERATIONS = 900
+const GRAVITY = 0.04
 
 /** Radius of a resource node with its label, world units (same as the cloud layout). */
 export const ANCHOR_RESOURCE_RADIUS = 46
@@ -208,9 +239,11 @@ export const ANCHOR_SPACING = 2 * ANCHOR_RESOURCE_RADIUS + 2 * 70 + 40
 
 /**
  * Where each resource goes. A deterministic force layout: every pair repels (so the map spreads and nothing
- * overlaps), a pair with weight w > 0 is pulled to a rest distance that shrinks as w grows, and a weak pull to the
- * middle keeps the map together. Start positions come from a hash of the id, so the same input always gives the same
- * map and a new resource does not reshuffle the others. The result is centred on the middle of its bounding box.
+ * overlaps), a pair with weight w > 0 is pulled to a rest distance that shrinks as w grows (the pull depends on that
+ * pair's weight only, so one new use does not change every spring), and a weak pull to the middle keeps the map
+ * together. A cold start begins at hash-of-id positions, so the same input always gives the same map, and is centred
+ * on the middle of its bounding box. With `opts.prev` (the previous build) the solver starts from there and relaxes,
+ * so a rebuild moves only what the changed weights pull.
  */
 export function placeAnchors(
   ids: readonly string[], weights: ReadonlyMap<string, number>, opts: AnchorLayoutOptions = {},
@@ -221,30 +254,53 @@ export function placeAnchors(
   if (n === 0) return out
   if (n === 1) { out.set(list[0], { x: 0, y: 0 }); return out }
   const sep = opts.minSeparation ?? ANCHOR_SPACING
-  const iterations = opts.iterations ?? 320
+  const prev = opts.prev
+  const warm = !!prev && list.some(id => prev.has(id))
+  const iterations = opts.iterations ?? (warm ? WARM_ITERATIONS : COLD_ITERATIONS)
+  const t0 = warm ? WARM_TEMPERATURE : 1
 
+  // Warm start: a resource that was on the map starts where it was; a new one starts beside the resources it is tied
+  // to (a seeded offset, so it is not on top of them), else on a ring outside the known map.
+  const known = warm ? list.filter(id => prev!.has(id)) : []
   const pos = list.map(id => {
     const h = hashString(id)
+    const was = warm ? prev!.get(id) : undefined
+    if (was) return { x: was.x, y: was.y }
+    if (warm) {
+      let sx = 0, sy = 0, sw = 0
+      for (const other of known) {
+        const w = weightOf(weights, id, other)
+        if (!(w > 0)) continue
+        const q = prev!.get(other) as Point
+        sx += q.x * w; sy += q.y * w; sw += w
+      }
+      const a = seeded(h, 2) * Math.PI * 2
+      if (sw > 0) return { x: sx / sw + Math.cos(a) * sep * 0.6, y: sy / sw + Math.sin(a) * sep * 0.6 }
+      const reach = known.reduce((m, k) => Math.max(m, Math.hypot((prev!.get(k) as Point).x, (prev!.get(k) as Point).y)), 0)
+      return { x: Math.cos(a) * (reach + sep), y: Math.sin(a) * (reach + sep) }
+    }
     const angle = seeded(h, 0) * Math.PI * 2
     const radius = sep * (0.5 + 0.28 * Math.sqrt(n)) * (0.45 + 0.55 * seeded(h, 1))
     return { x: Math.cos(angle) * radius, y: Math.sin(angle) * radius }
   })
+  const maxMove = opts.maxMove ?? WARM_MAX_MOVE * sep
+  const start = list.map(id => (warm ? prev!.get(id) : undefined))
   // Pairs with a pull, with their rest distance: the stronger the tie, the closer.
   const springs: Array<{ i: number; j: number; rest: number; k: number }> = []
-  let maxW = 0
-  for (let i = 0; i < n; i++) {
-    for (let j = i + 1; j < n; j++) maxW = Math.max(maxW, weightOf(weights, list[i], list[j]))
-  }
+  const tied = new Set<number>() // i * n + j of every pair with a spring: those do not take the soft repulsion
   for (let i = 0; i < n; i++) {
     for (let j = i + 1; j < n; j++) {
       const w = weightOf(weights, list[i], list[j])
       if (!(w > 0)) continue
-      springs.push({ i, j, rest: sep * (1.05 + 1.6 / (1 + w)), k: 0.12 + 0.28 * Math.min(1, w / Math.max(maxW, 1)) })
+      // A tie pulls the pair to a rest distance between 1.02 and 1.72 x sep (the stronger, the closer); that is inside
+      // REPEL_RANGE, so a tied pair always ends closer than a pair with no tie.
+      springs.push({ i, j, rest: sep * (1.02 + 0.7 / (1 + w)), k: 0.4 * (w / (w + 3)) })
+      tied.add(i * n + j)
     }
   }
 
   for (let it = 0; it < iterations; it++) {
-    const cool = 1 - it / iterations
+    const cool = t0 * (1 - 0.7 * it / iterations)
     const maxStep = sep * 0.25 * cool + 0.5
     const fx = new Array<number>(n).fill(0)
     const fy = new Array<number>(n).fill(0)
@@ -257,8 +313,10 @@ export function placeAnchors(
           const a = seeded(hashString(list[j]), 5) * Math.PI * 2
           dx = Math.cos(a); dy = Math.sin(a); d = 1e-6
         } else { dx /= d; dy /= d }
-        // Repulsion falls with distance (1/d); hard push when closer than the least separation.
-        const rep = (sep * sep * 0.22) / Math.max(d, 1) + (d < sep ? (sep - d) * 0.5 : 0)
+        // Repulsion is short-range (zero beyond REPEL_RANGE x sep): a long-range 1/d push never reaches an equilibrium
+        // (the map keeps expanding against the weak pull to the middle, so every rebuild moved everything). Hard push
+        // when closer than the least separation.
+        const rep = (tied.has(i * n + j) ? 0 : Math.max(0, REPEL_RANGE * sep - d) * 0.25) + (d < sep ? (sep - d) * 0.5 : 0)
         fx[i] -= dx * rep; fy[i] -= dy * rep
         fx[j] += dx * rep; fy[j] += dy * rep
       }
@@ -272,12 +330,22 @@ export function placeAnchors(
       fx[s.j] -= (dx / d) * f; fy[s.j] -= (dy / d) * f
     }
     for (let i = 0; i < n; i++) {
-      fx[i] -= pos[i].x * 0.02
-      fy[i] -= pos[i].y * 0.02
+      fx[i] -= pos[i].x * GRAVITY
+      fy[i] -= pos[i].y * GRAVITY
+      fx[i] *= SOLVER_DT; fy[i] *= SOLVER_DT
       const m = Math.hypot(fx[i], fy[i])
       const k = m > maxStep ? maxStep / m : 1
       pos[i].x += fx[i] * k
       pos[i].y += fy[i] * k
+      // Warm start: no resource that was on the map travels further than `maxMove` in one build. A big change (a new
+      // strong tie) is followed over the next builds, not in one jump.
+      const s0 = start[i]
+      if (s0) {
+        const mx = pos[i].x - s0.x
+        const my = pos[i].y - s0.y
+        const md = Math.hypot(mx, my)
+        if (md > maxMove) { pos[i].x = s0.x + (mx / md) * maxMove; pos[i].y = s0.y + (my / md) * maxMove }
+      }
     }
   }
   // Last word: nothing closer than the least separation.
@@ -295,6 +363,10 @@ export function placeAnchors(
         pos[j].x += ux * shift; pos[j].y += uy * shift
       }
     }
+  }
+  if (warm) { // no re-centring: moving every node by the same amount because one moved is what a warm start avoids
+    list.forEach((id, i) => out.set(id, { x: pos[i].x, y: pos[i].y }))
+    return out
   }
   const x0 = Math.min(...pos.map(p => p.x)); const x1 = Math.max(...pos.map(p => p.x))
   const y0 = Math.min(...pos.map(p => p.y)); const y1 = Math.max(...pos.map(p => p.y))
@@ -362,6 +434,14 @@ export interface AnchorSession {
 export interface AnchorSessionPlacement extends Point {
   /** The resource the node is next to because it is using it now; null when it rests. */
   at: string | null
+  /** The node's place relative to what it sits by (its resource, or the middle of the resources it used). Pass back as `prev`. */
+  off?: Point
+}
+
+/** What one anchor build hands to the next as `prev`: where the resources and the session nodes were put. */
+export interface AnchorLayoutState {
+  anchors: ReadonlyMap<string, Point>
+  sessions: ReadonlyMap<string, AnchorSessionPlacement>
 }
 
 export interface AnchorSessionOptions {
@@ -369,18 +449,32 @@ export interface AnchorSessionOptions {
   now: number
   /** A use is current for this long, ms. Default {@link CURRENT_USE_MS}. */
   currentMs?: number
+  /** A node beside a resource stays until another was used this much more recently, ms. Default {@link SWITCH_MARGIN_MS}. */
+  switchMarginMs?: number
+  /**
+   * The previous build's placements. A node keeps the same slot beside the same resource (it follows the resource when
+   * that moves) and does not hop to another resource for a marginal difference in recency.
+   */
+  prev?: ReadonlyMap<string, AnchorSessionPlacement>
   resourceRadius?: number
   /** Free space between two nodes and between a node and a resource, world units. */
   gap?: number
 }
 
 /** The resource a node is using now: its newest use inside the window (ties: more uses, then id). */
-export function currentResource(session: AnchorSession, now: number, currentMs: number = CURRENT_USE_MS): string | null {
+export function currentResource(
+  session: AnchorSession, now: number, currentMs: number = CURRENT_USE_MS,
+  /** The resource the node was beside in the previous build, and how much newer another use must be to move it. */
+  sticky?: { resource: string | null | undefined; marginMs: number },
+): string | null {
   let best: AnchorSession['usage'][number] | null = null
+  let held: AnchorSession['usage'][number] | null = null
   for (const u of session.usage) {
     if (now - u.lastAt > currentMs) continue
+    if (sticky?.resource && u.resource === sticky.resource) held = u
     if (!best || u.lastAt > best.lastAt || (u.lastAt === best.lastAt && (u.weight > best.weight || (u.weight === best.weight && u.resource < best.resource)))) best = u
   }
+  if (best && held && best.lastAt - held.lastAt < (sticky?.marginMs ?? 0)) return held.resource
   return best ? best.resource : null
 }
 
@@ -396,6 +490,7 @@ export function placeAnchorSessions(
   const resR = opts.resourceRadius ?? ANCHOR_RESOURCE_RADIUS
   const gap = opts.gap ?? 14
   const currentMs = opts.currentMs ?? CURRENT_USE_MS
+  const marginMs = opts.switchMarginMs ?? SWITCH_MARGIN_MS
   const pts = [...anchors.values()]
   const cx = pts.length ? pts.reduce((s, p) => s + p.x, 0) / pts.length : 0
   const cy = pts.length ? pts.reduce((s, p) => s + p.y, 0) / pts.length : 0
@@ -406,9 +501,9 @@ export function placeAnchorSessions(
   const placed: Array<{ x: number; y: number; r: number }> = []
   const out = new Map<string, AnchorSessionPlacement>()
 
-  const free = (p: Point, r: number): boolean => {
-    for (const a of pts) if (Math.hypot(p.x - a.x, p.y - a.y) < resR + r + gap) return false
-    for (const q of placed) if (Math.hypot(p.x - q.x, p.y - q.y) < q.r + r + gap) return false
+  const free = (p: Point, r: number, slack = 0): boolean => {
+    for (const a of pts) if (Math.hypot(p.x - a.x, p.y - a.y) < resR + r + gap - slack) return false
+    for (const q of placed) if (Math.hypot(p.x - q.x, p.y - q.y) < q.r + r + gap - slack) return false
     return true
   }
   /** First free spot on a spiral around `from`, starting `startDist` away. */
@@ -428,15 +523,23 @@ export function placeAnchorSessions(
   }
 
   const list = [...sessions].sort((a, b) => a.id.localeCompare(b.id))
+  // Pass 1 decides, for every node, what it sits by (and whether its old slot is still good); pass 2 places the nodes
+  // that keep their slot FIRST, so a node that arrives (or sorts earlier) cannot take a slot a resident still holds and
+  // push it away; pass 3 places the rest in id order on the first free spot of a spiral.
+  interface Plan { s: AnchorSession; at: string | null; from: Point; startDist: number; seed: number; slot: Point | null }
+  const plans: Plan[] = []
   for (const s of list) {
     const seed = hashString(s.id)
-    const target = currentResource(s, opts.now, currentMs)
+    const was = opts.prev?.get(s.id)
+    const target = currentResource(s, opts.now, currentMs, was ? { resource: was.at, marginMs } : undefined)
     let at: string | null = null
-    let spot: Point
+    let from: Point
+    let startDist = 0
     const anchor = target ? anchors.get(target) : undefined
     if (target && anchor) {
       at = target
-      spot = findSpot(anchor, s.radius, resR + s.radius + gap + 6, seed)
+      from = anchor
+      startDist = resR + s.radius + gap + 6
     } else {
       const used = s.usage.filter(u => anchors.has(u.resource) && u.weight > 0)
       const total = used.reduce((sum, u) => sum + u.weight, 0)
@@ -447,19 +550,32 @@ export function placeAnchorSessions(
           mid.x += a.x * (u.weight / total)
           mid.y += a.y * (u.weight / total)
         }
-        spot = findSpot(mid, s.radius, 0, seed)
+        from = mid
       } else {
         // Never used a resource that is on the map: a ring around the map, at a seeded angle.
         const a = seeded(seed, 99) * Math.PI * 2
         // The point of the rectangle (half extents halfW, halfH) in the direction of the seeded angle.
         const t = 1 / Math.max(Math.abs(Math.cos(a)) / halfW, Math.abs(Math.sin(a)) / halfH, 1e-9)
-        const ring = { x: cx + Math.cos(a) * t, y: cy + Math.sin(a) * t }
-        spot = findSpot(ring, s.radius, 0, seed)
+        from = { x: cx + Math.cos(a) * t, y: cy + Math.sin(a) * t }
       }
     }
-    placed.push({ x: spot.x, y: spot.y, r: s.radius })
-    out.set(s.id, { x: spot.x, y: spot.y, at })
+    // Same resource as last build: the old slot, relative to the resource (so the node follows it), unless it is too far.
+    const step = s.radius * 2 + gap
+    const slot = was && was.at === at && was.off && Math.hypot(was.off.x, was.off.y) <= startDist + 6 * step
+      ? { x: from.x + was.off.x, y: from.y + was.off.y } : null
+    plans.push({ s, at, from, startDist, seed, slot })
   }
+  const put = (pl: Plan, spot: Point) => {
+    placed.push({ x: spot.x, y: spot.y, r: pl.s.radius })
+    out.set(pl.s.id, { x: spot.x, y: spot.y, at: pl.at, off: { x: spot.x - pl.from.x, y: spot.y - pl.from.y } })
+  }
+  const rest: Plan[] = []
+  for (const pl of plans) {
+    // A little slack: a node whose cloud grew by a few units keeps its slot instead of hopping a ring out.
+    if (pl.slot && free(pl.slot, pl.s.radius, KEEP_SLOT_SLACK)) put(pl, pl.slot)
+    else rest.push(pl)
+  }
+  for (const pl of rest) put(pl, findSpot(pl.from, pl.s.radius, pl.startDist, pl.seed))
   return out
 }
 

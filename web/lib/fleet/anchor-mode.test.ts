@@ -4,7 +4,7 @@ import {
   ANCHOR_DIM_ALPHA, ANCHOR_SPACING, CURRENT_USE_MS, EXPLICIT_LINK_WEIGHT, buildRelations, coUseWeights, currentResource,
   dimToolCalls, edgeHoverAlpha, hoverDimmer,
   ANCHOR_VIEW_PAD, explicitLinkPairs, fitAnchorsToAspect, hoverAlpha, layoutWeights, pairKey, paletteIndex, placeAnchorSessions, placeAnchors, profileColor,
-  proximityWeights, weightOf,
+  proximityWeights, weightOf, SWITCH_MARGIN_MS, WARM_MAX_MOVE,
 } from './anchor-mode'
 import { DEFAULT_PROFILE_PALETTE } from './options-registry'
 import { hashString } from './fleet-placement'
@@ -314,4 +314,145 @@ test('fitAnchorsToAspect: a layout of the wrong orientation is turned, not stret
   const ys = [...out.values()].map(p => p.y)
   assert.ok(Math.max(...xs) - Math.min(...xs) > Math.max(...ys) - Math.min(...ys), 'wider than tall for 16:9')
   for (const [i, a] of [...out.values()].entries()) for (const b of [...out.values()].slice(i + 1)) assert.ok(dist(a, b) >= 200 - 1e-6, 'turning and stretching never bring two anchors closer')
+})
+
+// ─── gradual flow: stable placement between builds ──────────────────────────
+
+const FLOW_IDS = ['kanban:a', 'kanban:b', 'kanban:c', 'supermemory:a', 'supermemory:b', 'bash:pnpm', 'bash:git', 'sub:x', 'kanban:d']
+const flowUses = (extra: Array<{ unit: string; resource: string; weight: number }> = []) => [
+  { unit: 's1', resource: 'kanban:a', weight: 3 }, { unit: 's1', resource: 'supermemory:a', weight: 2 },
+  { unit: 's2', resource: 'kanban:b', weight: 3 }, { unit: 's2', resource: 'bash:pnpm', weight: 2 },
+  { unit: 's3', resource: 'kanban:c', weight: 1 }, { unit: 's3', resource: 'bash:git', weight: 1 },
+  { unit: 's4', resource: 'sub:x', weight: 1 }, { unit: 's4', resource: 'kanban:d', weight: 2 }, ...extra,
+]
+const flowLayout = (ids: string[], uses: ReturnType<typeof flowUses>, prev?: ReadonlyMap<string, { x: number; y: number }>) =>
+  placeAnchors(ids, layoutWeights(coUseWeights(uses), []), { prev })
+const settled = (ids: string[], uses: ReturnType<typeof flowUses>) => {
+  let m = flowLayout(ids, uses)
+  for (let i = 0; i < 6; i++) m = flowLayout(ids, uses, m)
+  return m
+}
+const moved = (a: ReadonlyMap<string, { x: number; y: number }>, b: ReadonlyMap<string, { x: number; y: number }>) =>
+  new Map([...a].filter(([id]) => b.has(id)).map(([id, p]) => [id, dist(p, b.get(id)!)] as const))
+
+test('placeAnchors (warm start): the same inputs give the same map, and a map rebuilt from its own result stays put', () => {
+  const a = flowLayout(FLOW_IDS, flowUses())
+  const b = flowLayout(FLOW_IDS, flowUses())
+  for (const id of FLOW_IDS) assert.deepEqual(a.get(id), b.get(id), 'cold: deterministic')
+  const m = settled(FLOW_IDS, flowUses())
+  const again = flowLayout(FLOW_IDS, flowUses(), m)
+  const again2 = flowLayout([...FLOW_IDS].reverse(), flowUses(), m)
+  for (const [id, d] of moved(m, again)) assert.ok(d < 5, `${id} moved ${d.toFixed(1)} on an unchanged rebuild`)
+  for (const id of FLOW_IDS) assert.deepEqual(again.get(id), again2.get(id), 'input order does not matter')
+})
+
+test('placeAnchors (warm start): one more use of a pair that is already tied moves nothing much', () => {
+  const m = settled(FLOW_IDS, flowUses())
+  const bumped = flowLayout(FLOW_IDS, flowUses([{ unit: 's1', resource: 'kanban:a', weight: 1 }, { unit: 's1', resource: 'supermemory:a', weight: 1 }]), m)
+  for (const [id, d] of moved(m, bumped)) assert.ok(d < 40, `${id} moved ${d.toFixed(1)}`)
+})
+
+test('placeAnchors (warm start): a rebuild is no further from the last map than maxMove (a big change is followed over several builds)', () => {
+  const m = settled(FLOW_IDS, flowUses())
+  const cap = WARM_MAX_MOVE * ANCHOR_SPACING
+  // a brand-new strong tie between two resources that were not related
+  let cur = m
+  const strong = flowUses([{ unit: 'x', resource: 'kanban:a', weight: 9 }, { unit: 'x', resource: 'sub:x', weight: 9 }])
+  for (let i = 0; i < 4; i++) {
+    const next = flowLayout(FLOW_IDS, strong, cur)
+    for (const [id, d] of moved(cur, next)) {
+      // The least-separation pass can push a node a little beyond the cap.
+      assert.ok(d <= cap + ANCHOR_SPACING * 0.5, `build ${i}: ${id} moved ${d.toFixed(0)} > cap ${cap.toFixed(0)}`)
+    }
+    cur = next
+  }
+  const before = dist(m.get('kanban:a')!, m.get('sub:x')!)
+  const after = dist(cur.get('kanban:a')!, cur.get('sub:x')!)
+  assert.ok(after < before || before < ANCHOR_SPACING * 1.8, `the new tie is followed: ${before.toFixed(0)} -> ${after.toFixed(0)}`)
+})
+
+test('placeAnchors (warm start): a new resource joins and a removed one leaves; the others stay in their neighbourhood and nothing overlaps', () => {
+  const m = settled(FLOW_IDS, flowUses())
+  const withNew = flowLayout([...FLOW_IDS, 'sub:y'], flowUses([{ unit: 's1', resource: 'sub:y', weight: 2 }]), m)
+  assert.ok(withNew.has('sub:y'))
+  for (const [id, d] of moved(m, withNew)) assert.ok(d < ANCHOR_SPACING * 1.2, `${id} moved ${d.toFixed(0)} when sub:y joined`)
+  const without = flowLayout(FLOW_IDS.filter(i => i !== 'sub:x'), flowUses().filter(u => u.resource !== 'sub:x'), m)
+  for (const [id, d] of moved(m, without)) assert.ok(d < ANCHOR_SPACING * 1.2, `${id} moved ${d.toFixed(0)} when sub:x left`)
+  const ids = [...withNew.keys()]
+  for (let i = 0; i < ids.length; i++) for (let j = i + 1; j < ids.length; j++) assert.ok(dist(withNew.get(ids[i])!, withNew.get(ids[j])!) >= ANCHOR_SPACING - 1)
+})
+
+test('placeAnchors (cold): a spring depends on its own pair weight only, not on the biggest weight elsewhere on the map', () => {
+  // The old solver normalised every spring by the biggest weight on the map, so one strong pair elsewhere changed all of them.
+  const w1 = new Map<string, number>([[pairKey('A', 'B'), 2]])
+  const w2 = new Map<string, number>([[pairKey('A', 'B'), 2], [pairKey('C', 'D'), 40]])
+  const one = placeAnchors(['A', 'B'], w1)
+  const two = placeAnchors(['A', 'B', 'C', 'D'], w2)
+  assert.ok(Math.abs(dist(one.get('A')!, one.get('B')!) - dist(two.get('A')!, two.get('B')!)) < ANCHOR_SPACING * 0.3)
+})
+
+// ─── gradual flow: sessions keep their slot and do not hop ──────────────────
+
+test('currentResource: a node beside a resource stays until another was used SWITCH_MARGIN_MS more recently', () => {
+  const s = { id: 's', radius: 70, usage: [
+    { resource: 'A', weight: 5, lastAt: 100_000 }, { resource: 'B', weight: 1, lastAt: 100_000 + SWITCH_MARGIN_MS - 1 },
+  ] }
+  const now = 100_000 + SWITCH_MARGIN_MS
+  assert.equal(currentResource(s, now), 'B', 'without a previous place the newest wins')
+  assert.equal(currentResource(s, now, CURRENT_USE_MS, { resource: 'A', marginMs: SWITCH_MARGIN_MS }), 'A', 'B is only a little newer: stay')
+  const later = { ...s, usage: [s.usage[0], { resource: 'B', weight: 1, lastAt: 100_000 + SWITCH_MARGIN_MS }] }
+  assert.equal(currentResource(later, now, CURRENT_USE_MS, { resource: 'A', marginMs: SWITCH_MARGIN_MS }), 'B', 'B is clearly newer: move (follows real change)')
+  assert.equal(currentResource(s, now + CURRENT_USE_MS, CURRENT_USE_MS, { resource: 'A', marginMs: SWITCH_MARGIN_MS }), null, 'the use is old: rest')
+  assert.equal(currentResource(s, now, CURRENT_USE_MS, { resource: 'Z', marginMs: SWITCH_MARGIN_MS }), 'B', 'a previous place it no longer uses is not sticky')
+})
+
+test('placeAnchorSessions: a session that alternates between two resources does not hop on every event; it moves once the use really changes', () => {
+  const anchors = placeAnchors(['A', 'B'], new Map())
+  const mk = (a: number, b: number) => [{ id: 's1', radius: 70, usage: [{ resource: 'A', weight: 1, lastAt: a }, { resource: 'B', weight: 1, lastAt: b }] }]
+  let prev = placeAnchorSessions(mk(1_000, 0), anchors, { now: 2_000 })
+  assert.equal(prev.get('s1')!.at, 'A')
+  const seen: string[] = []
+  for (let t = 3_000; t < 30_000; t += 3_000) { // A and B used in turn, every 3 s
+    const [a, b] = (t / 3_000) % 2 ? [t - 3_000, t] : [t, t - 3_000]
+    prev = placeAnchorSessions(mk(a, b), anchors, { now: t + 500, prev })
+    seen.push(prev.get('s1')!.at as string)
+  }
+  assert.deepEqual([...new Set(seen)], ['A'], `stayed beside A: ${seen.join('')}`)
+  const real = placeAnchorSessions(mk(1_000, 40_000), anchors, { now: 40_500, prev })
+  assert.equal(real.get('s1')!.at, 'B', 'B is now clearly the newer one: the node follows')
+})
+
+test('placeAnchorSessions: with prev a node keeps its slot, follows its resource, and is not pushed around when others come and go', () => {
+  const anchors = placeAnchors(['A', 'B', 'C'], new Map())
+  const mkS = (id: string, resource: string, radius = 70) => ({ id, radius, usage: [{ resource, weight: 1, lastAt: 1_000 }] })
+  const first = placeAnchorSessions([mkS('s1', 'A'), mkS('s2', 'A'), mkS('s3', 'B')], anchors, { now: 2_000 })
+  // a session whose id sorts first arrives at the same resource: without prev every node behind it shifts one slot
+  const withS0 = [mkS('s0', 'A'), mkS('s1', 'A'), mkS('s2', 'A'), mkS('s3', 'B')]
+  const cold = placeAnchorSessions(withS0, anchors, { now: 2_000 })
+  const warm = placeAnchorSessions(withS0, anchors, { now: 2_000, prev: first })
+  for (const id of ['s1', 's2', 's3']) assert.ok(dist(warm.get(id)!, first.get(id)!) < 1e-9, `${id} kept its slot`)
+  assert.ok(['s1', 's2'].some(id => dist(cold.get(id)!, first.get(id)!) > 1), 'without prev the arrival of s0 reshuffles the others (the old behaviour)')
+  // a growing satellite cloud (bigger radius) does not make the node hop to another slot
+  const grown = placeAnchorSessions([mkS('s1', 'A', 78), mkS('s2', 'A'), mkS('s3', 'B')], anchors, { now: 2_000, prev: first })
+  assert.ok(dist(grown.get('s1')!, first.get('s1')!) < 1, 'same slot when the radius grows a little')
+  // the resource moves: the node moves with it, by the same offset
+  const moved2 = new Map(anchors)
+  moved2.set('A', { x: anchors.get('A')!.x + 120, y: anchors.get('A')!.y - 40 })
+  const follow = placeAnchorSessions([mkS('s1', 'A'), mkS('s2', 'A'), mkS('s3', 'B')], moved2, { now: 2_000, prev: first })
+  const dx = follow.get('s1')!.x - first.get('s1')!.x
+  const dy = follow.get('s1')!.y - first.get('s1')!.y
+  assert.ok(Math.abs(dx - 120) < 1 && Math.abs(dy + 40) < 1, `follows its resource (${dx}, ${dy})`)
+  // a different resource: it finds a new place beside the new one
+  const switched = placeAnchorSessions([{ id: 's1', radius: 70, usage: [{ resource: 'C', weight: 1, lastAt: 60_000 }] }, mkS('s2', 'A'), mkS('s3', 'B')], anchors, { now: 61_000, prev: first })
+  assert.equal(switched.get('s1')!.at, 'C')
+  assert.ok(dist(switched.get('s1')!, anchors.get('C')!) < dist(switched.get('s1')!, anchors.get('A')!))
+})
+
+test('placeAnchorSessions: a remembered slot that another node now holds is not reused, so nodes never overlap', () => {
+  const anchors = placeAnchors(['A'], new Map())
+  const mkS = (id: string) => ({ id, radius: 70, usage: [{ resource: 'A', weight: 1, lastAt: 1_000 }] })
+  const first = placeAnchorSessions([mkS('s1')], anchors, { now: 2_000 })
+  const both = placeAnchorSessions([mkS('s0'), mkS('s1')], anchors, { now: 2_000, prev: first })
+  assert.ok(dist(both.get('s0')!, both.get('s1')!) >= 140, 'the two nodes do not overlap')
+  for (const id of ['s0', 's1']) assert.ok(dist(both.get(id)!, anchors.get('A')!) >= 46 + 70)
 })

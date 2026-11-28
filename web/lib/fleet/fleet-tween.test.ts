@@ -81,3 +81,61 @@ test('pure: the inputs are not changed, the same inputs give the same legs', () 
   assert.deepEqual(shown.get('a'), P(0, 0))
   assert.deepEqual(targets.get('a'), P(9, 9))
 })
+
+// ─── carried velocity (anchor mode) ─────────────────────────────────────────
+
+const speedAt = (leg: ReturnType<typeof retarget> extends Map<string, infer L> ? L : never, t: number) => {
+  const a = legPosition(leg, t - 4)
+  const b = legPosition(leg, t + 4)
+  return { x: (b.x - a.x) / 8, y: (b.y - a.y) / 8 }
+}
+
+test('carryVelocity: a retarget in mid-glide leaves at the speed the node had (no stop and restart), and still ends exactly on the new target', () => {
+  const D = 2400
+  const first = retarget(null, new Map([['a', P(0, 0)]]), new Map([['a', P(600, 0)]]), T, undefined, D)
+  const t1 = T + 900
+  const here = legPosition(first.get('a')!, t1)
+  const vBefore = speedAt(first.get('a')!, t1)
+  assert.ok(vBefore.x > 0.1, `moving at ${vBefore.x} u/ms`)
+  // The target moves a little while the node is gliding.
+  const plain = retarget(first, new Map([['a', here]]), new Map([['a', P(640, 30)]]), t1, undefined, D).get('a')!
+  const carried = retarget(first, new Map([['a', here]]), new Map([['a', P(640, 30)]]), t1, undefined, D, true).get('a')!
+  assert.deepEqual(legPosition(carried, t1), here, 'no jump at the retarget')
+  const vPlain = speedAt(plain, t1 + 6)
+  const vCarried = speedAt(carried, t1 + 6)
+  assert.ok(Math.abs(vPlain.x) < 0.02, `without carry the node starts from rest (${vPlain.x})`)
+  assert.ok(Math.abs(vCarried.x - vBefore.x) < 0.05, `with carry it keeps its speed: ${vBefore.x} -> ${vCarried.x}`)
+  assert.deepEqual(legPosition(carried, t1 + D), P(640, 30))
+  assert.deepEqual(legPosition(carried, t1 + D * 3), P(640, 30))
+})
+
+test('carryVelocity: many small retargets (one per event) never make a frame-to-frame jump', () => {
+  const D = 2400
+  let legs = retarget(null, new Map([['a', P(0, 0)]]), new Map([['a', P(300, 0)]]), T, undefined, D, true)
+  let shown = P(0, 0)
+  let now = T
+  let worst = 0
+  let prev = shown
+  for (let frame = 0; frame < 400; frame++) {
+    now += 16
+    if (frame % 25 === 0) { // a rebuild every 400 ms moves the target a little
+      legs = retarget(legs, new Map([['a', shown]]), new Map([['a', P(300 + frame / 5, frame / 10)]]), now, undefined, D, true)
+    }
+    shown = positionsAt(legs, now).positions.get('a') ?? shown
+    worst = Math.max(worst, Math.hypot(shown.x - prev.x, shown.y - prev.y))
+    prev = shown
+  }
+  // 300 units over 2.4 s is 0.125 u/ms = 2 units per 16 ms frame; a restart from rest would show as a speed dip, a jump as a spike.
+  assert.ok(worst < 6, `the biggest step in one frame is ${worst.toFixed(2)} units`)
+})
+
+test('carryVelocity: the carried speed is capped, so a far new target does not fling the node past it', () => {
+  const D = 1000
+  const first = retarget(null, new Map([['a', P(0, 0)]]), new Map([['a', P(5000, 0)]]), T, undefined, D)
+  const t1 = T + 500
+  const here = legPosition(first.get('a')!, t1)
+  const leg = retarget(first, new Map([['a', here]]), new Map([['a', P(here.x - 100, 0)]]), t1, undefined, D, true).get('a')!
+  let minX = Infinity
+  for (let t = 0; t <= D; t += 10) minX = Math.min(minX, legPosition(leg, t1 + t).x)
+  assert.ok(minX >= here.x - 100 - 200, `overshoot stays small (${(here.x - 100 - minX).toFixed(0)} units)`)
+})

@@ -44,7 +44,7 @@ import { packClouds } from '@/lib/fleet/fleet-cloud-pack'
 import { placeBlob, placeResources, type BlobUnit, type PlacementResource } from '@/lib/fleet/fleet-placement'
 import {
   buildRelations, coUseWeights, explicitLinkPairs, fitAnchorsToAspect, layoutWeights, placeAnchorSessions, placeAnchors, profileColor,
-  type AnchorSession, type UseItem,
+  type AnchorLayoutState, type AnchorSession, type UseItem,
 } from '@/lib/fleet/anchor-mode'
 import { DEFAULT_PROFILE_PALETTE } from '@/lib/fleet/options-registry'
 import type { FleetPulse } from '@/lib/fleet/fleet-pulses'
@@ -163,6 +163,12 @@ export interface FleetSceneInput {
   profileColors?: Readonly<Record<string, string>>
   /** Anchor mode: epoch ms of "now", to tell which resource a session is using now. Default: the wall clock. */
   now?: number
+  /**
+   * Anchor mode: the layout of the previous build (`FleetScene.anchorLayout`). Resources and session nodes start from
+   * there and move only as far as the changed inputs pull them, so a rebuild flows instead of re-solving the map.
+   * Without it (first build) the layout is solved from scratch; the same input and the same `anchorPrev` give the same map.
+   */
+  anchorPrev?: AnchorLayoutState
 }
 
 export interface FleetScene {
@@ -173,6 +179,8 @@ export interface FleetScene {
   clusters: ReadonlyMap<string, { x: number; y: number; r: number; identity: string }>
   /** Where each resource node belongs (weighted by its interactions). The scene draws it there; the frame loop glides to it. */
   resourceTargets: ReadonlyMap<string, { x: number; y: number }>
+  /** Anchor mode: the solved layout (before drags are applied). Hand it back as `FleetSceneInput.anchorPrev` on the next build. */
+  anchorLayout?: AnchorLayoutState
 }
 
 /** A session node with its satellites: the unit a blob is made of. */
@@ -478,13 +486,17 @@ function buildAnchorScene(
 
   // 2. Anchors by co-use and explicit links; session nodes beside the resource they use.
   const weights = layoutWeights(coUseWeights(uses), explicitLinkPairs(resources.map(r => ({ id: r.id, kind: r.kind, label: r.label }))))
-  // Spread to the shape of the viewport (only ever apart, so the least separation holds).
-  const anchors = fitAnchorsToAspect(placeAnchors(resources.map(r => r.id), weights), input.aspect ?? 1)
+  // Spread to the shape of the viewport (only ever apart, so the least separation holds). The solver is warm-started
+  // from the previous build's SOLVED anchors (not the fitted ones: feeding the stretched map back would make the solver
+  // relax it and the fit stretch it again on every build, so it would never settle). The aspect fit is a pure function of
+  // the solved map and is applied on top of it each build.
+  const solvedAnchors = placeAnchors(resources.map(r => r.id), weights, { prev: input.anchorPrev?.anchors })
+  const anchors = fitAnchorsToAspect(solvedAnchors, input.aspect ?? 1)
   const anchorSessions: AnchorSession[] = [...unitsById.values()].map(u => ({
     id: u.id, radius: u.unit.radius,
     usage: [...(usage.get(u.id) ?? [])].map(([resource, v]) => ({ resource, weight: v.weight, lastAt: v.lastAt })),
   }))
-  const spots = placeAnchorSessions(anchorSessions, anchors, { now })
+  const spots = placeAnchorSessions(anchorSessions, anchors, { now, prev: input.anchorPrev?.sessions })
 
   // 3. The scene: session nodes (tinted by profile), their satellites, the resource nodes.
   const agents = new Map<string, Agent>()
@@ -571,7 +583,7 @@ function buildAnchorScene(
     agents, toolCalls, edges, keepFinished: true, isPlaying: false, currentTime, maxTimeReached: currentTime,
     clouds: cloudViews, pulses: input.pulses ? [...input.pulses] : [], relations,
   })
-  return { state, sessionOfAgent, clusters: centers, resourceTargets }
+  return { state, sessionOfAgent, clusters: centers, resourceTargets, anchorLayout: { anchors: solvedAnchors, sessions: spots } }
 }
 
 /**

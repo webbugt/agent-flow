@@ -30,6 +30,12 @@ export interface Leg {
   since: number
   /** How long the leg takes, ms. Default {@link TWEEN_MS}; resource-anchor mode uses a longer one so a session drifts. */
   ms?: number
+  /**
+   * Velocity the node had when the leg started, world units per ms. A leg with one leaves at that speed (cubic Hermite
+   * curve) instead of from rest, so a node whose target is moved again while it glides keeps gliding: no stop and
+   * restart at every rebuild. A leg without one eases in and out as before.
+   */
+  v?: Point
 }
 
 export type Legs = ReadonlyMap<string, Leg>
@@ -51,6 +57,19 @@ export function legDone(leg: Leg, now: number): boolean {
 export function legPosition(leg: Leg, now: number): Point {
   const p = progressOf(leg, now)
   if (p >= 1) return { x: leg.to.x, y: leg.to.y }
+  if (leg.v) {
+    // Hermite: start at `from` with speed `v`, arrive at `to` at rest.
+    const d = leg.ms ?? TWEEN_MS
+    const p2 = p * p
+    const p3 = p2 * p
+    const h00 = 2 * p3 - 3 * p2 + 1
+    const h10 = p3 - 2 * p2 + p
+    const h01 = -2 * p3 + 3 * p2
+    return {
+      x: h00 * leg.from.x + h10 * leg.v.x * d + h01 * leg.to.x,
+      y: h00 * leg.from.y + h10 * leg.v.y * d + h01 * leg.to.y,
+    }
+  }
   const k = easeInOutQuad(p)
   return { x: leg.from.x + (leg.to.x - leg.from.x) * k, y: leg.from.y + (leg.to.y - leg.from.y) * k }
 }
@@ -70,6 +89,8 @@ export function retarget(
   hold?: ReadonlyMap<string, unknown>,
   /** Length of a new leg, ms (default {@link TWEEN_MS}). */
   durationMs?: number,
+  /** A node that is still gliding when its target moves keeps its speed (see {@link Leg.v}). Default off. */
+  carryVelocity = false,
 ): Map<string, Leg> {
   const out = new Map<string, Leg>()
   for (const [id, to] of targets) {
@@ -78,9 +99,27 @@ export function retarget(
     const old = prev?.get(id)
     if (old && dist(old.to, to) <= TWEEN_EPSILON && !legDone(old, now)) { out.set(id, old); continue }
     if (dist(at, to) <= TWEEN_EPSILON) continue
-    out.set(id, { from: { x: at.x, y: at.y }, to: { x: to.x, y: to.y }, since: now, ...(durationMs !== undefined ? { ms: durationMs } : {}) })
+    const leg: Leg = { from: { x: at.x, y: at.y }, to: { x: to.x, y: to.y }, since: now, ...(durationMs !== undefined ? { ms: durationMs } : {}) }
+    if (carryVelocity && old && !legDone(old, now)) {
+      const v = speedOf(old, now)
+      // Never leave faster than it takes to cross the distance in half the leg: no wild overshoot for a far new target.
+      const cap = (2 * dist(at, to)) / (durationMs ?? TWEEN_MS)
+      const m = Math.hypot(v.x, v.y)
+      const k = m > cap && m > 0 ? cap / m : 1
+      if (m > 1e-6) leg.v = { x: v.x * k, y: v.y * k }
+    }
+    out.set(id, leg)
   }
   return out
+}
+
+/** Velocity of a leg at `now`, world units per ms (central difference over a few ms; the start and the end clamp). */
+function speedOf(leg: Leg, now: number): Point {
+  const h = 8
+  const a = legPosition(leg, now - h)
+  const b = legPosition(leg, now + h)
+  const span = Math.min(now + h, leg.since + (leg.ms ?? TWEEN_MS)) - Math.max(now - h, leg.since)
+  return span > 0 ? { x: (b.x - a.x) / span, y: (b.y - a.y) / span } : { x: 0, y: 0 }
 }
 
 export interface TweenPositions {

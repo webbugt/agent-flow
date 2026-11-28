@@ -7,7 +7,7 @@ import type { FleetGraph } from '@/lib/fleet/fleet-graph'
 import { FleetPulseTracker } from '@/lib/fleet/fleet-pulses'
 import { retarget, type Legs } from '@/lib/fleet/fleet-tween'
 import { fleetNow } from '@/lib/fleet/fleet-clock'
-import { DRIFT_MS } from '@/lib/fleet/anchor-mode'
+import { DRIFT_MS, type AnchorLayoutState } from '@/lib/fleet/anchor-mode'
 import { buildFleetScene, FleetReplay, type FleetScene } from './simulation/fleet-scene'
 import { ghostIdsOf, newFleetPresenceTracker, withGhosts } from './simulation/fleet-presence-scene'
 import { positionsOf, tweenedFrame } from './simulation/fleet-tween-scene'
@@ -32,6 +32,8 @@ export interface UseFleetSceneOptions {
   /** Resource-anchor mode: profile palette and per-profile overrides (options). */
   palette?: readonly string[]
   profileColors?: Readonly<Record<string, string>>
+  /** Resource-anchor mode: how long a node glides to a new place, ms. Default {@link DRIFT_MS}. */
+  driftMs?: number
 }
 
 const EMPTY_SCENE: FleetScene = {
@@ -47,7 +49,7 @@ const EMPTY_SCENE: FleetScene = {
  * targets) and `frameRef`, the same kind of ref the single-session canvas draws from.
  */
 export function useFleetScene(opts: UseFleetSceneOptions) {
-  const { visible, sessions, eventsOf, instances, selection, graph, aspect, tick, replay: sharedReplay, anchorMode, palette, profileColors } = opts
+  const { visible, sessions, eventsOf, instances, selection, graph, aspect, tick, replay: sharedReplay, anchorMode, palette, profileColors, driftMs = DRIFT_MS } = opts
   const ownReplayRef = useRef<FleetReplay | null>(null)
   if (!ownReplayRef.current) ownReplayRef.current = new FleetReplay()
   const replayRef = { current: sharedReplay ?? ownReplayRef.current }
@@ -66,11 +68,15 @@ export function useFleetScene(opts: UseFleetSceneOptions) {
   // legs from where things were drawn to there. frameRef holds what is drawn NOW (target eased by the legs).
   const targetRef = useRef<SimulationState>(EMPTY_SCENE.state)
   const legsRef = useRef<Legs | null>(null)
+  // Anchor mode: the layout the last scene was built with. The next build starts from it (see FleetSceneInput.anchorPrev),
+  // so a rebuild moves what the new events pull and leaves the rest where it is, instead of solving the map afresh.
+  const anchorPrevRef = useRef<AnchorLayoutState | undefined>(undefined)
 
   const built = useMemo(() => {
     if (!visible) {
       // Hidden: forget what was on the map, so showing it again animates nothing (a first build is steady).
       presenceRef.current?.reset()
+      anchorPrevRef.current = undefined
       return { scene: EMPTY_SCENE, frame: EMPTY_SCENE.state }
     }
     const replay = replayRef.current as FleetReplay
@@ -80,7 +86,7 @@ export function useFleetScene(opts: UseFleetSceneOptions) {
     const fresh = buildFleetScene({
       sessions, stateOf: id => replay.advance(id, eventsOf(id)), instances, selection, graph, aspect,
       moved: movedRef.current, pulses,
-      ...(anchorMode ? { layout: 'anchor' as const, palette, profileColors, now: fleetNow() } : {}),
+      ...(anchorMode ? { layout: 'anchor' as const, palette, profileColors, now: fleetNow(), anchorPrev: anchorPrevRef.current } : {}),
     })
     const tracker = presenceRef.current as NonNullable<typeof presenceRef.current>
     // Ghosts follow the centre of their cloud when it moves (a cloud entering or leaving shifts the grid).
@@ -101,7 +107,9 @@ export function useFleetScene(opts: UseFleetSceneOptions) {
     // user dragged has no leg (a drag applies at once). Satellites keep their offset from their node.
     const now = fleetNow()
     targetRef.current = built.frame
-    legsRef.current = retarget(legsRef.current, positionsOf(frameRef.current), positionsOf(built.frame), now, movedRef.current, anchorMode ? DRIFT_MS : undefined)
+    anchorPrevRef.current = anchorMode ? scene.anchorLayout : undefined
+    // Anchor mode: a node whose target moves again while it glides keeps its speed (no stop and restart per rebuild).
+    legsRef.current = retarget(legsRef.current, positionsOf(frameRef.current), positionsOf(built.frame), now, movedRef.current, anchorMode ? driftMs : undefined, !!anchorMode)
     frameRef.current = tweenedFrame(built.frame, legsRef.current, now, movedRef.current).frame
   }
 
