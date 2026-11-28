@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback, useRef } from 'react'
 import { vscodeBridge, type ConnectionStatus, type AgentEvent, type SessionInfo } from '@/lib/vscode-bridge'
 import { SimulationEvent } from '@/lib/agent-types'
 import { countsAsActivity } from '@/lib/fleet/fleet-model'
+import { showsLiveActivity, stampStreamMessage, type StreamStamps } from '@/lib/data-freshness'
 import { loadAppState, pickInitialSession } from '@/lib/fleet/app-state'
 import { handleServerVersion } from '@/lib/auto-reload'
 import type { BridgeHookResult } from './bridge-hook-result'
@@ -21,6 +22,9 @@ export type { BridgeHookResult }
 export function useVSCodeBridge(): BridgeHookResult {
   const [isVSCode, setIsVSCode] = useState(false)
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('disconnected')
+  const [stamps, setStamps] = useState<StreamStamps>({ lastEventAt: null, lastActivityAt: null })
+  const [connectedAt, setConnectedAt] = useState<number | null>(null)
+  const stampsRef = useRef<StreamStamps>(stamps)
   const [useMockData, setUseMockData] = useState(
     process.env.NEXT_PUBLIC_DEMO !== '0'
   )
@@ -56,6 +60,7 @@ export function useVSCodeBridge(): BridgeHookResult {
 
     es.onopen = () => {
       setConnectionStatus('connected')
+      setConnectedAt(Date.now())
       setUseMockData(false)
     }
     es.onmessage = (e) => {
@@ -95,6 +100,18 @@ export function useVSCodeBridge(): BridgeHookResult {
         payload: event.payload,
         sessionId: event.sessionId,
         ...(event.history ? { history: true } : {}),
+      }
+
+      // Freshness for the top bar. ANY message of the stream shows that the relay is alive and sending (context_update,
+      // model_detected, the relay's agent_idle ticks, history replays), so it moves the liveness stamp (LIVE / STALE).
+      // The visible age is the age of the last REAL activity: only a live message that showsLiveActivity moves that stamp
+      // (the fleet activity filter's rule plus context_update, which the relay sends only after a model call), so agent_idle ticks (one per quiet session per second) and the
+      // quiet-timeout completion never reset it (every inactivity completion of the relay, the VS Code extension, the Codex
+      // watcher and the Hermes log watcher carries `reason: 'quiet'`). One state update a second is plenty for a 60 s threshold.
+      const nextStamps = stampStreamMessage(stampsRef.current, Date.now(), showsLiveActivity(event.type, event.payload, event.history))
+      if (nextStamps !== stampsRef.current) {
+        stampsRef.current = nextStamps
+        setStamps(nextStamps)
       }
 
       // Always buffer by session (for replay on session switch)
@@ -301,6 +318,9 @@ export function useVSCodeBridge(): BridgeHookResult {
   return {
     isVSCode,
     connectionStatus,
+    lastEventAt: stamps.lastEventAt,
+    lastActivityAt: stamps.lastActivityAt,
+    connectedAt,
     pendingEvents: pendingEventsRef.current,
     consumeEvents,
     useMockData,

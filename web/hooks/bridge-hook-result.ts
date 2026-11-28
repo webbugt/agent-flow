@@ -9,6 +9,12 @@ import type { ConnectionStatus, SessionInfo } from '@/lib/bridge-types'
 export interface BridgeHookResult {
   isVSCode: boolean
   connectionStatus: ConnectionStatus
+  /** Arrival time (ms since epoch) of the last stream message of ANY type (history replays and agent_idle ticks included: they prove the stream is alive), null before the first. Updated at most once a second. */
+  lastEventAt: number | null
+  /** Arrival time of the last live message that shows real activity (tool call, message, spawn...), null before the first. */
+  lastActivityAt: number | null
+  /** When the event stream last connected (browser build), null if it never did. */
+  connectedAt: number | null
   /** Events received from VS Code extension, converted to SimulationEvent format */
   pendingEvents: readonly SimulationEvent[]
   /** Call after consuming events to clear the queue */

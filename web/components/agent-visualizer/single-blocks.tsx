@@ -10,6 +10,7 @@ import { SingleSessionTracker, buildSingleBlocks, type SingleSessionLike } from 
 import type { BashEventLike } from "@/lib/fleet/bash-blocks"
 import type { UseEventLike } from "@/lib/fleet/event-uses"
 import { useOptions } from "@/hooks/use-options"
+import { STACK_BOTTOM } from "@/lib/bottom-stack"
 import { FleetInspector } from "./fleet-inspector"
 
 interface SingleBlocksProps {
@@ -107,8 +108,9 @@ export function SingleBlocks({ session, eventsOf, visible }: SingleBlocksProps) 
       <div
         data-testid="single-blocks"
         data-count={blocks.length}
-        className="absolute left-3 bottom-24 flex flex-wrap gap-1.5 font-mono text-[10px]"
-        style={{ zIndex: Z.sidePanel, maxWidth: 'min(70vw, 560px)' }}
+        className="absolute left-3 flex flex-wrap gap-1.5 font-mono text-[11px]"
+        // On the bottom stack (above the control bar and the LIMITS panel), not a fixed 96 px that the LIMITS panel covered.
+        style={{ zIndex: Z.sidePanel, maxWidth: 'min(70vw, 560px)', bottom: STACK_BOTTOM }}
       >
         {blocks.map(b => {
           const color = KIND_COLOR[b.kind]

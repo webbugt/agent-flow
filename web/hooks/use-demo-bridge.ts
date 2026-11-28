@@ -154,6 +154,10 @@ export function useDemoBridge(): { bridge: BridgeHookResult; demo: DemoHandle } 
   const bridge: BridgeHookResult = {
     isVSCode: false,
     connectionStatus: 'disconnected',
+    // No stream, so no freshness stamps: the visualiser hides the LIVE / STALE marker in the demo (showFreshness).
+    lastEventAt: null,
+    lastActivityAt: null,
+    connectedAt: null,
     pendingEvents: pendingEventsRef.current,
     consumeEvents,
     // False on purpose: the built-in mock scenario is not the demo; the demo's own events drive every view.

@@ -21,7 +21,8 @@ export interface UseFleetSceneOptions {
   instances: readonly FleetInstance[]
   selection: FleetSelectionView
   graph: FleetGraph
-  columns?: number
+  /** Shape of the free viewport area (width / height): the layout flows into a block of this aspect. */
+  aspect?: number
   /** Changes when the event buffers have grown. */
   tick: number
   /** Shared replay: the session detail panel reads the same settled states the map draws. */
@@ -46,7 +47,7 @@ const EMPTY_SCENE: FleetScene = {
  * targets) and `frameRef`, the same kind of ref the single-session canvas draws from.
  */
 export function useFleetScene(opts: UseFleetSceneOptions) {
-  const { visible, sessions, eventsOf, instances, selection, graph, columns, tick, replay: sharedReplay, anchorMode, palette, profileColors } = opts
+  const { visible, sessions, eventsOf, instances, selection, graph, aspect, tick, replay: sharedReplay, anchorMode, palette, profileColors } = opts
   const ownReplayRef = useRef<FleetReplay | null>(null)
   if (!ownReplayRef.current) ownReplayRef.current = new FleetReplay()
   const replayRef = { current: sharedReplay ?? ownReplayRef.current }
@@ -77,7 +78,7 @@ export function useFleetScene(opts: UseFleetSceneOptions) {
     // Idempotent for the same links: a second call (strict mode, a re-render) starts no dot twice.
     const pulses = (pulsesRef.current as FleetPulseTracker).update(graph.edges, Date.now())
     const fresh = buildFleetScene({
-      sessions, stateOf: id => replay.advance(id, eventsOf(id)), instances, selection, graph, columns,
+      sessions, stateOf: id => replay.advance(id, eventsOf(id)), instances, selection, graph, aspect,
       moved: movedRef.current, pulses,
       ...(anchorMode ? { layout: 'anchor' as const, palette, profileColors, now: fleetNow() } : {}),
     })
@@ -86,7 +87,7 @@ export function useFleetScene(opts: UseFleetSceneOptions) {
     return { scene: fresh, frame: withGhosts(fresh.state, tracker, fleetNow(), fresh.clusters) }
     // tick: the event buffers are refs, so React does not see new events by itself
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visible, sessions, eventsOf, instances, selection, graph, columns, tick, ghostTick, anchorMode, palette, profileColors])
+  }, [visible, sessions, eventsOf, instances, selection, graph, aspect, tick, ghostTick, anchorMode, palette, profileColors])
   const scene = built.scene
   // Only when the scene was rebuilt: a re-render must not undo a drag that moved the frame.
   const lastSceneRef = useRef<FleetScene | null>(null)

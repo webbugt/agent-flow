@@ -25,13 +25,13 @@ export function ToolDetailPopup({ tool, position, onClose }: ToolDetailPopupProp
   return (
     <DetailPopup position={position} width={POPUP.tool.width} estimatedHeight={POPUP.tool.estimatedHeight} onClose={onClose}>
       <PanelHeader onClose={onClose}>
-        <span className="text-[9px]" style={{ color: stateColor }}>
+        <span className="text-[11px]" style={{ color: stateColor }}>
           {tool.state === 'running' ? '⚙' : tool.state === 'error' ? '✕' : '✓'}
         </span>
         <span className="text-[11px] font-mono font-semibold" style={{ color: COLORS.tool_calling }}>
           {tool.toolName}
         </span>
-        <span className="text-[9px] font-mono capitalize" style={{ color: stateColor + '90' }}>
+        <span className="text-[11px] font-mono capitalize" style={{ color: stateColor + '90' }}>
           {tool.state}
         </span>
       </PanelHeader>

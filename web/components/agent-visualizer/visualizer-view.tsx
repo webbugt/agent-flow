@@ -9,7 +9,8 @@ import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts"
 import { useScreensaver } from "@/hooks/use-screensaver"
 import { useViewUrlSync } from "@/hooks/use-view-url"
 import { parseViewParams } from "@/lib/fleet/url-view"
-import { AgentCanvas } from "./canvas"
+import { AgentCanvas, type CanvasControls } from "./canvas"
+import { SingleZoomControls } from "./single-zoom-controls"
 import { agentCostOf } from "./canvas/draw-cost"
 import { effectiveCosts } from "@/lib/costs/active"
 import { buildTopBarCost, describeSources } from "@/lib/costs/overlay"
@@ -54,7 +55,7 @@ import { LimitsPanelHost } from "./limits-panel"
 import { useCostsConfig } from "@/hooks/use-costs-config"
 import { useLimitsFeed } from "@/hooks/use-limits"
 import { useAudioEffects } from "@/hooks/use-audio-effects"
-import { useViewportWidth } from "@/hooks/use-viewport-width"
+import { useViewportWidth, useViewportHeight } from "@/hooks/use-viewport-width"
 import { useAppStatePersistence } from "@/hooks/use-app-state"
 import type { AppState } from "@/lib/fleet/app-state"
 import { detailInset } from "@/lib/session-detail"
@@ -140,10 +141,13 @@ export function AgentVisualizerView({ bridge, demo }: AgentVisualizerViewProps) 
   // (finished and idle nodes keep their history there), not the single-view simulation.
   const [detailFleetSessionId, setDetailFleetSessionId] = useState<string | null>(null)
   const fleetReplayRef = useRef<FleetReplay | null>(null)
+  /** On-screen zoom buttons of the single-session graph (the canvas fills it). */
+  const singleCanvasControlsRef = useRef<CanvasControls | null>(null)
   if (!fleetReplayRef.current) fleetReplayRef.current = new FleetReplay()
   const viewportWidth = useViewportWidth(1280)
   // Space the Fleet map and timeline leave on the right: the open detail panel, or (demo) the control panel.
   const rightInset = Math.max(detailInset(showSessionDetail, viewportWidth, CARD.sessionDetail.width), demo?.rightInset ?? 0)
+  const viewportHeight = useViewportHeight(900)
 
   // The latest app state (open tab, mode, panels, LIMITS fold) is kept in localStorage and restored after mount,
   // so the server and the first client frame render the same. Screensaver mode, the options, the fleet timeline
@@ -470,6 +474,8 @@ export function AgentVisualizerView({ bridge, demo }: AgentVisualizerViewProps) 
     return Array.from(out)
   }, [agents])
 
+  /** A panel that sits on the bottom stack is open: a small screen folds the LIMITS panel to its one line meanwhile. */
+  const otherBottomPanelOpen = showFleet ? fleetTimelineVisible : showTimeline
   const selectedAgent = selection.selectedAgentId ? agents.get(selection.selectedAgentId) : null
   const selectedConversation = selection.selectedAgentId ? (conversations.get(selection.selectedAgentId) || []) : []
 
@@ -558,13 +564,15 @@ export function AgentVisualizerView({ bridge, demo }: AgentVisualizerViewProps) 
 
   return (
     <OpenFileProvider value={bridge.isVSCode ? openFile : null}>
-    <div className="h-screen w-screen relative overflow-hidden" style={{ background: COLORS.void }}>
+    {/* .af-app-root (globals.css): overflow clip, with hidden as the fallback for a browser without clip. Not plain hidden: a hidden panel parked 20 px past the right edge makes this box scrollable, and a
+        scrollIntoView on a tab chip (or a focus) then slid the whole app 8 px left, taking the Session sheet off the edge. */}
+    <div className="h-screen w-screen relative af-app-root" style={{ background: COLORS.void }}>
       {/* Empty state when no demo and no live data */}
       {isEmpty && !sv && (
         <div className="absolute inset-0 flex items-center justify-center z-10 pointer-events-none">
           <div className="text-center" style={{ fontFamily: "'SF Mono', 'Fira Code', monospace" }}>
-            <div className="text-sm" style={{ color: '#66ccff80' }}>{demo ? 'DEMO: NO SESSION YET' : 'WAITING FOR AGENT SESSION'}</div>
-            <div className="mt-2 text-xs" style={{ color: '#66ccff40' }}>{demo ? 'Start a session in the demo panel' : 'Start a Claude Code session to see activity'}</div>
+            <div className="text-sm" style={{ color: COLORS.textMuted }}>{demo ? 'DEMO: NO SESSION YET' : 'WAITING FOR AGENT SESSION'}</div>
+            <div className="mt-2 text-xs" style={{ color: COLORS.textMuted }}>{demo ? 'Start a session in the demo panel' : 'Start a Claude Code session to see activity'}</div>
           </div>
         </div>
       )}
@@ -588,7 +596,9 @@ export function AgentVisualizerView({ bridge, demo }: AgentVisualizerViewProps) 
         selectedDiscoveryId={selection.selectedDiscoveryId}
         showCostOverlay={showCostOverlay && !sv}
         screensaver={sv}
+        controlsRef={singleCanvasControlsRef}
       />
+      <SingleZoomControls controlsRef={singleCanvasControlsRef} visible={!sv && !showFleet} />
 
       {/* Message feed panel (top-left) */}
       {!sv && (
@@ -597,6 +607,8 @@ export function AgentVisualizerView({ bridge, demo }: AgentVisualizerViewProps) 
           agents={agents}
           onAgentClick={selection.handleAgentClick}
           selectedAgentId={selection.selectedAgentId}
+          // A phone (390 wide) or a landscape phone (390 high) has no room for the card next to a bottom panel or the Fleet filter.
+          tuckedAway={(viewportWidth < 480 || viewportHeight < 500) && (showTimeline || showFleet)}
         />
       )}
 
@@ -763,6 +775,10 @@ export function AgentVisualizerView({ bridge, demo }: AgentVisualizerViewProps) 
         onCloseSession={handleCloseSession}
         isVSCode={bridge.isVSCode}
         connectionStatus={bridge.connectionStatus}
+        showFreshness={!bridge.isVSCode && !bridge.useMockData && !demo}
+        lastEventAt={bridge.lastEventAt}
+        lastActivityAt={bridge.lastActivityAt}
+        connectedAt={bridge.connectedAt}
         agentCount={agents.size}
         totalTokens={totalTokens}
         costText={costText}
@@ -791,7 +807,7 @@ export function AgentVisualizerView({ bridge, demo }: AgentVisualizerViewProps) 
       {!sv && <CostsConfigBanner status={costsStatus} />}
 
       {/* LIMITS panel: observed 5h / weekly, estimates with tags, and the Fable estimate when Fable was used this week */}
-      {!sv && <LimitsPanelHost sessionIds={limitSessionIds} eventsOf={getSessionEvents} collapsed={limitsCollapsed} onCollapsedChange={setLimitsCollapsed} />}
+      {!sv && <LimitsPanelHost sessionIds={limitSessionIds} eventsOf={getSessionEvents} collapsed={limitsCollapsed} onCollapsedChange={setLimitsCollapsed} otherBottomPanelOpen={otherBottomPanelOpen} />}
 
       {/* Options panel: linger/fade/show per resource kind, sound, timeline, cost unit, hidden fleet agents (browser only, no server config) */}
       {showOptions && <OptionsPanel selection={fleetSelection} profiles={[...new Set(fleetInstances.map(i => i.identity))].sort()} onClose={() => setShowOptions(false)} />}

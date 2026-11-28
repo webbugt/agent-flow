@@ -112,6 +112,9 @@ export function FleetMap({
   // Timeline hidden: only what the playback bar covers is reserved (insetBottom is that then).
   const measuredBottom = !timelineVisible ? insetBottom : panelTop !== null ? Math.max(size.height - panelTop + 8, 0) : insetBottom
   const bottom = screensaver ? 0 : timelineVisible ? Math.min(measuredBottom, Math.round(size.height * 0.55)) : measuredBottom
+  // The buttons sit above the panel's REAL top edge. The cap above only decides how much of the screen the node map may lose;
+  // using it for the buttons too put them under a panel taller than 55 % of the screen (a landscape phone).
+  const controlsBottom = screensaver ? 0 : measuredBottom
   const freeW = Math.max(size.width - (screensaver ? 0 : insetRight), 1)
   const freeH = Math.max(size.height - top - bottom, 1)
 
@@ -143,14 +146,12 @@ export function FleetMap({
     () => visible ? buildFleetGraph({ instances, kanban, supermemory, bash, subsystem, selection, now, options, pins }) : EMPTY_GRAPH,
     [visible, instances, kanban, supermemory, bash, subsystem, selection, now, options, pins],
   )
-  // Clusters per row follow the free area's shape, so a phone gets a tall column, a desktop a wide grid.
-  const columns = useMemo(
-    () => Math.max(1, Math.min(sessions.length || 1, Math.round(Math.sqrt(Math.max(sessions.length, 1) * (freeW / freeH))))),
-    [sessions.length, freeW, freeH],
-  )
+  // The layout flows the clouds (or the anchors) into a block of the free area's shape, so a phone gets a tall column and
+  // a desktop a wide grid. Rounded, so a window drag does not rebuild the scene on every pixel.
+  const aspect = useMemo(() => Math.round((freeW / freeH) * 20) / 20 || 1, [freeW, freeH])
 
   const { scene, frameRef, moveNode } = useFleetScene({
-    visible, sessions, eventsOf, instances, selection, graph, columns, tick, replay,
+    visible, sessions, eventsOf, instances, selection, graph, aspect, tick, replay,
     anchorMode: options.anchorMode, palette: options.profilePalette, profileColors: options.profileColors,
   })
 
@@ -258,8 +259,8 @@ export function FleetMap({
       {/* Zoom controls: bottom-left of the map area, clear of the timeline toggle (bottom-right) and the session detail. */}
       {!screensaver && <div
         data-testid="fleet-zoom-controls"
-        className="absolute flex flex-col gap-1.5"
-        style={{ left: 12, bottom: bottom + 8, zIndex: 6 }}
+        className="af-fleet-zoom absolute flex flex-col gap-1.5"
+        style={{ left: 12, bottom: controlsBottom + 8, zIndex: 6 }}
       >
         {([
           ['fleet-zoom-in', 'Zoom in', '+', zoomIn],
@@ -329,9 +330,9 @@ export function FleetMap({
           data-testid="fleet-timeline-toggle"
           aria-pressed={timelineVisible}
           onClick={onToggleTimeline}
-          className="absolute font-mono text-xs px-2 py-1 rounded"
+          className="af-fleet-toggle absolute font-mono text-xs px-2 py-1 rounded"
           style={{
-            right: insetRight + 12, bottom: bottom + 8, zIndex: 6,
+            right: insetRight + 12, bottom: controlsBottom + 8, zIndex: 6,
             background: 'rgba(8,12,24,0.88)', border: `1px solid ${COLORS.holoBase}66`, color: COLORS.textPrimary,
           }}
         >

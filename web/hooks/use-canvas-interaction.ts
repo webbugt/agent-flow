@@ -12,7 +12,11 @@ import { findCostPillAt } from '@/lib/costs/overlay'
 import { getCostPillRects } from '@/lib/cost-overlay-store'
 import { FLEET_WHEEL_STEP, wheelZoomFactor, zoomAt } from '@/lib/fleet/fleet-camera'
 import type { CameraInputKind } from '@/lib/fleet/camera-state'
+import { exceedsPanThreshold, gestureStep, snapshotOf, type Point, type TouchSnapshot } from '@/lib/touch-gestures'
 import type { Transform } from './use-canvas-camera'
+
+/** After a touch moved the map, compatibility mouse events inside this window are not clicks, ms. */
+const TOUCH_CLICK_GUARD_MS = 500
 
 /** A cost pill under the pointer: the agent and the pill's rectangle in viewport (client) coordinates. */
 export interface CostPillHit {
@@ -77,6 +81,8 @@ export function useCanvasInteraction({
   const lastPanPosRef = useRef({ x: 0, y: 0, time: 0 })
   const lastHoveredIdRef = useRef<string | null>(null)
   const lastCostPillRef = useRef<string | null>(null)
+  /** Time of the last touch that moved the map: the mouse events the browser may still synthesize after it must not click. */
+  const lastTouchPanRef = useRef(-Infinity)
 
   // ─── Hit detection wrappers ─────────────────────────────────────────────
 
@@ -170,6 +176,11 @@ export function useCanvasInteraction({
   }, [screenToCanvas, findAgentAt, costPillAt, drawPropsRef, interrupt, transformRef, panVelocityRef])
 
   const handleMouseUp = useCallback((e: React.MouseEvent) => {
+    if (performance.now() - lastTouchPanRef.current < TOUCH_CLICK_GUARD_MS) {
+      setIsDragging(false)
+      dragTargetRef.current = null
+      return
+    }
     if (e.button === 2) {
       setIsDragging(false)
       dragTargetRef.current = null
@@ -254,20 +265,91 @@ export function useCanvasInteraction({
       transformRef.current = { ...prev, x: prev.x - e.deltaX, y: prev.y - e.deltaY }
     }
   }
+  // ─── Touch: one finger pans, two fingers pinch ──────────────────────────
+  // Native touch events (not React's, which are passive): touchmove must be able to preventDefault, or the browser
+  // scrolls / zooms the page instead of the map. The canvas also gets `touch-action: none` (see canvas.tsx), which
+  // is what stops the browser's own pinch zoom on the page. A tap (no travel past the threshold) is left alone: the
+  // browser's compatibility mouse events still arrive and select the node through the mouse handlers above.
+  const touchRef = useRef<{ prev: TouchSnapshot | null; start: Point | null; panning: boolean }>({ prev: null, start: null, panning: false })
+
   useEffect(() => {
     const canvas = mainCanvasRef.current
     if (!canvas) return
     const handler = (e: WheelEvent) => handleWheelRef.current(e)
-    // A touch (one finger = tap or pan, two = pinch) is user input too. Mouse events are only
-    // synthesized after the touch ends, so the intro has to stop on touchstart.
-    const touchHandler = (e: TouchEvent) => interrupt(e.touches.length > 1 ? 'pinch' : 'press')
+    const pointsOf = (list: TouchList): Point[] => {
+      const rect = canvas.getBoundingClientRect()
+      return Array.from({ length: Math.min(list.length, 2) }, (_, i) => ({ x: list[i].clientX - rect.left, y: list[i].clientY - rect.top }))
+    }
+    const onTouchStart = (e: TouchEvent) => {
+      // A touch is user input: it stops a running intro animation at once (mouse events only come after it ends).
+      interrupt(e.touches.length > 1 ? 'pinch' : 'press')
+      panVelocityRef.current = { vx: 0, vy: 0, active: false }
+      const snap = snapshotOf(pointsOf(e.touches))
+      const t = touchRef.current
+      // A second finger makes it a pinch at once; a lone finger is a tap until it travels.
+      t.panning = t.panning || (snap?.count === 2)
+      t.prev = snap
+      t.start = t.start && e.touches.length > 1 ? t.start : snap ? snap.mid : null
+      if (e.touches.length === 1) lastPanPosRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY, time: performance.now() }
+    }
+    const onTouchMove = (e: TouchEvent) => {
+      const t = touchRef.current
+      const snap = snapshotOf(pointsOf(e.touches))
+      if (!snap || !t.prev) return
+      if (t.prev.count !== snap.count) { t.prev = snap; return }
+      if (!t.panning) {
+        if (!t.start || !exceedsPanThreshold(t.start, snap.mid)) return
+        t.panning = true
+      }
+      if (e.cancelable) e.preventDefault()
+      lastTouchPanRef.current = performance.now()
+      interrupt(snap.count === 2 ? 'pinch' : 'drag')
+      transformRef.current = gestureStep(transformRef.current, t.prev, snap, { min: CAMERA.minZoom, max: CAMERA.maxZoom })
+      t.prev = snap
+      if (snap.count === 1) {
+        const now = performance.now()
+        const cx = e.touches[0].clientX
+        const cy = e.touches[0].clientY
+        const elapsed = Math.max(now - lastPanPosRef.current.time, 1) / 1000
+        panVelocityRef.current = {
+          vx: (cx - lastPanPosRef.current.x) / elapsed * CAMERA.velocityScale,
+          vy: (cy - lastPanPosRef.current.y) / elapsed * CAMERA.velocityScale,
+          active: false,
+        }
+        lastPanPosRef.current = { x: cx, y: cy, time: now }
+      } else {
+        panVelocityRef.current = { vx: 0, vy: 0, active: false }
+      }
+    }
+    const onTouchEnd = (e: TouchEvent) => {
+      const t = touchRef.current
+      if (e.touches.length > 0) {
+        // One finger of a pinch was lifted: the other keeps panning from where it is (no jump).
+        t.prev = snapshotOf(pointsOf(e.touches))
+        lastPanPosRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY, time: performance.now() }
+        return
+      }
+      if (t.panning && performance.now() - lastPanPosRef.current.time < 100) {
+        const v = panVelocityRef.current
+        if (Math.abs(v.vx) > ANIM.inertiaThreshold || Math.abs(v.vy) > ANIM.inertiaThreshold) panVelocityRef.current.active = true
+      }
+      t.prev = null
+      t.start = null
+      t.panning = false
+    }
     canvas.addEventListener('wheel', handler, { passive: false })
-    canvas.addEventListener('touchstart', touchHandler, { passive: true })
+    canvas.addEventListener('touchstart', onTouchStart, { passive: true })
+    canvas.addEventListener('touchmove', onTouchMove, { passive: false })
+    canvas.addEventListener('touchend', onTouchEnd, { passive: true })
+    canvas.addEventListener('touchcancel', onTouchEnd, { passive: true })
     return () => {
       canvas.removeEventListener('wheel', handler)
-      canvas.removeEventListener('touchstart', touchHandler)
+      canvas.removeEventListener('touchstart', onTouchStart)
+      canvas.removeEventListener('touchmove', onTouchMove)
+      canvas.removeEventListener('touchend', onTouchEnd)
+      canvas.removeEventListener('touchcancel', onTouchEnd)
     }
-  }, [mainCanvasRef, interrupt])
+  }, [mainCanvasRef, interrupt, transformRef, panVelocityRef])
 
   const handleDoubleClick = useCallback(() => {
     doZoomToFit()

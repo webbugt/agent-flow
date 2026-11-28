@@ -11,6 +11,7 @@ import type { useFleetSelection } from '@/hooks/use-fleet-selection'
 import type { PublicKanbanBoardNode } from '@/lib/fleet/kanban-source'
 import type { SupermemoryNamespaceNode } from '@/lib/fleet/supermemory-source'
 import { PanelHeader, SlidingPanel } from './shared-ui'
+import { STACK_BOTTOM, STACK_PANEL_MAX_HEIGHT } from '@/lib/bottom-stack'
 
 interface FleetTimelinePanelProps {
   visible: boolean
@@ -180,7 +181,7 @@ function LabelCell({ row, onToggle, onExpand, onOpen, canOpen }: { row: FleetRow
 
   return (
     <div
-      className="flex items-center gap-1 font-mono text-[9px] overflow-hidden"
+      className="flex items-center gap-1 font-mono text-[11px] overflow-hidden"
       style={{
         height: ROW_HEIGHT, paddingLeft: 6 + row.depth * 14, paddingRight: 4,
         opacity: row.hidden ? 0.45 : 1, color: COLORS.textDim,
@@ -323,17 +324,19 @@ export function FleetTimelinePanel({ visible, instances, kanban, supermemory, se
   return (
     <SlidingPanel
       visible={visible}
-      position={{ bottom: 72, left: 16, right: 16 + rightInset }}
+      position={{ bottom: STACK_BOTTOM, left: 16, right: 16 + rightInset }}
       axis="Y"
       zIndex={Z.sidePanel}
       className="mx-auto"
       style={{ maxWidth: 860 }}
     >
-      <div className="glass-card relative" data-testid="fleet-timeline-panel">
+      {/* Capped to the free height (flex column): the title row with the close control stays reachable, only the lanes scroll. */}
+      <div className="glass-card relative flex flex-col" data-testid="fleet-timeline-panel" style={{ maxHeight: STACK_PANEL_MAX_HEIGHT }}>
         <PanelHeader
+          className="mb-2 flex-shrink-0"
           onClose={onClose}
           actions={
-            <div className="flex items-center gap-1 mr-2 font-mono text-[9px]">
+            <div className="flex items-center gap-1 mr-2 font-mono text-[11px]">
               <button
                 onClick={selection.selectAll}
                 disabled={allSelected}
@@ -353,14 +356,15 @@ export function FleetTimelinePanel({ visible, instances, kanban, supermemory, se
             </div>
           }
         >
-          <span className="text-[10px] font-mono tracking-wider" style={{ color: COLORS.textPrimary }}>FLEET TIMELINE</span>
-          <span className="text-[9px] font-mono" style={{ color: COLORS.textMuted }}>
+          <span className="text-[11px] font-mono tracking-wider" style={{ color: COLORS.textPrimary }}>FLEET TIMELINE</span>
+          <span className="text-[11px] font-mono" style={{ color: COLORS.textMuted }}>
             hiding does not stop agents{onOpenSession ? ' · click a name to open its session' : ''}
           </span>
         </PanelHeader>
 
-        {/* Shorter on a phone (18vh) so the node map above keeps most of the screen. */}
-        <div className="overflow-auto max-h-[18vh] sm:max-h-80">
+        {/* Shorter on a phone so the node map above keeps most of the screen: see .af-fleet-lanes (a landscape phone is wider than
+            `sm` but only 390 px high, and there the lanes are a few rows so the zoom buttons, the filter and Hide timeline fit above). */}
+        <div className="af-fleet-lanes overflow-auto min-h-0 flex-1">
           <div className="flex">
             <div style={{ width: LABEL_WIDTH, flexShrink: 0 }}>
               <div style={{ height: HEADER_HEIGHT }} />
@@ -375,7 +379,7 @@ export function FleetTimelinePanel({ visible, instances, kanban, supermemory, se
                 />
               ))}
               {rows.length === 0 && (
-                <div className="font-mono text-[9px] px-2" style={{ height: ROW_HEIGHT, color: COLORS.textMuted }}>No fleet data</div>
+                <div className="font-mono text-[11px] px-2" style={{ height: ROW_HEIGHT, color: COLORS.textMuted }}>No fleet data</div>
               )}
             </div>
             <div ref={trackRef} style={{ flex: 1, minWidth: MIN_TRACK_WIDTH }}>
@@ -384,12 +388,12 @@ export function FleetTimelinePanel({ visible, instances, kanban, supermemory, se
           </div>
         </div>
 
-        <div className="flex items-center gap-3 px-3 py-1.5" style={{ borderTop: `1px solid ${COLORS.holoBorder06}` }}>
+        <div className="af-fleet-legend flex items-center gap-3 px-3 py-1.5 flex-shrink-0" style={{ borderTop: `1px solid ${COLORS.holoBorder06}` }}>
           <div className="flex items-center gap-3 flex-wrap">
             {LEGEND_ITEMS.map(item => (
               <div key={item.label} className="flex items-center gap-1">
                 <div className="w-2 h-2 rotate-45" style={{ background: item.color + '90' }} />
-                <span className="text-[9px] font-mono" style={{ color: COLORS.textMuted }}>{item.label}</span>
+                <span className="text-[11px] font-mono" style={{ color: COLORS.textMuted }}>{item.label}</span>
               </div>
             ))}
           </div>
