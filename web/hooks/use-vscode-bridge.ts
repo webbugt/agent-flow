@@ -144,7 +144,8 @@ export function useVSCodeBridge(): BridgeHookResult {
       // model_detected, the relay's agent_idle ticks, history replays), so it moves the liveness stamp (LIVE / STALE).
       // The visible age is the age of the last REAL activity: only a live message that showsLiveActivity moves that stamp
       // (the fleet activity filter's rule plus context_update, which the relay sends only after a model call), so agent_idle ticks (one per quiet session per second) and the
-      // quiet-timeout completion never reset it. One state update a second is plenty for a 60 s threshold.
+      // quiet-timeout completion never reset it (every inactivity completion of the relay, the VS Code extension, the Codex
+      // watcher and the Hermes log watcher carries `reason: 'quiet'`). One state update a second is plenty for a 60 s threshold.
       const nextStamps = stampStreamMessage(stampsRef.current, Date.now(), showsLiveActivity(event.type, event.payload, event.history))
       if (nextStamps !== stampsRef.current) {
         stampsRef.current = nextStamps

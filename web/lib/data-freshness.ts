@@ -6,7 +6,8 @@
  *    (context_update, model_detected, the relay's one-per-second agent_idle ticks, history replays) and the connection.
  *    A stream that goes silent turns STALE after STALE_AFTER_MS; a dropped connection is OFFLINE.
  *  - The visible age is the age of the last REAL activity (a tool call, a message, a spawn, a model call: `showsLiveActivity`). The relay's
- *    agent_idle ticks and its quiet-timeout completion are NOT activity, so a session that went quiet reads
+ *    agent_idle ticks and its quiet-timeout completion (`agent_complete` with `reason: 'quiet'`, sent by the relay, the extension,
+ *    the Codex watcher and the Hermes log watcher alike) are NOT activity, so a session that went quiet reads
  *    "LIVE · last activity 3m 04s ago" and the age grows, instead of "last event 0s ago" forever.
  */
 import { countsAsActivity } from './fleet/fleet-model'
