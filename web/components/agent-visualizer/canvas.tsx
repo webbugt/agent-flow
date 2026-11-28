@@ -28,6 +28,7 @@ import {
 } from './canvas/index'
 import { useCanvasCamera } from '@/hooks/use-canvas-camera'
 import { useCanvasInteraction, type CostPillHit } from '@/hooks/use-canvas-interaction'
+import { useScreensaverCursorHidden } from '@/hooks/use-screensaver-cursor'
 import { SHOT_MODE, registerShotHook, type ShotRect } from '@/lib/shot-mode'
 import { costPillRect, agentCostOf } from './canvas/draw-cost'
 import { CostTooltip } from './cost-tooltip'
@@ -57,6 +58,8 @@ interface CanvasProps {
   showCostOverlay?: boolean
   /** Screensaver mode: tool calls are drawn as short chips, no task text, no pointer. The UI around is hidden by the parent. */
   screensaver?: boolean
+  /** Fleet map: the `screensaverAutoFit` option. Off: the screensaver does not zoom by itself. Default true. */
+  screensaverAutoFit?: boolean
   /**
    * Fleet map mode: the plain wheel zooms, a click on a node keeps the camera where it is.
    * `controlsRef` is filled with the on-screen button actions.
@@ -76,9 +79,11 @@ export interface CanvasControls {
 export function AgentCanvas({
   simulationRef,
   selectedAgentId, hoveredAgentId, showStats, showHexGrid, zoomToFitTrigger, pauseAutoFit,
-  onAgentClick, onAgentHover, onAgentDrag, onContextMenu, onToolCallClick, selectedToolCallId, onDiscoveryClick, selectedDiscoveryId, showCostOverlay, screensaver = false, fleetView = false, controlsRef,
+  onAgentClick, onAgentHover, onAgentDrag, onContextMenu, onToolCallClick, selectedToolCallId, onDiscoveryClick, selectedDiscoveryId, showCostOverlay, screensaver = false, screensaverAutoFit = true, fleetView = false, controlsRef,
 }: CanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null)
+  // Screensaver: the cursor is hidden until the pointer moves, and hides again after 500 ms of stillness.
+  const cursorHidden = useScreensaverCursorHidden(screensaver)
   const mainCanvasRef = useRef<HTMLCanvasElement>(null)
   const [dimensions, setDimensions] = useState({ width: 800, height: 600 })
   // Cost pill tooltip: hover shows it, a click or tap pins it (touch)
@@ -157,7 +162,7 @@ export function AgentCanvas({
     screenToCanvas, doZoomToFit, zoomBy, updateCamera,
   } = useCanvasCamera({
     mainCanvasRef, drawPropsRef, simTimeRef, dimensions,
-    agentCount: sim.agents.size, zoomToFitTrigger, selectedAgentId, fleetView,
+    agentCount: sim.agents.size, zoomToFitTrigger, selectedAgentId, fleetView, screensaver, screensaverAutoFit,
   })
 
   useEffect(() => {
@@ -462,7 +467,7 @@ export function AgentCanvas({
   }, [])
 
   return (
-    <div ref={containerRef} className="relative w-full h-full overflow-hidden" style={{ cursor: screensaver ? 'none' : isDragging ? 'grabbing' : 'grab' }}>
+    <div ref={containerRef} className="relative w-full h-full overflow-hidden" style={{ cursor: cursorHidden ? 'none' : isDragging ? 'grabbing' : 'grab' }}>
       <canvas
         ref={mainCanvasRef}
         style={{ width: dimensions.width, height: dimensions.height }}

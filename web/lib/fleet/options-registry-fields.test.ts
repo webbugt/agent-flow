@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import { strict as assert } from 'node:assert'
 import {
-  MAX_DESELECTED_IDS, OPTIONS_KEY, applyOptionsPatch, defaultOptions, loadOptions, parseOptions, saveOptions, validateOptions,
+  MAX_DESELECTED_IDS, OPTIONS_KEY, OPTIONS_VERSION, applyOptionsPatch, defaultOptions, loadOptions, parseOptions, saveOptions, validateOptions,
 } from './options-registry'
 import { recordUse } from './resource-block'
 
@@ -97,6 +97,82 @@ test('patching the consolidated settings: valid values apply, bad ones reject th
   ]) {
     assert.equal(applyOptionsPatch(cur, p as never).ok, false, JSON.stringify(p))
   }
+})
+
+test('screensaverAutoFit: default true (screensaver zoom stays on unless switched off)', () => {
+  assert.equal(defaultOptions().screensaverAutoFit, true)
+  assert.equal(parseOptions(null).screensaverAutoFit, true)
+  assert.equal(loadOptions(memStorage()).screensaverAutoFit, true)
+  assert.equal(validateOptions(null).options.screensaverAutoFit, true)
+})
+
+test('screensaverAutoFit: strict patch accepts booleans and rejects anything else, applying nothing', () => {
+  const cur = defaultOptions()
+  const off = applyOptionsPatch(cur, { screensaverAutoFit: false })
+  assert.equal(off.ok && off.options.screensaverAutoFit, false)
+  assert.equal(cur.screensaverAutoFit, true, 'the input object is not mutated')
+  const on = off.ok ? applyOptionsPatch(off.options, { screensaverAutoFit: true }) : off
+  assert.equal(on.ok && on.options.screensaverAutoFit, true)
+  for (const bad of ['true', 'false', 0, 1, null, {}, []]) {
+    const r = applyOptionsPatch(cur, { screensaverAutoFit: bad, soundOn: true })
+    assert.equal(r.ok, false, JSON.stringify(bad))
+    if (!r.ok) assert.deepEqual(r.errors, ['screensaverAutoFit must be true or false'])
+  }
+  // a patch for another field keeps the stored value
+  const other = applyOptionsPatch({ ...cur, screensaverAutoFit: false }, { soundOn: true })
+  assert.equal(other.ok && other.options.screensaverAutoFit, false)
+})
+
+test('screensaverAutoFit: strict parse - a non-boolean is reported and falls back to the default, the rest is kept', () => {
+  for (const bad of ['no', 0, null, [], {}]) {
+    const r = validateOptions({ version: 1, soundOn: true, screensaverAutoFit: bad })
+    assert.deepEqual(r.errors, ['screensaverAutoFit must be true or false'], JSON.stringify(bad))
+    assert.equal(r.options.screensaverAutoFit, true)
+    assert.equal(r.options.soundOn, true)
+  }
+  assert.equal(validateOptions({ version: 1, screensaverAutoFit: false }).options.screensaverAutoFit, false)
+  assert.equal(validateOptions({ version: 1, screensaverAutoFit: false }).errors.length, 0)
+})
+
+test('screensaverAutoFit: round trip through save and load, in the one key', () => {
+  const s = memStorage()
+  const o = defaultOptions()
+  o.screensaverAutoFit = false
+  assert.equal(saveOptions(s, o), true)
+  assert.deepEqual([...s.m.keys()], [OPTIONS_KEY])
+  assert.equal(JSON.parse(s.m.get(OPTIONS_KEY)!).screensaverAutoFit, false)
+  assert.equal(loadOptions(s).screensaverAutoFit, false)
+  assert.deepEqual(loadOptions(s), o)
+  const back = { ...o, screensaverAutoFit: true }
+  assert.equal(saveOptions(s, back), true)
+  assert.equal(loadOptions(s).screensaverAutoFit, true)
+})
+
+test('screensaverAutoFit: saveOptions refuses a non-boolean (nothing written)', () => {
+  const s = memStorage()
+  assert.equal(saveOptions(s, { ...defaultOptions(), screensaverAutoFit: 'yes' as never }), false)
+  assert.equal(s.m.size, 0)
+})
+
+test('screensaverAutoFit: an options object stored before the field existed (same version 1) loads with the default and keeps its other values', () => {
+  const old = {
+    version: 1, lingerSeconds: { kanban: 5, memory: 60, bash: 20, subsystem: 45 }, fadeSeconds: 15,
+    show: { single: { kanban: true, memory: true, bash: true, subsystem: true }, fleet: { kanban: false, memory: true, bash: true, subsystem: true } },
+    soundOn: true, fleetTimelineVisible: false, costUnit: null, fleetDeselected: ['a'], legacyMigrated: true,
+  }
+  assert.equal('screensaverAutoFit' in old, false)
+  const s = memStorage({ [OPTIONS_KEY]: JSON.stringify(old) })
+  const loaded = loadOptions(s)
+  assert.equal(loaded.screensaverAutoFit, true)
+  assert.equal(loaded.soundOn, true)
+  assert.equal(loaded.fleetTimelineVisible, false)
+  assert.equal(loaded.lingerSeconds.kanban, 5)
+  assert.equal(loaded.show.fleet.kanban, false)
+  assert.deepEqual(loaded.fleetDeselected, ['a'])
+  assert.equal(loaded.legacyMigrated, true)
+  assert.deepEqual(validateOptions(old).errors, [])
+  // the version did not change, so the old object is not treated as unknown
+  assert.equal(OPTIONS_VERSION, 1)
 })
 
 test('legacyMigrated is not patchable (only the migration sets it)', () => {

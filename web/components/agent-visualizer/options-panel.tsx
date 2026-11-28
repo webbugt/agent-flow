@@ -283,6 +283,15 @@ export function OptionsPanel({ selection, onClose, profiles = [] }: OptionsPanel
         )}
       </Section>
 
+      <Section title="Screensaver" note="Off: the screensaver keeps the view where you left it and does not zoom by itself.">
+        <Check
+          checked={options.screensaverAutoFit}
+          onChange={v => apply({ screensaverAutoFit: v })}
+          label="Screensaver: zoom to fit all nodes"
+          testId="options-screensaver-autofit"
+        />
+      </Section>
+
       <Section title="Sound">
         <Check checked={options.soundOn} onChange={v => apply({ soundOn: v })} label="Sound effects" testId="options-sound" />
       </Section>

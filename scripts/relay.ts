@@ -36,6 +36,9 @@ import { LimitsObserver, limitsUpdateMessage } from '../extension/src/limits-obs
 import { defaultInstallerEnv } from '../extension/src/statusline-installer'
 import type { TelemetryClient } from './telemetry'
 import { buildHistoryBatch } from './history-batch'
+import { BUILD_INFO, type BuildInfo } from '../app/src/build-info'
+import { serverVersionMessage } from '../web/lib/server-version'
+import { resolveVersionBroadcastMs } from './version-broadcast'
 
 /** Events kept per session for pages that connect late (oldest are dropped).
  *  A memory cap only: no single event is shortened. Keep it at least as large as
@@ -413,6 +416,11 @@ export interface RelayOptions {
   /** Per-profile override of the setting above (name to anonymized on/off). Merged over
    *  AGENT_FLOW_ANONYMIZE_OVERRIDES, which has the form `hestia=on,sophia=off`. */
   anonymizeOverrides?: Record<string, boolean>
+  /** Build identity announced to pages as a `server-version` message (they reload when it differs from
+   *  their own). Defaults to the bundle's inlined BUILD_INFO ('unknown' under tsx). */
+  build?: BuildInfo
+  /** Re-announce interval in ms; 0 = only on connect. Defaults to AGENT_FLOW_VERSION_BROADCAST_MS, then 60 s. */
+  versionBroadcastMs?: number
 }
 
 function resolveRuntimeMode(explicit?: RelayRuntimeMode): RelayRuntimeMode {
@@ -529,6 +537,14 @@ export async function createRelay(options: RelayOptions): Promise<Relay> {
   limitsObserver.onChange(limits => broadcast(JSON.stringify(limitsUpdateMessage(limits))))
   limitsObserver.start()
 
+  // ─── Server version (auto-reload of open pages) ───────────────────────────
+  // Sent to each page on connect and then every interval, so a page left open across a deploy notices the new
+  // build (the SSE reconnect after the restart delivers the first one at once). Pages ignore 'unknown'.
+  const versionMsg = serverVersionMessage(options.build ?? BUILD_INFO)
+  const versionMs = resolveVersionBroadcastMs(options.versionBroadcastMs)
+  const versionTimer = versionMs > 0 ? setInterval(() => broadcast(JSON.stringify(versionMsg)), versionMs) : null
+  versionTimer?.unref()
+
   const telemetry = options.telemetry
   const sessionStart = Date.now()
   let relayDisposed = false
@@ -580,6 +596,7 @@ export async function createRelay(options: RelayOptions): Promise<Relay> {
       // Costs config first (also on a resumed stream: it is small and the page may have restarted)
       sendSSE(res, costsConfigMessage(costsLoader.snapshot()))
       sendSSE(res, limitsUpdateMessage(limitsObserver.snapshot()))
+      sendSSE(res, versionMsg)
 
       // Send current session list (Claude + Codex)
       const sessionList: SessionInfo[] = []
@@ -652,6 +669,7 @@ export async function createRelay(options: RelayOptions): Promise<Relay> {
       hermesLogs?.dispose()
       costsLoader.dispose()
       limitsObserver.dispose()
+      if (versionTimer) clearInterval(versionTimer)
     },
   }
 }

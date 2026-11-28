@@ -362,6 +362,8 @@ function TOGGLE_TO(unit: 'money' | 'kwh' | 'tokens'): string {
 
 /** P5 shots: select the local demo session and turn the cost overlay on. */
 const LOCAL: Step[] = [{ click: 'text:Local Demo' }, { wait: 800 }, { key: '$' }, { wait: 300 }]
+/** The LIMITS panel starts folded (and the fold is kept in the app state): open it before a shot of its rows. */
+const OPEN_LIMITS: Step[] = [{ click: '[data-testid="limits-panel-toggle"]' }, { wait: 300 }]
 const OPEN_DRAWER: Step[] = [{ click: '[data-testid="cost-settings-open"]' }, { waitFor: '[data-testid="costs-settings-drawer"]' }, { wait: 300 }]
 function SCROLL_TO(testid: string): string { return `document.querySelector('[data-testid="${testid}"]').scrollIntoView({ block: 'start' })` }
 
@@ -499,18 +501,18 @@ export const BUILTIN_PLANS: Record<string, ShotPlan> = {
   // The p6b_fable_tip / p6b_row_tip plans are for runs that have the element to hover (the harness cannot hover a missing one).
   p6b: {
     shots: [
-      { name: 'limits-panel', viewports: ['desktop', 'phone'], steps: [{ key: '$' }, { wait: 3500 }] },
+      { name: 'limits-panel', viewports: ['desktop', 'phone'], steps: [{ key: '$' }, { wait: 3500 }, ...OPEN_LIMITS] },
     ],
   },
   p6b_fable_tip: {
     shots: [
-      { name: 'limits-fable-hover', viewports: ['desktop'], steps: [{ key: '$' }, { wait: 3500 }, { hover: '[data-testid="limits-row-fable"]' }, { wait: 400 }] },
-      { name: 'limits-fable-tap', viewports: ['phone'], steps: [{ key: '$' }, { wait: 3500 }, { tap: '[data-testid="limits-row-fable"]' }, { wait: 400 }] },
+      { name: 'limits-fable-hover', viewports: ['desktop'], steps: [{ key: '$' }, { wait: 3500 }, ...OPEN_LIMITS, { hover: '[data-testid="limits-row-fable"]' }, { wait: 400 }] },
+      { name: 'limits-fable-tap', viewports: ['phone'], steps: [{ key: '$' }, { wait: 3500 }, ...OPEN_LIMITS, { tap: '[data-testid="limits-row-fable"]' }, { wait: 400 }] },
     ],
   },
   p6b_row_tip: {
     shots: [
-      { name: 'limits-5h-hover', viewports: ['desktop'], steps: [{ key: '$' }, { wait: 3500 }, { hover: '[data-testid="limits-row-5h"]' }, { wait: 400 }] },
+      { name: 'limits-5h-hover', viewports: ['desktop'], steps: [{ key: '$' }, { wait: 3500 }, ...OPEN_LIMITS, { hover: '[data-testid="limits-row-5h"]' }, { wait: 400 }] },
     ],
   },
   // Costs P6-fix (R2 evidence). Three runs, each its own --limits state and --start-index:
@@ -525,7 +527,7 @@ export const BUILTIN_PLANS: Record<string, ShotPlan> = {
   // Costs N1: the wrapper cannot find node. Run with `--scenario claude --limits L-6 --config C-limits`: top bar chip ("... no node") and the LIMITS panel with the note.
   n1_nonode: {
     shots: [
-      { name: 'nonode-panel', viewports: ['desktop', 'phone'], steps: [{ key: '$' }, { wait: 3500 }] },
+      { name: 'nonode-panel', viewports: ['desktop', 'phone'], steps: [{ key: '$' }, { wait: 3500 }, ...OPEN_LIMITS] },
       { name: 'nonode-drawer', viewports: ['desktop', 'phone'], steps: [{ key: '$' }, { wait: 3000 }, ...OPEN_DRAWER, { eval: SCROLL_TO('claude-limits') }, { wait: 400 }] },
     ],
   },
@@ -537,10 +539,10 @@ export const BUILTIN_PLANS: Record<string, ShotPlan> = {
   },
   p6fix_rows: {
     shots: [
-      { name: 'row-5h-hover', viewports: ['desktop'], steps: [{ key: '$' }, { wait: 3500 }, { hover: '[data-testid="limits-row-5h"]' }, { wait: 400 }] },
-      { name: 'row-7d-hover', viewports: ['desktop'], steps: [{ key: '$' }, { wait: 3500 }, { hover: '[data-testid="limits-row-7d"]' }, { wait: 400 }] },
-      { name: 'row-5h-tap', viewports: ['phone'], steps: [{ key: '$' }, { wait: 3500 }, { tap: '[data-testid="limits-row-5h"]' }, { wait: 400 }] },
-      { name: 'row-7d-tap', viewports: ['phone'], steps: [{ key: '$' }, { wait: 3500 }, { tap: '[data-testid="limits-row-7d"]' }, { wait: 400 }] },
+      { name: 'row-5h-hover', viewports: ['desktop'], steps: [{ key: '$' }, { wait: 3500 }, ...OPEN_LIMITS, { hover: '[data-testid="limits-row-5h"]' }, { wait: 400 }] },
+      { name: 'row-7d-hover', viewports: ['desktop'], steps: [{ key: '$' }, { wait: 3500 }, ...OPEN_LIMITS, { hover: '[data-testid="limits-row-7d"]' }, { wait: 400 }] },
+      { name: 'row-5h-tap', viewports: ['phone'], steps: [{ key: '$' }, { wait: 3500 }, ...OPEN_LIMITS, { tap: '[data-testid="limits-row-5h"]' }, { wait: 400 }] },
+      { name: 'row-7d-tap', viewports: ['phone'], steps: [{ key: '$' }, { wait: 3500 }, ...OPEN_LIMITS, { tap: '[data-testid="limits-row-7d"]' }, { wait: 400 }] },
       { name: 'chip-hover', viewports: ['desktop'], steps: [{ key: '$' }, { wait: 3500 }, { hover: '[data-testid="limits-chip"]' }, { wait: 400 }] },
     ],
   },

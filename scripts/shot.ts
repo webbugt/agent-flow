@@ -344,10 +344,10 @@ async function captureOne(cdp: Cdp, baseUrl: string, viewport: Viewport, steps: 
     })
     if (viewport.mobile) await page.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 1 })
     await page.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] })
-    // Every shot reuses one Chrome profile. The screensaver choice is kept in localStorage, so a shot that left it on would hide the
+    // Every shot reuses one Chrome profile. The screensaver choice and the app state (open panels, LIMITS fold) are kept in localStorage, so a shot that left the screensaver on would hide the
     // top bar the next shot waits for: clear it once per page (sessionStorage guard: a reload inside the shot keeps what the user chose).
     await page.send('Page.addScriptToEvaluateOnNewDocument', {
-      source: `try { if (!sessionStorage.getItem('af-shot-init')) { sessionStorage.setItem('af-shot-init', '1'); localStorage.removeItem('agent-flow:screensaver:v1') } } catch (e) {}`,
+      source: `try { if (!sessionStorage.getItem('af-shot-init')) { sessionStorage.setItem('af-shot-init', '1'); localStorage.removeItem('agent-flow:screensaver:v1'); localStorage.removeItem('agent-flow:app-state:v1') } } catch (e) {}`,
     })
     await page.send('Page.navigate', { url: `${baseUrl}/?shot=1` })
     try {

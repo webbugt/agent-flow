@@ -4,6 +4,8 @@ import { useEffect, useState, useCallback, useRef } from 'react'
 import { vscodeBridge, type ConnectionStatus, type AgentEvent, type SessionInfo } from '@/lib/vscode-bridge'
 import { SimulationEvent } from '@/lib/agent-types'
 import { countsAsActivity } from '@/lib/fleet/fleet-model'
+import { loadAppState, pickInitialSession } from '@/lib/fleet/app-state'
+import { handleServerVersion } from '@/lib/auto-reload'
 
 interface BridgeHookResult {
   isVSCode: boolean
@@ -91,6 +93,8 @@ export function useVSCodeBridge(): BridgeHookResult {
     es.onmessage = (e) => {
       try {
         const data = JSON.parse(e.data)
+        // The relay announces its build commit; a different one than this bundle's reloads the page once.
+        if (data?.type === 'server-version') { handleServerVersion(data); return }
         window.postMessage(data, '*')
       } catch {}
     }
@@ -200,19 +204,14 @@ export function useVSCodeBridge(): BridgeHookResult {
       if (type === 'list') {
         const sessionList = data as SessionInfo[]
         setSessions(sessionList)
-        // Auto-select: prefer active sessions, then most recently active.
+        // Auto-select: the tab the user left (app-state), else prefer active sessions, then most recently active.
         // Only set selection — useLayoutEffect handles flushing events.
         // Idle sessions (history only) are fleet-only: never auto-selected, so the
         // single-profile view opens exactly as it did before they were listed.
-        const selectable = sessionList.filter(s => !s.idle)
-        if (!selectedSessionIdRef.current && selectable.length > 0) {
-          const sorted = [...selectable].sort((a, b) => {
-            const aActive = a.status === 'active' ? 1 : 0
-            const bActive = b.status === 'active' ? 1 : 0
-            if (aActive !== bActive) return bActive - aActive
-            return b.lastActivityTime - a.lastActivityTime
-          })
-          const autoId = sorted[0].id
+        const autoId = selectedSessionIdRef.current
+          ? null
+          : pickInitialSession(sessionList, loadAppState(typeof window !== 'undefined' ? window.localStorage : null).selectedSessionId)
+        if (autoId) {
           sessionSwitchPendingRef.current = true
           pendingEventsRef.current.length = 0
           selectedSessionIdRef.current = autoId
