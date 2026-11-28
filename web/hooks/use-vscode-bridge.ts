@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback, useRef } from 'react'
 import { vscodeBridge, type ConnectionStatus, type AgentEvent, type SessionInfo } from '@/lib/vscode-bridge'
 import { SimulationEvent } from '@/lib/agent-types'
 import { countsAsActivity } from '@/lib/fleet/fleet-model'
-import { stampStreamMessage, type StreamStamps } from '@/lib/data-freshness'
+import { showsLiveActivity, stampStreamMessage, type StreamStamps } from '@/lib/data-freshness'
 import { loadAppState, pickInitialSession } from '@/lib/fleet/app-state'
 import { handleServerVersion } from '@/lib/auto-reload'
 
@@ -142,10 +142,10 @@ export function useVSCodeBridge(): BridgeHookResult {
 
       // Freshness for the top bar. ANY message of the stream shows that the relay is alive and sending (context_update,
       // model_detected, the relay's agent_idle ticks, history replays), so it moves the liveness stamp (LIVE / STALE).
-      // The visible age is the age of the last REAL activity: only a live message that countsAsActivity moves that stamp
-      // (same rule as the fleet activity filter), so agent_idle ticks (one per quiet session per second) and the
+      // The visible age is the age of the last REAL activity: only a live message that showsLiveActivity moves that stamp
+      // (the fleet activity filter's rule plus context_update, which the relay sends only after a model call), so agent_idle ticks (one per quiet session per second) and the
       // quiet-timeout completion never reset it. One state update a second is plenty for a 60 s threshold.
-      const nextStamps = stampStreamMessage(stampsRef.current, Date.now(), !event.history && countsAsActivity(event.type, event.payload))
+      const nextStamps = stampStreamMessage(stampsRef.current, Date.now(), showsLiveActivity(event.type, event.payload, event.history))
       if (nextStamps !== stampsRef.current) {
         stampsRef.current = nextStamps
         setStamps(nextStamps)

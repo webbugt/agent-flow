@@ -5,10 +5,11 @@
  *  - LIVE / STALE / OFFLINE answers "is the relay up and talking to this page?". It follows ANY stream message
  *    (context_update, model_detected, the relay's one-per-second agent_idle ticks, history replays) and the connection.
  *    A stream that goes silent turns STALE after STALE_AFTER_MS; a dropped connection is OFFLINE.
- *  - The visible age is the age of the last REAL activity (a tool call, a message, a spawn: `countsAsActivity`). The relay's
+ *  - The visible age is the age of the last REAL activity (a tool call, a message, a spawn, a model call: `showsLiveActivity`). The relay's
  *    agent_idle ticks and its quiet-timeout completion are NOT activity, so a session that went quiet reads
  *    "LIVE · last activity 3m 04s ago" and the age grows, instead of "last event 0s ago" forever.
  */
+import { countsAsActivity } from './fleet/fleet-model'
 
 /** No stream message for this long while connected: the stream is called stale, ms. */
 export const STALE_AFTER_MS = 60_000
@@ -81,6 +82,18 @@ export function dataFreshness({ now, connected, lastEventAt, lastActivityAt = nu
   return { level: 'live', label: 'LIVE', detail, short: activityMs !== null ? formatAgo(activityMs) : '', sinceMs }
 }
 
+/**
+ * Does this LIVE stream message show real activity, for the age in the top bar? The fleet activity filter's rule
+ * (`countsAsActivity`: tool call, message, spawn, a real completion; not agent_idle, not the quiet-timeout completion) plus
+ * `context_update`: the relay emits it only when a model call or turn just reported usage (never on a timer), so it proves a
+ * session worked just now even when its tool and message events arrive from another source. agent_idle, model_detected
+ * (sent once when the model name changes) and history replays are not activity.
+ */
+export function showsLiveActivity(type: string, payload: Record<string, unknown> | undefined, history: boolean | undefined): boolean {
+  if (history) return false
+  return type === 'context_update' || countsAsActivity(type, payload)
+}
+
 /** What the top bar remembers about the stream. */
 export interface StreamStamps {
   /** Last stream message of any type, agent_idle ticks included: liveness of the relay only, never shown as an age. */
@@ -97,7 +110,7 @@ export const STAMP_THROTTLE_MS = 1000
  * refreshes `lastEventAt`, which only drives LIVE / STALE ("is the relay still talking"): agent_idle ticks, context_update,
  * model_detected and history replays all prove it is. Only `activity` messages refresh `lastActivityAt`, the age that is
  * shown, so the relay's agent_idle ticks (one per quiet session per second) never reset it.
- * `activity` is `countsAsActivity(type, payload)` and is false for a history replay (it says nothing about now).
+ * `activity` is `showsLiveActivity(type, payload, history)` and is false for a history replay (it says nothing about now).
  */
 export function stampStreamMessage(prev: StreamStamps, now: number, activity: boolean): StreamStamps {
   const eventDue = prev.lastEventAt === null || now - prev.lastEventAt >= STAMP_THROTTLE_MS

@@ -1,7 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { dataFreshness, formatAgo, stampStreamMessage, STALE_AFTER_MS, STAMP_THROTTLE_MS, type StreamStamps } from './data-freshness'
-import { countsAsActivity } from './fleet/fleet-model'
+import { dataFreshness, formatAgo, showsLiveActivity, stampStreamMessage, STALE_AFTER_MS, STAMP_THROTTLE_MS, type StreamStamps } from './data-freshness'
 
 const T0 = 1_700_000_000_000
 
@@ -75,12 +74,12 @@ test('the threshold can be changed', () => {
 /** Replay a stream through the same pure function the bridge hook uses; returns the stamps and the level at each check. */
 function runStream(msgs: { at: number; type: string; payload?: Record<string, unknown>; history?: boolean }[], checkAt: number[], connectedAt = T0) {
   let stamps: StreamStamps = { lastEventAt: null, lastActivityAt: null }
-  for (const m of msgs) stamps = stampStreamMessage(stamps, m.at, !m.history && countsAsActivity(m.type, m.payload))
+  for (const m of msgs) stamps = stampStreamMessage(stamps, m.at, showsLiveActivity(m.type, m.payload, m.history))
   return { stamps, levels: checkAt.map(now => dataFreshness({ now, connected: true, connectedAt, ...stamps }).level) }
 }
 
-test('a stream of only context_update / model_detected / agent_idle stays LIVE for 5 minutes and shows no activity', () => {
-  const types = ['context_update', 'model_detected', 'agent_idle']
+test('a stream of only model_detected / agent_idle stays LIVE for 5 minutes and shows no activity', () => {
+  const types = ['model_detected', 'agent_idle']
   const msgs = Array.from({ length: 30 }, (_, i) => ({ at: T0 + (i + 1) * 10_000, type: types[i % 3] }))
   const { stamps, levels } = runStream(msgs, [T0 + 65_000, T0 + 125_000, T0 + 300_000])
   assert.deepEqual(levels, ['live', 'live', 'live'])
@@ -97,7 +96,7 @@ test("one real activity, then only the relay's agent_idle ticks every second for
   let stamps: StreamStamps = { lastEventAt: null, lastActivityAt: null }
   const seen: { level: string; detail: string }[] = []
   for (const m of msgs) {
-    stamps = stampStreamMessage(stamps, m.at, countsAsActivity(m.type))
+    stamps = stampStreamMessage(stamps, m.at, showsLiveActivity(m.type, undefined, false))
     if ((m.at - T0) % 20_000 === 1_000 || m.at === T0 + 101_000) {
       const f = dataFreshness({ now: m.at + 100, connected: true, connectedAt: T0, ...stamps })
       seen.push({ level: f.level, detail: f.detail })
@@ -135,7 +134,7 @@ test('a history replay alone is not activity: LIVE with "no activity since conne
 test('a live message that shows activity sets the age; later idle ticks leave it alone', () => {
   const { stamps } = runStream([
     { at: T0 + 1_000, type: 'tool_call_start' },
-    { at: T0 + 100_000, type: 'context_update' },
+    { at: T0 + 100_000, type: 'agent_idle' },
   ], [])
   const f = dataFreshness({ now: T0 + 104_000, connected: true, connectedAt: T0, ...stamps })
   assert.equal(f.level, 'live')
@@ -155,4 +154,12 @@ test('stamping is throttled to one write a second and returns the same object wh
   assert.equal(stampStreamMessage(a, T0 + STAMP_THROTTLE_MS - 1, true), a)
   const b = stampStreamMessage(a, T0 + STAMP_THROTTLE_MS, false)
   assert.deepEqual(b, { lastEventAt: T0 + STAMP_THROTTLE_MS, lastActivityAt: T0 })
+})
+
+test('showsLiveActivity: tool calls, messages, spawns and context_update are activity; idle ticks, quiet completions, model_detected and history are not', () => {
+  for (const t of ['tool_call_start', 'tool_call_end', 'message', 'agent_spawn', 'context_update']) assert.equal(showsLiveActivity(t, undefined, false), true, t)
+  assert.equal(showsLiveActivity('agent_complete', {}, false), true, 'a real completion')
+  assert.equal(showsLiveActivity('agent_complete', { reason: 'quiet' }, false), false)
+  for (const t of ['agent_idle', 'model_detected']) assert.equal(showsLiveActivity(t, undefined, false), false, t)
+  for (const t of ['tool_call_start', 'context_update', 'message']) assert.equal(showsLiveActivity(t, undefined, true), false, `${t} replayed from history`)
 })
