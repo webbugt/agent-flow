@@ -3,7 +3,7 @@ import { strict as assert } from 'node:assert'
 import {
   ANCHOR_DIM_ALPHA, ANCHOR_SPACING, CURRENT_USE_MS, EXPLICIT_LINK_WEIGHT, buildRelations, coUseWeights, currentResource,
   dimToolCalls, edgeHoverAlpha, hoverDimmer,
-  ANCHOR_VIEW_PAD, explicitLinkPairs, fitAnchorsToAspect, hoverAlpha, layoutWeights, pairKey, paletteIndex, placeAnchorSessions, placeAnchors, profileColor,
+  ANCHOR_VIEW_PAD, explicitLinkPairs, fitAnchorsToAspect, hoverAlpha, layoutWeights, pairKey, paletteIndex, placeAnchorSessions, placeAnchors, pointOnRectangle, profileColor,
   proximityWeights, weightOf, SWITCH_MARGIN_MS, WARM_MAX_MOVE,
 } from './anchor-mode'
 import { DEFAULT_PROFILE_PALETTE } from './options-registry'
@@ -455,4 +455,26 @@ test('placeAnchorSessions: a remembered slot that another node now holds is not 
   const both = placeAnchorSessions([mkS('s0'), mkS('s1')], anchors, { now: 2_000, prev: first })
   assert.ok(dist(both.get('s0')!, both.get('s1')!) >= 140, 'the two nodes do not overlap')
   for (const id of ['s0', 's1']) assert.ok(dist(both.get(id)!, anchors.get('A')!) >= 46 + 70)
+})
+
+test('pointOnRectangle: equal steps of the fraction are equal steps along the perimeter, on the edges, wraps around', () => {
+  const [cx, cy, hw, hh] = [10, -5, 300, 100]
+  assert.deepEqual(pointOnRectangle(cx, cy, hw, hh, 0), { x: cx - hw, y: cy - hh })
+  // Perimeter 1600: 600 across the top, 200 down the right side, 600 back along the bottom, 200 up the left.
+  assert.deepEqual(pointOnRectangle(cx, cy, hw, hh, 600 / 1600), { x: cx + hw, y: cy - hh })
+  assert.deepEqual(pointOnRectangle(cx, cy, hw, hh, 800 / 1600), { x: cx + hw, y: cy + hh })
+  assert.deepEqual(pointOnRectangle(cx, cy, hw, hh, 1400 / 1600), { x: cx - hw, y: cy + hh })
+  assert.deepEqual(pointOnRectangle(cx, cy, hw, hh, 1.25), pointOnRectangle(cx, cy, hw, hh, 0.25))
+  assert.deepEqual(pointOnRectangle(cx, cy, hw, hh, -0.75), pointOnRectangle(cx, cy, hw, hh, 0.25))
+  // Along the top edge, a tenth of the perimeter is the same distance wherever it starts.
+  const a = pointOnRectangle(cx, cy, hw, hh, 0.05)
+  const b = pointOnRectangle(cx, cy, hw, hh, 0.1)
+  assert.equal(a.y, cy - hh)
+  assert.equal(b.y, cy - hh)
+  assert.ok(Math.abs(dist(a, b) - 0.05 * 1600) < 1e-9)
+  for (let k = 0; k < 40; k++) {
+    const p = pointOnRectangle(cx, cy, hw, hh, k / 40)
+    const onEdge = Math.abs(Math.abs(p.x - cx) - hw) < 1e-9 || Math.abs(Math.abs(p.y - cy) - hh) < 1e-9
+    assert.ok(onEdge && Math.abs(p.x - cx) <= hw + 1e-9 && Math.abs(p.y - cy) <= hh + 1e-9, `fraction ${k}/40 is on the rectangle`)
+  }
 })

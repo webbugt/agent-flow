@@ -479,6 +479,23 @@ export function currentResource(
 }
 
 /**
+ * The point at fraction `f` (0..1) of the perimeter of the rectangle centred on (`cx`, `cy`) with half extents `halfW`
+ * and `halfH`, walked clockwise from the top-left corner. Equal steps of `f` are equal steps along the edges.
+ */
+export function pointOnRectangle(cx: number, cy: number, halfW: number, halfH: number, f: number): Point {
+  const w = 2 * halfW
+  const h = 2 * halfH
+  let s = (((f % 1) + 1) % 1) * 2 * (w + h)
+  if (s < w) return { x: cx - halfW + s, y: cy - halfH }
+  s -= w
+  if (s < h) return { x: cx + halfW, y: cy - halfH + s }
+  s -= h
+  if (s < w) return { x: cx + halfW - s, y: cy + halfH }
+  s -= w
+  return { x: cx - halfW, y: cy + halfH - s }
+}
+
+/**
  * Where each session node goes. Nodes are placed in id order, each on the first free spot of a spiral around its
  * target: the resource it uses now (starting beside it), else the weighted middle of the resources it used before,
  * else a ring around the whole map (seeded by its id). A spot is free when it is clear of every anchor and every node
@@ -526,7 +543,7 @@ export function placeAnchorSessions(
   // Pass 1 decides, for every node, what it sits by (and whether its old slot is still good); pass 2 places the nodes
   // that keep their slot FIRST, so a node that arrives (or sorts earlier) cannot take a slot a resident still holds and
   // push it away; pass 3 places the rest in id order on the first free spot of a spiral.
-  interface Plan { s: AnchorSession; at: string | null; from: Point; startDist: number; seed: number; slot: Point | null }
+  interface Plan { s: AnchorSession; at: string | null; from: Point; startDist: number; seed: number; slot: Point | null; rim: number | null }
   const plans: Plan[] = []
   for (const s of list) {
     const seed = hashString(s.id)
@@ -535,6 +552,7 @@ export function placeAnchorSessions(
     let at: string | null = null
     let from: Point
     let startDist = 0
+    let rim: number | null = null
     const anchor = target ? anchors.get(target) : undefined
     if (target && anchor) {
       at = target
@@ -552,18 +570,34 @@ export function placeAnchorSessions(
         }
         from = mid
       } else {
-        // Never used a resource that is on the map: a ring around the map, at a seeded angle.
-        const a = seeded(seed, 99) * Math.PI * 2
-        // The point of the rectangle (half extents halfW, halfH) in the direction of the seeded angle.
-        const t = 1 / Math.max(Math.abs(Math.cos(a)) / halfW, Math.abs(Math.sin(a)) / halfH, 1e-9)
-        from = { x: cx + Math.cos(a) * t, y: cy + Math.sin(a) * t }
+        // Never used a resource that is on the map: a spot on the rectangle around it, at a seeded fraction of its
+        // PERIMETER. (A seeded angle's ray crowds the long edges of a wide rectangle near their middle: nodes pile up
+        // there and the spiral pushes them far out, which breaks the shape the aspect fit made.)
+        rim = seeded(seed, 99)
+        from = pointOnRectangle(cx, cy, halfW, halfH, rim)
       }
     }
     // Same resource as last build: the old slot, relative to the resource (so the node follows it), unless it is too far.
     const step = s.radius * 2 + gap
     const slot = was && was.at === at && was.off && Math.hypot(was.off.x, was.off.y) <= startDist + 6 * step
       ? { x: from.x + was.off.x, y: from.y + was.off.y } : null
-    plans.push({ s, at, from, startDist, seed, slot })
+    plans.push({ s, at, from, startDist, seed, slot, rim })
+  }
+  /**
+   * First free spot for a node on the rectangle: the seeded one, else the nearest free one sliding along the perimeter
+   * (alternately ahead and behind). Stepping out like the spiral does would stretch the map the aspect fit shaped; only
+   * when the whole perimeter is taken does the node fall back to the spiral.
+   */
+  const findRimSpot = (pl: Plan, f: number): Point => {
+    const perimeter = 4 * (halfW + halfH)
+    const stepF = (pl.s.radius + gap) / perimeter
+    const tries = Math.ceil(perimeter / (pl.s.radius + gap))
+    for (let k = 0; k <= tries; k++) {
+      const off = Math.ceil(k / 2) * stepF * (k % 2 === 1 ? 1 : -1)
+      const p = pointOnRectangle(cx, cy, halfW, halfH, f + off)
+      if (free(p, pl.s.radius)) return p
+    }
+    return findSpot(pl.from, pl.s.radius, pl.startDist, pl.seed)
   }
   const put = (pl: Plan, spot: Point) => {
     placed.push({ x: spot.x, y: spot.y, r: pl.s.radius })
@@ -575,7 +609,7 @@ export function placeAnchorSessions(
     if (pl.slot && free(pl.slot, pl.s.radius, KEEP_SLOT_SLACK)) put(pl, pl.slot)
     else rest.push(pl)
   }
-  for (const pl of rest) put(pl, findSpot(pl.from, pl.s.radius, pl.startDist, pl.seed))
+  for (const pl of rest) put(pl, pl.rim === null ? findSpot(pl.from, pl.s.radius, pl.startDist, pl.seed) : findRimSpot(pl, pl.rim))
   return out
 }
 
