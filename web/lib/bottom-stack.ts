@@ -48,9 +48,16 @@ export function limitsStacked(viewportWidth: number): boolean {
   return viewportWidth < LIMITS_STACK_PX
 }
 
-/** True when the LIMITS panel must fold to its one line: a small screen with another bottom panel open. */
-export function limitsAutoFolded(viewportWidth: number, otherBottomPanelOpen: boolean): boolean {
-  return viewportWidth < LIMITS_AUTO_FOLD_PX && otherBottomPanelOpen
+/**
+ * Viewport height up to which the LIMITS panel folds too, px: a landscape phone (844 x 390) is wide enough for the width
+ * rule, but an expanded LIMITS panel + the control bar leave the Timeline panel less than MIN_PANEL_HEIGHT_PX, so it grows
+ * upward over the top bar (and its Screensaver button).
+ */
+export const LIMITS_AUTO_FOLD_HEIGHT_PX = 500
+
+/** True when the LIMITS panel must fold to its one line: a small screen (narrow or short) with another bottom panel open. */
+export function limitsAutoFolded(viewportWidth: number, otherBottomPanelOpen: boolean, viewportHeight: number): boolean {
+  return (viewportWidth < LIMITS_AUTO_FOLD_PX || viewportHeight <= LIMITS_AUTO_FOLD_HEIGHT_PX) && otherBottomPanelOpen
 }
 
 /** Set (px) or clear (null) one of the published variables on <html>. */

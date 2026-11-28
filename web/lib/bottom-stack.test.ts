@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  BELOW_TOP_BAR, DEFAULT_BAR_TOP_PX, LIMITS_AUTO_FOLD_PX, LIMITS_STACK_PX, MIN_PANEL_HEIGHT_PX, STACK_BOTTOM, STACK_PANEL_MAX_HEIGHT,
+  BELOW_TOP_BAR, DEFAULT_BAR_TOP_PX, LIMITS_AUTO_FOLD_HEIGHT_PX, LIMITS_AUTO_FOLD_PX, LIMITS_STACK_PX, MIN_PANEL_HEIGHT_PX, STACK_BOTTOM, STACK_PANEL_MAX_HEIGHT,
   VAR_BAR_TOP, VAR_LIMITS_TOP, VAR_TOP_BAR_BOTTOM, limitsAutoFolded, limitsStacked,
 } from './bottom-stack'
 
@@ -31,8 +31,16 @@ test('the overlap threshold is the real geometry: 300 px panel + 16 px margins a
 })
 
 test('LIMITS folds itself only on a small screen while another bottom panel is open', () => {
-  assert.equal(limitsAutoFolded(390, true), true)
-  assert.equal(limitsAutoFolded(LIMITS_AUTO_FOLD_PX - 1, true), true)
-  assert.equal(limitsAutoFolded(LIMITS_AUTO_FOLD_PX, true), false)
-  assert.equal(limitsAutoFolded(390, false), false)
+  assert.equal(limitsAutoFolded(390, true, 844), true)
+  assert.equal(limitsAutoFolded(LIMITS_AUTO_FOLD_PX - 1, true, 1024), true)
+  assert.equal(limitsAutoFolded(LIMITS_AUTO_FOLD_PX, true, 1024), false)
+  assert.equal(limitsAutoFolded(390, false, 844), false)
+})
+
+test('LIMITS also folds on a short screen (landscape phone 844 x 390) while another bottom panel is open', () => {
+  assert.equal(limitsAutoFolded(844, true, 390), true)
+  assert.equal(limitsAutoFolded(1440, true, LIMITS_AUTO_FOLD_HEIGHT_PX), true)
+  assert.equal(limitsAutoFolded(1440, true, LIMITS_AUTO_FOLD_HEIGHT_PX + 1), false)
+  assert.equal(limitsAutoFolded(844, false, 390), false, 'no other panel: the user keeps the panel expanded')
+  assert.equal(limitsAutoFolded(1440, true, 900), false, 'a normal desktop window does not fold')
 })

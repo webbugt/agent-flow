@@ -8,7 +8,7 @@ import { effectiveCosts } from '@/lib/costs/active'
 import { buildLimitsPanel, type LimitRow, type LimitsPanelModel, type RowTag } from '@/lib/costs/limits-model'
 import { useLimits, useMinuteTick } from '@/hooks/use-limits'
 import { useActiveCostsVersion } from '@/hooks/use-costs-config'
-import { useViewportWidth } from '@/hooks/use-viewport-width'
+import { useViewportHeight, useViewportWidth } from '@/hooks/use-viewport-width'
 import { collectByTime, type LedgerEvent } from '@/lib/limits-ledger'
 import { LOCAL_CLOCK } from './claude-limits'
 import { STACK_GAP_PX, DEFAULT_BAR_TOP_PX, VAR_BAR_TOP, VAR_LIMITS_TOP, limitsAutoFolded, limitsStacked } from '@/lib/bottom-stack'
@@ -181,6 +181,7 @@ export function LimitsPanel({ model, collapsed: collapsedProp, onCollapsedChange
   otherBottomPanelOpen?: boolean
 }) {
   const width = useViewportWidth(1280)
+  const height = useViewportHeight(900)
   const narrow = width < PHONE_PX
   // Beside the control bar only where the two cannot meet; everywhere else it sits on top of the bar and publishes its
   // own top edge, so the timeline, node card and resource blocks stack above it instead of under it.
@@ -188,7 +189,7 @@ export function LimitsPanel({ model, collapsed: collapsedProp, onCollapsedChange
   const [ownCollapsed, setOwnCollapsed] = useState(true)
   const stateCollapsed = collapsedProp ?? ownCollapsed
   // The fold forced by an open bottom panel is a view of the state, not a change to it: closing the panel restores the user's choice.
-  const autoFolded = !stateCollapsed && limitsAutoFolded(width, otherBottomPanelOpen)
+  const autoFolded = !stateCollapsed && limitsAutoFolded(width, otherBottomPanelOpen, height)
   const collapsed = stateCollapsed || autoFolded
   const setCollapsed = (next: boolean) => { if (onCollapsedChange) onCollapsedChange(next); else setOwnCollapsed(next) }
   const sectionRef = useRef<HTMLElement>(null)
