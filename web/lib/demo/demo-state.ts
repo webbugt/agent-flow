@@ -88,7 +88,7 @@ export type DemoAction =
   | { type: 'permission_wait'; sessionId: string; node?: string }
   /** The node dispatches a subagent (a new child node). */
   | { type: 'subagent_dispatch'; sessionId: string; node?: string; task?: string }
-  /** The node's newest active subagent returns and finishes. */
+  /** A targeted session node's newest active subagent returns; a targeted subagent returns itself. */
   | { type: 'subagent_return'; sessionId: string; node?: string }
   /** Register a resource; with a session, that session also uses it once. */
   | { type: 'resource_add'; kind: ResourceKind; key: string; sessionId?: string; node?: string; call?: SupermemoryCall }
@@ -178,8 +178,9 @@ function inputDataOf(tool: string, args: string): Record<string, unknown> {
 
 // ─── event building ─────────────────────────────────────────────────────────
 
-function elapsed(node: DemoNode, now: number): number {
-  return Math.max(0, (now - node.startedAt) / 1000)
+/** Event time: seconds since the SESSION started, one base for every node of it, so a session's timeline is monotonic. */
+function elapsed(session: DemoSession, now: number): number {
+  return Math.max(0, (now - session.startTime) / 1000)
 }
 
 function withEvents(state: DemoState, sessionId: string, add: readonly SimulationEvent[]): DemoState['events'] {
@@ -281,14 +282,14 @@ function target(state: DemoState, sessionId: string, nodeName?: string): { sessi
 
 function toolCallEvents(session: DemoSession, node: DemoNode, tool: string, toolUseId: string, args: string, inputData: Record<string, unknown>, now: number): SimulationEvent {
   return {
-    time: elapsed(node, now), type: 'tool_call_start', sessionId: session.id,
+    time: elapsed(session, now), type: 'tool_call_start', sessionId: session.id,
     payload: { agent: node.name, tool, toolUseId, args, inputData, at: now },
   }
 }
 
 function toolReturnEvent(session: DemoSession, node: DemoNode, tool: string, toolUseId: string, isError: boolean, now: number): SimulationEvent {
   return {
-    time: elapsed(node, now), type: 'tool_call_end', sessionId: session.id,
+    time: elapsed(session, now), type: 'tool_call_end', sessionId: session.id,
     payload: { agent: node.name, tool, toolUseId, result: isError ? 'failed (demo)' : 'ok', isError, at: now },
   }
 }
@@ -333,7 +334,7 @@ function done(state: DemoState, action: Extract<DemoAction, { type: 'done' }>, n
   if (!t) return state
   const { session, node } = t
   const finished = replaceNode(session, { ...node, status: 'done', open: [] }, now)
-  const add: SimulationEvent[] = [{ time: elapsed(node, now), type: 'agent_complete', sessionId: session.id, payload: { name: node.name } }]
+  const add: SimulationEvent[] = [{ time: elapsed(session, now), type: 'agent_complete', sessionId: session.id, payload: { name: node.name } }]
   // Children of a finished node finish with it (the simulation does the same), so the session has no active node left then.
   const ended = finished.nodes.map(n => (n.parent === node.name && n.status === 'active' ? { ...n, status: 'done' as const, open: [] } : n))
   const last: DemoSession = { ...finished, nodes: ended }
@@ -349,7 +350,7 @@ function permissionWait(state: DemoState, action: Extract<DemoAction, { type: 'p
   if (!t) return state
   const { session, node } = t
   const ev: SimulationEvent = {
-    time: elapsed(node, now), type: 'permission_requested', sessionId: session.id,
+    time: elapsed(session, now), type: 'permission_requested', sessionId: session.id,
     payload: { agent: node.name, at: now },
   }
   return {
@@ -375,24 +376,42 @@ function subagentDispatch(state: DemoState, action: Extract<DemoAction, { type: 
   }
   const add: SimulationEvent[] = [
     nodeSpawn(nextSession, child, task),
-    { time: elapsed(node, now), type: 'subagent_dispatch', sessionId: session.id, payload: { parent: node.name, child: child.name, task } },
+    { time: elapsed(session, now), type: 'subagent_dispatch', sessionId: session.id, payload: { parent: node.name, child: child.name, task } },
   ]
   return { ...state, seq: state.seq + 1, sessions: replaceSession(state, nextSession), events: withEvents(state, session.id, add) }
+}
+
+/**
+ * Which subagent returns when `node` is the target: a targeted subagent returns itself (to its parent); a targeted
+ * session node returns its newest active subagent. null when there is none (the action is then a no-op).
+ */
+function returningSubagent(session: DemoSession, node: DemoNode): { parent: string; child: DemoNode } | null {
+  if (node.kind === 'subagent') return { parent: node.parent ?? session.profile, child: node }
+  const child = [...session.nodes].reverse().find(n => n.parent === node.name && n.status === 'active')
+  return child ? { parent: node.name, child } : null
+}
+
+/** True when `subagent_return` aimed at this node would do something (the panel disables the button otherwise). */
+export function canSubagentReturn(state: DemoState, sessionId: string, nodeName?: string): boolean {
+  const t = target(state, sessionId, nodeName)
+  return t !== null && returningSubagent(t.session, t.node) !== null
 }
 
 function subagentReturn(state: DemoState, action: Extract<DemoAction, { type: 'subagent_return' }>, now: number): DemoState {
   const t = target(state, action.sessionId, action.node)
   if (!t) return state
-  const { session, node } = t
-  const child = [...session.nodes].reverse().find(n => n.parent === node.name && n.status === 'active')
-  if (!child) return state
+  const { session } = t
+  const returning = returningSubagent(session, t.node)
+  if (!returning) return state
+  const { parent, child } = returning
+  // The returning subagent's own active subagents finish with it (as `done` does).
   const nextSession: DemoSession = {
     ...session, lastActivityTime: now,
-    nodes: session.nodes.map(n => (n.name === child.name ? { ...n, status: 'done' as const, open: [] } : n)),
+    nodes: session.nodes.map(n => (n.name === child.name || (n.parent === child.name && n.status === 'active') ? { ...n, status: 'done' as const, open: [] } : n)),
   }
   const add: SimulationEvent[] = [
-    { time: elapsed(node, now), type: 'subagent_return', sessionId: session.id, payload: { parent: node.name, child: child.name, summary: `${child.name} finished (demo)` } },
-    { time: elapsed(child, now), type: 'agent_complete', sessionId: session.id, payload: { name: child.name } },
+    { time: elapsed(session, now), type: 'subagent_return', sessionId: session.id, payload: { parent, child: child.name, summary: `${child.name} finished (demo)` } },
+    { time: elapsed(session, now), type: 'agent_complete', sessionId: session.id, payload: { name: child.name } },
   ]
   return { ...state, sessions: replaceSession(state, nextSession), events: withEvents(state, session.id, add) }
 }
@@ -507,7 +526,7 @@ function resourceUse(state: DemoState, action: Extract<DemoAction, { type: 'reso
       } else {
         // The gateway is seen from a message that came in through it (the session's source platform).
         add.push({
-          time: elapsed(node, now), type: 'message', sessionId: session.id,
+          time: elapsed(session, now), type: 'message', sessionId: session.id,
           payload: { agent: node.name, role: 'user', content: 'Demo message via the gateway', platform: 'matrix', at: now },
         })
       }

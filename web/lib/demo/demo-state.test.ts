@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  applyDemoAction, createDemoState, demoNodeChoices, demoSessionId, demoSessionList, demoSources, normaliseProfile,
+  applyDemoAction, canSubagentReturn, createDemoState, demoNodeChoices, demoSessionId, demoSessionList, demoSources, normaliseProfile,
   normaliseResourceKey, type DemoAction, type DemoState,
 } from './demo-state'
 import { isDemoPath } from './demo-route'
@@ -103,11 +103,24 @@ describe('demo-state: tool_call / tool_return', () => {
     assert.equal(applyDemoAction(s, { type: 'tool_call', sessionId: id(), tool: 'bad tool;' }, T0), s)
   })
 
-  it('event times are seconds since the node started and never negative', () => {
+  it('event times are seconds since the session started and never negative', () => {
     const s = run([{ type: 'session_start', profile: 'taxis' }, { type: 'tool_call', sessionId: id(), tool: 'Read' }])
     assert.equal(s.events[id()].at(-1)!.time, 1)
     const early = applyDemoAction(started(), { type: 'tool_call', sessionId: id(), tool: 'Read' }, T0 - 5000)
     assert.equal(early.events[id()].at(-1)!.time, 0)
+  })
+
+  it('one time base per session: a subagent dispatched later does not restart the clock', () => {
+    const s = run([
+      { type: 'session_start', profile: 'taxis' },                                 // t=0
+      { type: 'subagent_dispatch', sessionId: id() },                              // +1s
+      { type: 'tool_call', sessionId: id(), node: 'taxis s1 › sub1', tool: 'Read' }, // +2s, on the subagent
+      { type: 'tool_call', sessionId: id(), node: 'taxis s1', tool: 'Read' },       // +3s, on the parent
+    ])
+    const calls = s.events[id()].filter(e => e.type === 'tool_call_start').map(e => e.time)
+    assert.deepEqual(calls, [2, 3])
+    const times = s.events[id()].map(e => e.time)
+    assert.deepEqual([...times].sort((a, b) => a - b), times)
   })
 
   it('call ids are unique', () => {
@@ -144,6 +157,42 @@ describe('demo-state: permission_wait, subagents, done', () => {
   it('subagent_return with no active child changes nothing', () => {
     const s = started()
     assert.equal(applyDemoAction(s, { type: 'subagent_return', sessionId: id() }, T0), s)
+    assert.equal(canSubagentReturn(s, id()), false)
+  })
+
+  it('subagent_return aimed at the subagent itself returns that subagent to its parent', () => {
+    const s = run([
+      { type: 'session_start', profile: 'taxis' }, { type: 'subagent_dispatch', sessionId: id() },
+      { type: 'subagent_return', sessionId: id(), node: 'taxis s1 › sub1' },
+    ])
+    assert.deepEqual(s.events[id()].slice(-2).map(e => e.type), ['subagent_return', 'agent_complete'])
+    assert.deepEqual(s.events[id()].at(-2)!.payload, { parent: 'taxis s1', child: 'taxis s1 › sub1', summary: 'taxis s1 › sub1 finished (demo)' })
+    assert.equal((s.events[id()].at(-1)!.payload as { name: string }).name, 'taxis s1 › sub1')
+    assert.equal(s.sessions[0].nodes[1].status, 'done')
+    assert.equal(s.sessions[0].nodes[0].status, 'active')
+    assert.equal(s.sessions[0].status, 'active')
+  })
+
+  it('panel flow: dispatch, then return with the target the panel picks (the new subagent), changes state', () => {
+    const dispatched = run([{ type: 'session_start', profile: 'taxis' }, { type: 'subagent_dispatch', sessionId: id() }])
+    // demoNodeChoices lists nodes in order; the panel defaults to the newest active node of the open tab: the subagent.
+    const picked = demoNodeChoices(dispatched).filter(c => c.status === 'active' && c.sessionId === id()).at(-1)!
+    assert.equal(picked.node, 'taxis s1 › sub1')
+    assert.equal(canSubagentReturn(dispatched, picked.sessionId, picked.node), true)
+    const returned = applyDemoAction(dispatched, { type: 'subagent_return', sessionId: picked.sessionId, node: picked.node }, T0 + 5000)
+    assert.notEqual(returned, dispatched)
+    assert.equal(returned.sessions[0].nodes[1].status, 'done')
+    assert.equal(canSubagentReturn(returned, id()), false)
+  })
+
+  it('a returning subagent takes its own active subagents with it', () => {
+    const s = run([
+      { type: 'session_start', profile: 'taxis' }, { type: 'subagent_dispatch', sessionId: id() },
+      { type: 'subagent_dispatch', sessionId: id(), node: 'taxis s1 › sub1' },
+      { type: 'subagent_return', sessionId: id(), node: 'taxis s1 › sub1' },
+    ])
+    const nodes = Object.fromEntries(s.sessions[0].nodes.map(n => [n.name, n.status]))
+    assert.deepEqual(nodes, { 'taxis s1': 'active', 'taxis s1 › sub1': 'done', 'taxis s1 › sub1 › sub1': 'done' })
   })
 
   it('the target of a tool call can be a subagent', () => {

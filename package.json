@@ -4,7 +4,7 @@
     "setup": "node scripts/setup.js",
     "dev": "NEXT_PUBLIC_DEMO=0 NEXT_PUBLIC_RELAY_PORT=3001 concurrently -n relay,web -c blue,green \"pnpm run dev:relay\" \"pnpm run dev:web\"",
     "dev:relay": "node scripts/build-relay.js && node scripts/.dev-relay.js",
-    "dev:demo": "NEXT_PUBLIC_DEMO=1 pnpm run dev:web",
+    "dev:demo": "NEXT_PUBLIC_DEMO=0 pnpm --filter agent-flow-web exec next dev -H 127.0.0.1 -p 3590",
     "dev:web": "pnpm --filter agent-flow-web run dev",
     "dev:extension": "pnpm --filter agent-flow run watch",
     "build:extension": "pnpm --filter agent-flow run build",

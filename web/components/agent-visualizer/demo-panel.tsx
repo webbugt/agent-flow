@@ -9,7 +9,7 @@ import { getOptions, updateOptions } from '@/lib/options-store'
 import { useOptions } from '@/hooks/use-options'
 import type { DemoHandle } from '@/hooks/use-demo-bridge'
 import {
-  RESOURCE_KINDS, demoNodeChoices, normaliseProfile, normaliseResourceKey,
+  RESOURCE_KINDS, canSubagentReturn, demoNodeChoices, normaliseProfile, normaliseResourceKey,
   type ResourceKind, type SupermemoryCall,
 } from '@/lib/demo/demo-state'
 import {
@@ -85,6 +85,8 @@ export function DemoPanel({ demo, onSelectSession, selectedSessionId, open, onOp
   const inOpenTab = active.filter(c => c.sessionId === selectedSessionId)
   const target = active.find(c => c.value === targetValue) ?? inOpenTab[inOpenTab.length - 1] ?? active[active.length - 1]
   const at = target ? { sessionId: target.sessionId, node: target.node } : null
+  // A subagent returns itself; a session node returns its newest active subagent. Disabled when there is nothing to return.
+  const canReturn = target !== undefined && canSubagentReturn(state, target.sessionId, target.node)
   const key = keys[kind]
   const keyOk = normaliseResourceKey(kind, key) !== null
 
@@ -180,7 +182,7 @@ export function DemoPanel({ demo, onSelectSession, selectedSessionId, open, onOp
               <Btn id="demo-tool-error" disabled={!at} tone={COLORS.error} onClick={() => at && dispatch({ type: 'tool_return', ...at, isError: true })}>Return error</Btn>
               <Btn id="demo-permission" disabled={!at} tone={COLORS.waiting_permission} onClick={() => at && dispatch({ type: 'permission_wait', ...at })}>Permission wait</Btn>
               <Btn id="demo-subagent-dispatch" disabled={!at} tone={COLORS.dispatch} onClick={() => at && dispatch({ type: 'subagent_dispatch', ...at })}>Dispatch subagent</Btn>
-              <Btn id="demo-subagent-return" disabled={!at} tone={COLORS.dispatch} onClick={() => at && dispatch({ type: 'subagent_return', ...at })}>Subagent return</Btn>
+              <Btn id="demo-subagent-return" disabled={!at || !canReturn} tone={COLORS.dispatch} onClick={() => at && dispatch({ type: 'subagent_return', ...at })}>Subagent return</Btn>
               <Btn id="demo-done" disabled={!at} tone={COLORS.holoBase} onClick={() => at && dispatch({ type: 'done', ...at })}>Done</Btn>
             </div>
           </Section>
