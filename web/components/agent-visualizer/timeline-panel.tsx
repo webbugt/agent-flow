@@ -228,7 +228,7 @@ export function TimelinePanel({ visible, timelineEntries, currentTime, onClose }
       position={{ bottom: STACK_BOTTOM, left: 16, right: 16 }}
       axis="Y"
       zIndex={Z.sidePanel}
-      className="mx-auto"
+      className="mx-auto af-timeline-panel"
       style={{ maxWidth: 700 }}
     >
       {/* A flex column capped to the free height: the title row (with the close control) and the legend stay put,
