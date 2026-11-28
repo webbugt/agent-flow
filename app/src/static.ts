@@ -6,6 +6,7 @@ import * as http from 'http'
 import * as fs from 'fs'
 import * as path from 'path'
 import { BUILD_INFO, type BuildInfo } from './build-info'
+import { isDemoPath } from '../../web/lib/demo/demo-route'
 
 const WEBVIEW_DIR = path.join(__dirname, 'webview')
 
@@ -48,7 +49,8 @@ export function pathOnly(rawUrl: string): string {
 export function serveStatic(req: http.IncomingMessage, res: http.ServerResponse) {
   const url = pathOnly(req.url || '/')
 
-  if (url === '/' || url === '/index.html') {
+  // `/demo` is the same page: the bundle picks the demo view by the path (web/app-entry.tsx).
+  if (url === '/' || url === '/index.html' || isDemoPath(url)) {
     res.writeHead(200, { 'Content-Type': 'text/html' })
     res.end(renderHtmlShell())
     return

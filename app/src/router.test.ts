@@ -108,3 +108,19 @@ test('the page is served with a query string (?shot=1 for the screenshot harness
   assert.equal((await call('/nope?x=1')).status, 404)
   assert.equal((await call('/index.js?v=1')).status, 404 /* not built in a unit test: no webview dir */)
 })
+
+test('/demo serves the same HTML shell as / (the bundle picks the demo view by path); nothing below or beside it does', async () => {
+  const plain = await call('/')
+  for (const p of ['/demo', '/demo/', '/demo?x=1', '/demo/?x=1#y']) {
+    const r = await call(p)
+    assert.equal(r.status, 200, p)
+    assert.equal(r.body, plain.body, p)
+  }
+  for (const p of ['/demo/x', '/demos', '/demo.js', '/api/demo']) assert.equal((await call(p)).status, 404, p)
+})
+
+test('/demo does not change what the relay routes answer: /events still reaches the relay, /health is intact', async () => {
+  const ev = await call('/events')
+  assert.equal(ev.sse, 1)
+  assert.equal((await call('/health')).status, 200)
+})
