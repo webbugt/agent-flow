@@ -304,6 +304,51 @@ export function placeAnchors(
   return out
 }
 
+/**
+ * Room the nodes around an anchor take, world units: the resource itself, a session node beside it (with its tool cards)
+ * and the nodes that use nothing on the rim. The shape the viewport sees is
+ * that of the anchors' bounding box grown by this on every side.
+ */
+export const ANCHOR_VIEW_PAD = ANCHOR_RESOURCE_RADIUS + 2 * 70 + 14 + 100
+
+/**
+ * Flow the anchors toward the shape of the viewport (`aspect` = width / height). The bounding box of the anchors, grown
+ * by `pad` (the room of the nodes around an anchor), is stretched along one axis until it has that shape. Stretching
+ * by a factor >= 1 only moves points apart, so the least separation of {@link placeAnchors} always holds. When the
+ * layout is a lot wider than tall (or the other way round) and the viewport is the opposite, the layout is first turned
+ * a quarter, which needs less stretching. Pure and deterministic; a single anchor, or an aspect that is not a positive
+ * number, returns the input unchanged. The result is centred on the middle of its bounding box.
+ */
+export function fitAnchorsToAspect(
+  anchors: ReadonlyMap<string, Point>, aspect: number, pad: number = ANCHOR_VIEW_PAD,
+): Map<string, Point> {
+  const out = new Map<string, Point>(anchors)
+  if (anchors.size < 2 || !(aspect > 0) || !Number.isFinite(aspect)) return out
+  const stretchFor = (pts: readonly Point[]) => {
+    const x0 = Math.min(...pts.map(p => p.x)); const x1 = Math.max(...pts.map(p => p.x))
+    const y0 = Math.min(...pts.map(p => p.y)); const y1 = Math.max(...pts.map(p => p.y))
+    const w = x1 - x0
+    const h = y1 - y0
+    // Grown boxes: (w + 2 pad) / (h + 2 pad) is what the viewport sees.
+    const seen = (w + 2 * pad) / (h + 2 * pad)
+    let sx = 1
+    let sy = 1
+    if (seen < aspect && w > 1e-6) sx = Math.max(1, (aspect * (h + 2 * pad) - 2 * pad) / w)
+    else if (seen > aspect && h > 1e-6) sy = Math.max(1, ((w + 2 * pad) / aspect - 2 * pad) / h)
+    return { sx, sy, mx: (x0 + x1) / 2, my: (y0 + y1) / 2 }
+  }
+  const ids = [...anchors.keys()]
+  const upright = ids.map(id => anchors.get(id) as Point)
+  const turned = upright.map(p => ({ x: -p.y, y: p.x }))
+  const a = stretchFor(upright)
+  const b = stretchFor(turned)
+  const useTurned = b.sx * b.sy < a.sx * a.sy - 1e-9
+  const pts = useTurned ? turned : upright
+  const s = useTurned ? b : a
+  ids.forEach((id, i) => out.set(id, { x: (pts[i].x - s.mx) * s.sx, y: (pts[i].y - s.my) * s.sy }))
+  return out
+}
+
 // ─── Session nodes ──────────────────────────────────────────────────────────
 
 export interface AnchorSession {
@@ -354,7 +399,10 @@ export function placeAnchorSessions(
   const pts = [...anchors.values()]
   const cx = pts.length ? pts.reduce((s, p) => s + p.x, 0) / pts.length : 0
   const cy = pts.length ? pts.reduce((s, p) => s + p.y, 0) / pts.length : 0
-  const reach = pts.reduce((m, p) => Math.max(m, Math.hypot(p.x - cx, p.y - cy)), 0)
+  // Nodes that use nothing sit on a rectangle around the anchors, not on a circle: a circle would put them far above or
+  // below a map that was spread to a wide viewport (or the other way round), and the shape would be lost.
+  const halfW = pts.reduce((m, p) => Math.max(m, Math.abs(p.x - cx)), 0) + resR + 160
+  const halfH = pts.reduce((m, p) => Math.max(m, Math.abs(p.y - cy)), 0) + resR + 160
   const placed: Array<{ x: number; y: number; r: number }> = []
   const out = new Map<string, AnchorSessionPlacement>()
 
@@ -403,7 +451,9 @@ export function placeAnchorSessions(
       } else {
         // Never used a resource that is on the map: a ring around the map, at a seeded angle.
         const a = seeded(seed, 99) * Math.PI * 2
-        const ring = { x: cx + Math.cos(a) * (reach + resR + 160), y: cy + Math.sin(a) * (reach + resR + 160) }
+        // The point of the rectangle (half extents halfW, halfH) in the direction of the seeded angle.
+        const t = 1 / Math.max(Math.abs(Math.cos(a)) / halfW, Math.abs(Math.sin(a)) / halfH, 1e-9)
+        const ring = { x: cx + Math.cos(a) * t, y: cy + Math.sin(a) * t }
         spot = findSpot(ring, s.radius, 0, seed)
       }
     }

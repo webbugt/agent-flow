@@ -3,7 +3,7 @@ import { strict as assert } from 'node:assert'
 import {
   ANCHOR_DIM_ALPHA, ANCHOR_SPACING, CURRENT_USE_MS, EXPLICIT_LINK_WEIGHT, buildRelations, coUseWeights, currentResource,
   dimToolCalls, edgeHoverAlpha, hoverDimmer,
-  explicitLinkPairs, hoverAlpha, layoutWeights, pairKey, paletteIndex, placeAnchorSessions, placeAnchors, profileColor,
+  ANCHOR_VIEW_PAD, explicitLinkPairs, fitAnchorsToAspect, hoverAlpha, layoutWeights, pairKey, paletteIndex, placeAnchorSessions, placeAnchors, profileColor,
   proximityWeights, weightOf,
 } from './anchor-mode'
 import { DEFAULT_PROFILE_PALETTE } from './options-registry'
@@ -247,4 +247,71 @@ test('edgeHoverAlpha: full while either end is hovered or related; 80% for an ed
   assert.equal(edgeHoverAlpha({ from: 's9', to: 'tool-9' }, agentOfTool, dim), ANCHOR_DIM_ALPHA, 'tool edge of an unrelated node')
   assert.equal(edgeHoverAlpha({ from: 's8', to: 's9' }, agentOfTool, dim), ANCHOR_DIM_ALPHA, 'parent edge between unrelated nodes')
   assert.equal(edgeHoverAlpha({ from: 's8', to: 's9' }, agentOfTool, null), 1, 'nothing dimmed')
+})
+
+// ─── fitAnchorsToAspect: the anchors flow into the shape of the viewport ────
+
+const VIEWPORTS: Array<[string, number]> = [['16:9', 16 / 9], ['9:16', 9 / 16], ['1:1', 1]]
+
+/** Chain-ish co-use between neighbours, as a real project's boards and memories have. */
+function chainWeights(ids: readonly string[]): Map<string, number> {
+  const w = new Map<string, number>()
+  for (let i = 0; i + 1 < ids.length; i++) w.set(pairKey(ids[i], ids[i + 1]), 3 + (i % 4))
+  return w
+}
+
+/** Shape the viewport sees: the anchors' bounding box grown by the room of the nodes around an anchor. */
+function seenAspect(pos: ReadonlyMap<string, { x: number; y: number }>): number {
+  const pts = [...pos.values()]
+  const w = Math.max(...pts.map(p => p.x)) - Math.min(...pts.map(p => p.x))
+  const h = Math.max(...pts.map(p => p.y)) - Math.min(...pts.map(p => p.y))
+  return (w + 2 * ANCHOR_VIEW_PAD) / (h + 2 * ANCHOR_VIEW_PAD)
+}
+
+const asFactor = (a: number, b: number) => Math.max(a / b, b / a)
+
+test('fitAnchorsToAspect: 3..12 anchors, 16:9 / 9:16 / 1:1: the block is within a factor 1.6 of the viewport, the least separation holds', () => {
+  for (const [name, aspect] of VIEWPORTS) {
+    for (let n = 3; n <= 12; n++) {
+      const ids = Array.from({ length: n }, (_, i) => `r${i}`)
+      const base = placeAnchors(ids, chainWeights(ids))
+      const fitted = fitAnchorsToAspect(base, aspect)
+      assert.equal(fitted.size, n)
+      const f = asFactor(seenAspect(fitted), aspect)
+      assert.ok(f <= 1.6, `n=${n} ${name}: aspect ${seenAspect(fitted).toFixed(2)} vs ${aspect.toFixed(2)} (factor ${f.toFixed(2)})`)
+      // Never worse than before the fit.
+      assert.ok(f <= asFactor(seenAspect(base), aspect) + 1e-9, `n=${n} ${name}: not worse than the unfitted layout`)
+      for (let i = 0; i < n; i++) {
+        for (let j = i + 1; j < n; j++) {
+          assert.ok(dist(fitted.get(ids[i])!, fitted.get(ids[j])!) >= ANCHOR_SPACING - 1, `n=${n} ${name}: ${ids[i]}/${ids[j]} keep the separation`)
+        }
+      }
+    }
+  }
+})
+
+test('fitAnchorsToAspect: deterministic, independent of input order, centred; small inputs pass through', () => {
+  const ids = Array.from({ length: 8 }, (_, i) => `r${i}`)
+  const base = placeAnchors(ids, chainWeights(ids))
+  for (const [, aspect] of VIEWPORTS) {
+    const a = fitAnchorsToAspect(base, aspect)
+    const b = fitAnchorsToAspect(placeAnchors([...ids].reverse(), chainWeights(ids)), aspect)
+    for (const id of ids) assert.deepEqual(a.get(id), b.get(id), `${id}: same place`)
+    const xs = [...a.values()].map(p => p.x)
+    const ys = [...a.values()].map(p => p.y)
+    assert.ok(Math.abs(Math.max(...xs) + Math.min(...xs)) < 1e-6 && Math.abs(Math.max(...ys) + Math.min(...ys)) < 1e-6, 'centred on its box')
+  }
+  assert.equal(fitAnchorsToAspect(new Map(), 1.7).size, 0)
+  assert.deepEqual(fitAnchorsToAspect(new Map([['only', { x: 5, y: 7 }]]), 1.7).get('only'), { x: 5, y: 7 })
+  for (const bad of [0, -2, NaN, Infinity]) assert.deepEqual([...fitAnchorsToAspect(base, bad)], [...base], `aspect ${bad}: unchanged`)
+})
+
+test('fitAnchorsToAspect: a layout of the wrong orientation is turned, not stretched into a ribbon', () => {
+  // Four anchors in a tall line: for a wide viewport turning is cheaper than stretching the thin axis.
+  const tall = new Map([['a', { x: 0, y: -300 }], ['b', { x: 8, y: -100 }], ['c', { x: -6, y: 100 }], ['d', { x: 0, y: 300 }]])
+  const out = fitAnchorsToAspect(tall, 16 / 9)
+  const xs = [...out.values()].map(p => p.x)
+  const ys = [...out.values()].map(p => p.y)
+  assert.ok(Math.max(...xs) - Math.min(...xs) > Math.max(...ys) - Math.min(...ys), 'wider than tall for 16:9')
+  for (const [i, a] of [...out.values()].entries()) for (const b of [...out.values()].slice(i + 1)) assert.ok(dist(a, b) >= 200 - 1e-6, 'turning and stretching never bring two anchors closer')
 })

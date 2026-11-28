@@ -10,7 +10,7 @@
  *   - There is no central profile node. Each session (agent node) is its own node. The sessions
  *     of one profile form a cloud: a stable, seeded blob around the profile centroid, drawn
  *     with a soft halo and the profile name as caption. Sessions of one profile are not linked.
- *   - Clouds sit on a grid. Each Kanban board and Supermemory namespace goes near the weighted
+ *   - Clouds are shelf-packed into a block of the viewport's aspect (lib/fleet/fleet-cloud-pack.ts). Each Kanban board and Supermemory namespace goes near the weighted
  *     centroid of the clouds it links to (weight = event count); unlinked ones go to a rim.
  *
  * Pure data code (no React, no DOM), so it is unit-testable:
@@ -40,9 +40,10 @@ import {
 } from '@/lib/fleet/fleet-model'
 import { cloudIdOf, type FleetGraph } from '@/lib/fleet/fleet-graph'
 import { HALO_PAD, type CloudView } from '@/lib/fleet/fleet-cloud-geometry'
+import { packClouds } from '@/lib/fleet/fleet-cloud-pack'
 import { placeBlob, placeResources, type BlobUnit, type PlacementResource } from '@/lib/fleet/fleet-placement'
 import {
-  buildRelations, coUseWeights, explicitLinkPairs, layoutWeights, placeAnchorSessions, placeAnchors, profileColor,
+  buildRelations, coUseWeights, explicitLinkPairs, fitAnchorsToAspect, layoutWeights, placeAnchorSessions, placeAnchors, profileColor,
   type AnchorSession, type UseItem,
 } from '@/lib/fleet/anchor-mode'
 import { DEFAULT_PROFILE_PALETTE } from '@/lib/fleet/options-registry'
@@ -142,8 +143,11 @@ export interface FleetSceneInput {
   selection: FleetSelectionView
   /** Resources and their links to clouds, from buildFleetGraph. */
   graph: FleetGraph
-  /** Clouds per row (default: by the square-ish root). */
-  columns?: number
+  /**
+   * Shape of the free viewport area (width / height). The clouds (cloud layout) and the anchors (anchor layout) are
+   * flowed into a block of this shape. Default 1 (square-ish).
+   */
+  aspect?: number
   /** Nodes the user dragged: their satellites move with them. Applied over the layout. */
   moved?: ReadonlyMap<string, { x: number; y: number }>
   /** Dots to draw along the links (from a FleetPulseTracker). */
@@ -302,25 +306,12 @@ export function buildFleetScene(input: FleetSceneInput): FleetScene {
     return { identity, group, blob, halo: cover + HALO_PAD }
   })
 
-  // 2. Grid of clouds, cells sized to their own halo (plus the caption), so one big profile does not
-  // blow up the space of the small ones. cxs/cys are cell centres, the first at 0.
-  const n = cloudInfo.length
-  const cols = Math.max(1, Math.min(n || 1, input.columns ?? Math.ceil(Math.sqrt(n))))
-  const rows = Math.max(1, Math.ceil(n / cols))
-  const colW = Array.from({ length: cols }, () => 0)
-  const rowH = Array.from({ length: rows }, () => 0)
-  cloudInfo.forEach((c, i) => {
-    colW[i % cols] = Math.max(colW[i % cols], 2 * c.halo)
-    rowH[Math.floor(i / cols)] = Math.max(rowH[Math.floor(i / cols)], 2 * c.halo + CAPTION_ROOM)
-  })
-  const centres = (sizes: number[], gap: number) => {
-    const out: number[] = []
-    let edge = 0
-    sizes.forEach((s, k) => { out.push(k === 0 ? 0 : edge + gap + s / 2); edge = out[k] + s / 2 })
-    return out
-  }
-  const cxs = centres(colW, CLOUD_GAP_X)
-  const cys = centres(rowH, CLOUD_GAP_Y)
+  // 2. Clouds shelf-packed (biggest halo first) into a block of the free viewport area's shape; cells are sized to their
+  // own halo (plus the caption), so one big profile does not blow up the space of the small ones.
+  const packed = packClouds(
+    cloudInfo.map(c => ({ id: c.identity, halo: c.halo })), input.aspect ?? 1,
+    { gapX: CLOUD_GAP_X, gapY: CLOUD_GAP_Y, captionRoom: CAPTION_ROOM },
+  )
 
   const agents = new Map<string, Agent>()
   const toolCalls = new Map<string, ToolCallNode>()
@@ -333,10 +324,9 @@ export function buildFleetScene(input: FleetSceneInput): FleetScene {
   const graphCloud = new Map(graph.clouds.map(c => [c.id, c]))
   const ns = (sid: string, id: string) => sceneId(sid, id)
 
-  cloudInfo.forEach(({ identity, group, blob, halo }, i) => {
-    // The cloud's centroid: the cell centre, moved up by half the room kept under the halo for the caption.
-    const cx = cxs[i % cols]
-    const cy = cys[Math.floor(i / cols)] - CAPTION_ROOM / 2
+  cloudInfo.forEach(({ identity, group, blob, halo }) => {
+    // The cloud's centroid, from the packing (the room kept under the halo for the caption is already in it).
+    const { x: cx, y: cy } = packed.positions.get(identity)!
     const cloudId = cloudIdOf(identity)
     centers.set(cloudId, { x: cx, y: cy, r: halo, identity })
     const members: CloudView['members'] = []
@@ -488,7 +478,8 @@ function buildAnchorScene(
 
   // 2. Anchors by co-use and explicit links; session nodes beside the resource they use.
   const weights = layoutWeights(coUseWeights(uses), explicitLinkPairs(resources.map(r => ({ id: r.id, kind: r.kind, label: r.label }))))
-  const anchors = placeAnchors(resources.map(r => r.id), weights)
+  // Spread to the shape of the viewport (only ever apart, so the least separation holds).
+  const anchors = fitAnchorsToAspect(placeAnchors(resources.map(r => r.id), weights), input.aspect ?? 1)
   const anchorSessions: AnchorSession[] = [...unitsById.values()].map(u => ({
     id: u.id, radius: u.unit.radius,
     usage: [...(usage.get(u.id) ?? [])].map(([resource, v]) => ({ resource, weight: v.weight, lastAt: v.lastAt })),

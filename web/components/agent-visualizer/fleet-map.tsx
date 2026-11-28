@@ -143,14 +143,12 @@ export function FleetMap({
     () => visible ? buildFleetGraph({ instances, kanban, supermemory, bash, subsystem, selection, now, options, pins }) : EMPTY_GRAPH,
     [visible, instances, kanban, supermemory, bash, subsystem, selection, now, options, pins],
   )
-  // Clusters per row follow the free area's shape, so a phone gets a tall column, a desktop a wide grid.
-  const columns = useMemo(
-    () => Math.max(1, Math.min(sessions.length || 1, Math.round(Math.sqrt(Math.max(sessions.length, 1) * (freeW / freeH))))),
-    [sessions.length, freeW, freeH],
-  )
+  // The layout flows the clouds (or the anchors) into a block of the free area's shape, so a phone gets a tall column and
+  // a desktop a wide grid. Rounded, so a window drag does not rebuild the scene on every pixel.
+  const aspect = useMemo(() => Math.round((freeW / freeH) * 20) / 20 || 1, [freeW, freeH])
 
   const { scene, frameRef, moveNode } = useFleetScene({
-    visible, sessions, eventsOf, instances, selection, graph, columns, tick, replay,
+    visible, sessions, eventsOf, instances, selection, graph, aspect, tick, replay,
     anchorMode: options.anchorMode, palette: options.profilePalette, profileColors: options.profileColors,
   })
 

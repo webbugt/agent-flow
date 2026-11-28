@@ -383,12 +383,14 @@ test('fleet scene: sessions of a cloud sit at least BLOB_GAP apart (no overlap) 
     }
   }
   assert.ok(CLOUD_GAP_X <= 48 && CLOUD_GAP_Y <= 44, 'grid gaps between halos')
-  // Row neighbours (3 columns: alpha, beta, delta): the cells are as wide as the widest halo of their column, so the gap
-  // between two halos of one row is at least CLOUD_GAP_X.
-  const byId = new Map([...scene.clusters.values()].map(c => [c.identity, c]))
-  const a = byId.get('alpha')!
-  const b = byId.get('beta')!
-  assert.ok(b.x - a.x - a.r - b.r >= CLOUD_GAP_X - 1e-6, `alpha-beta halo gap ${b.x - a.x - a.r - b.r}`)
+  // The clouds are shelf-packed (lib/fleet/fleet-cloud-pack.ts): whichever two are neighbours, the gap between their halos
+  // is at least the smaller of the two grid gaps (side by side in a row: CLOUD_GAP_X; in neighbouring rows: more).
+  for (let i = 0; i < cl.length; i++) {
+    for (let j = i + 1; j < cl.length; j++) {
+      const gap = Math.hypot(cl[i].x - cl[j].x, cl[i].y - cl[j].y) - cl[i].r - cl[j].r
+      assert.ok(gap >= Math.min(CLOUD_GAP_X, CLOUD_GAP_Y) - 1e-6, `${cl[i].identity}-${cl[j].identity} halo gap ${gap}`)
+    }
+  }
 })
 
 test('fleet scene: packing radius = AGENT_PAD + SATELLITE_PACK_SHARE of the reach beyond it (pure, monotone, never above the reach)', () => {
