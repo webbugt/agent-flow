@@ -35,7 +35,7 @@ export function CopyButton({ text, label = 'copy', disabled = false, title }: Co
       disabled={disabled}
       title={title ?? 'Copy to clipboard'}
       data-copy-button
-      className="text-[9px] font-mono px-1.5 py-px rounded transition-all flex-shrink-0"
+      className="text-[11px] font-mono px-1.5 py-px rounded transition-all flex-shrink-0"
       style={{
         border: `1px solid ${COLORS.holoBorder12}`,
         background: status === 'idle' ? 'transparent' : COLORS.holoBg05,

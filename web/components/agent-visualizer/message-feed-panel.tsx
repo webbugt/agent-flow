@@ -18,6 +18,8 @@ interface MessageFeedPanelProps {
   agents: Map<string, Agent>
   onAgentClick: (agentId: string | null) => void
   selectedAgentId: string | null
+  /** The collapsed one-line card steps aside (small screen with a bottom panel or Fleet open: it would sit under that panel). */
+  tuckedAway?: boolean
 }
 
 // Only show text messages (assistant, user, thinking) — tool calls visible via agent selection
@@ -43,6 +45,7 @@ export function MessageFeedPanel({
   agents,
   onAgentClick,
   selectedAgentId,
+  tuckedAway = false,
 }: MessageFeedPanelProps) {
   const [expanded, setExpanded] = useState(false)
   const [activeTab, setActiveTab] = useState<string>('all')
@@ -194,7 +197,9 @@ export function MessageFeedPanel({
 
   // ── Collapsed ──
   if (!expanded) {
-    if (!latestMessage) return null
+    // On a small screen the one-line card would sit under the timeline panel or the Fleet filter: it steps aside until
+    // that panel is closed. An expanded panel (the user opened it) stays.
+    if (!latestMessage || tuckedAway) return null
     const agent = agents.get(latestMessage.agentId)
     const agentName = agent?.name ?? latestMessage.agentId
     const role = ROLE_COLORS[latestMessage.type] ?? ROLE_COLORS.assistant
@@ -208,13 +213,13 @@ export function MessageFeedPanel({
       >
         <div className="glass-card px-3 py-2 flex items-center gap-2" style={{ maxWidth: 320 }}>
           <div className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: role.text }} />
-          <span className="text-[9px] font-mono font-semibold shrink-0" style={{ color: COLORS.textPrimary }}>
+          <span className="text-[11px] font-mono font-semibold shrink-0" style={{ color: COLORS.textPrimary }}>
             {agentName.length > COLLAPSED_AGENT_NAME_MAX ? agentName.slice(0, COLLAPSED_AGENT_NAME_MAX) + '..' : agentName}
           </span>
-          <span className="text-[9px] font-mono truncate" style={{ color: role.text + 'cc' }}>
+          <span className="text-[11px] font-mono truncate" style={{ color: role.text + 'cc' }}>
             {preview}
           </span>
-          <span className="text-[9px] shrink-0" style={{ color: COLORS.textMuted }}>▾</span>
+          <span className="text-[11px] shrink-0" style={{ color: COLORS.textMuted }}>▾</span>
         </div>
       </div>
     )
@@ -231,15 +236,17 @@ export function MessageFeedPanel({
       <div className="glass-card flex flex-col" style={{ width: 320, maxHeight: 420 }}>
         {/* Header */}
         <div className="flex items-center justify-between px-3 pt-2 pb-1">
-          <span className="text-[10px] font-mono font-semibold tracking-wider" style={{ color: COLORS.textPrimary }}>
+          <span className="text-[11px] font-mono font-semibold tracking-wider" style={{ color: COLORS.textPrimary }}>
             MESSAGES
           </span>
           <button
+            type="button"
             onClick={() => setExpanded(false)}
-            className="text-[9px] transition-colors"
+            aria-label="Collapse messages"
+            className="af-tap af-focus text-[11px] transition-colors"
             style={{ color: COLORS.textMuted }}
           >
-            ▴
+            <span aria-hidden>▴</span>
           </button>
         </div>
 
@@ -279,7 +286,7 @@ export function MessageFeedPanel({
         >
           {messages.length === 0 ? (
             <div className="flex items-center justify-center py-6">
-              <span className="text-[9px] font-mono" style={{ color: COLORS.textMuted }}>
+              <span className="text-[11px] font-mono" style={{ color: COLORS.textMuted }}>
                 No messages yet
               </span>
             </div>
@@ -323,8 +330,10 @@ function TabButton({ label, active, onClick, color, hasUnread }: {
 }) {
   return (
     <button
+      type="button"
       onClick={onClick}
-      className="px-2 py-0.5 rounded text-[9px] font-mono transition-all shrink-0 relative"
+      aria-pressed={active}
+      className="af-tap af-tap-fine af-focus px-2 py-0.5 rounded text-[11px] font-mono transition-all shrink-0 relative"
       style={{
         background: active ? color + '20' : 'transparent',
         color: active ? color : COLORS.textMuted,
@@ -370,11 +379,11 @@ function MessageRow({ message, agentId, agentName, showAgent, isSelected, onClic
     >
       {/* Header row */}
       <div className="flex items-center gap-1.5 mb-0.5">
-        <span className="text-[9px] font-mono font-semibold" style={{ color: role.text + '90' }}>
+        <span className="text-[11px] font-mono font-semibold" style={{ color: role.text + '90' }}>
           {roleLabel}
         </span>
         {showAgent && (
-          <span className="text-[9px] font-mono" style={{ color: COLORS.textMuted }}>
+          <span className="text-[11px] font-mono" style={{ color: COLORS.textMuted }}>
             {agentName}
           </span>
         )}
@@ -382,7 +391,7 @@ function MessageRow({ message, agentId, agentName, showAgent, isSelected, onClic
 
       {/* Content */}
       <div
-        className="text-[9px] font-mono leading-relaxed whitespace-pre-wrap break-words"
+        className="text-[11px] font-mono leading-relaxed whitespace-pre-wrap break-words"
         style={{ color: role.text }}
       >
         {displayText}
@@ -391,7 +400,7 @@ function MessageRow({ message, agentId, agentName, showAgent, isSelected, onClic
       {/* Expand/collapse for long messages */}
       {isLong && (
         <button
-          className="text-[9px] font-mono mt-0.5 transition-colors"
+          className="text-[11px] font-mono mt-0.5 transition-colors"
           style={{ color: COLORS.textMuted }}
           onClick={(e) => { e.stopPropagation(); setExpanded(prev => !prev) }}
         >

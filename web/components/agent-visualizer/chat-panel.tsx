@@ -5,6 +5,7 @@ import { COLORS, getStateColor } from '@/lib/colors'
 import { TranscriptMessage } from './transcript-message'
 import type { ConversationMessage } from '@/hooks/simulation/types'
 import { PanelHeader, SlidingPanel, stopPropagationHandlers } from './shared-ui'
+import { STACK_BOTTOM, STACK_PANEL_MAX_HEIGHT } from '@/lib/bottom-stack'
 import { useAutoScroll } from '@/hooks/use-auto-scroll'
 
 interface ChatPanelProps {
@@ -34,12 +35,12 @@ export function AgentChatPanel({
   return (
     <SlidingPanel
       visible={visible}
-      position={{ bottom: 64, right: 12 }}
+      position={{ bottom: STACK_BOTTOM, right: 12 }}
       zIndex={Z.chatPanel}
-      width={CARD.chat.width}
+      width={`min(${CARD.chat.width}px, calc(100vw - 24px))`}
       {...stopPropagationHandlers}
     >
-      <div className="glass-card" style={{ display: 'flex', flexDirection: 'column', maxHeight: CARD.chat.maxHeight }}>
+      <div className="glass-card" style={{ display: 'flex', flexDirection: 'column', maxHeight: `min(${CARD.chat.maxHeight}px, ${STACK_PANEL_MAX_HEIGHT})` }}>
         <PanelHeader
           onClose={onClose}
           className="mb-2 flex-shrink-0"
@@ -47,7 +48,7 @@ export function AgentChatPanel({
             <button
               type="button"
               onClick={onOpenDetail}
-              className="mr-2 text-[9px] font-mono px-1.5 py-0.5 rounded"
+              className="mr-2 text-[11px] font-mono px-1.5 py-0.5 rounded"
               style={{ border: `1px solid ${COLORS.holoBorder12}`, color: COLORS.textPrimary }}
               title="Whole conversation, tool calls, model and cost"
               data-testid="open-session-detail"
@@ -60,10 +61,10 @@ export function AgentChatPanel({
             className="w-1.5 h-1.5 rounded-full"
             style={{ background: stateColor, boxShadow: `0 0 6px ${stateColor}` }}
           />
-          <span className="text-[10px] font-mono tracking-wider" style={{ color: COLORS.textPrimary }}>
+          <span className="text-[11px] font-mono tracking-wider" style={{ color: COLORS.textPrimary }}>
             {agentName.toUpperCase()}
           </span>
-          <span className="text-[9px] font-mono capitalize" style={{ color: stateColor + '90' }}>
+          <span className="text-[11px] font-mono capitalize" style={{ color: stateColor + '90' }}>
             {agentState}
           </span>
         </PanelHeader>
@@ -76,7 +77,7 @@ export function AgentChatPanel({
         >
           {conversation.length === 0 ? (
             <div className="flex items-center justify-center h-full">
-              <p className="text-[10px] font-mono" style={{ color: COLORS.textMuted }}>
+              <p className="text-[11px] font-mono" style={{ color: COLORS.textMuted }}>
                 No messages yet...
               </p>
             </div>

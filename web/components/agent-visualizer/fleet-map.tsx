@@ -112,6 +112,9 @@ export function FleetMap({
   // Timeline hidden: only what the playback bar covers is reserved (insetBottom is that then).
   const measuredBottom = !timelineVisible ? insetBottom : panelTop !== null ? Math.max(size.height - panelTop + 8, 0) : insetBottom
   const bottom = screensaver ? 0 : timelineVisible ? Math.min(measuredBottom, Math.round(size.height * 0.55)) : measuredBottom
+  // The buttons sit above the panel's REAL top edge. The cap above only decides how much of the screen the node map may lose;
+  // using it for the buttons too put them under a panel taller than 55 % of the screen (a landscape phone).
+  const controlsBottom = screensaver ? 0 : measuredBottom
   const freeW = Math.max(size.width - (screensaver ? 0 : insetRight), 1)
   const freeH = Math.max(size.height - top - bottom, 1)
 
@@ -256,8 +259,8 @@ export function FleetMap({
       {/* Zoom controls: bottom-left of the map area, clear of the timeline toggle (bottom-right) and the session detail. */}
       {!screensaver && <div
         data-testid="fleet-zoom-controls"
-        className="absolute flex flex-col gap-1.5"
-        style={{ left: 12, bottom: bottom + 8, zIndex: 6 }}
+        className="af-fleet-zoom absolute flex flex-col gap-1.5"
+        style={{ left: 12, bottom: controlsBottom + 8, zIndex: 6 }}
       >
         {([
           ['fleet-zoom-in', 'Zoom in', '+', zoomIn],
@@ -327,9 +330,9 @@ export function FleetMap({
           data-testid="fleet-timeline-toggle"
           aria-pressed={timelineVisible}
           onClick={onToggleTimeline}
-          className="absolute font-mono text-xs px-2 py-1 rounded"
+          className="af-fleet-toggle absolute font-mono text-xs px-2 py-1 rounded"
           style={{
-            right: insetRight + 12, bottom: bottom + 8, zIndex: 6,
+            right: insetRight + 12, bottom: controlsBottom + 8, zIndex: 6,
             background: 'rgba(8,12,24,0.88)', border: `1px solid ${COLORS.holoBase}66`, color: COLORS.textPrimary,
           }}
         >

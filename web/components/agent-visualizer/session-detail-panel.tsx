@@ -10,6 +10,7 @@ import { useActiveCostsVersion } from '@/hooks/use-costs-config'
 import { TranscriptMessage } from './transcript-message'
 import { ToolCallDetail } from './tool-call-detail'
 import { CloseButton, SlidingPanel, stopPropagationHandlers } from './shared-ui'
+import { BELOW_TOP_BAR } from '@/lib/bottom-stack'
 import { useAutoScroll } from '@/hooks/use-auto-scroll'
 import { useViewportWidth } from '@/hooks/use-viewport-width'
 import type { ConversationMessage } from '@/hooks/simulation/types'
@@ -169,7 +170,9 @@ export function SessionDetailPanel({ visible, agents, conversations, agentId, se
   return (
     <SlidingPanel
       visible={visible}
-      position={{ right: 0, bottom: 0, top: 36 }}
+      // Starts below the top bar and its tab rows (they publish where they end), so the tabs and the Chat / Session
+      // buttons stay tappable and a second tap on the same tab closes the sheet.
+      position={{ right: 0, bottom: 0, top: BELOW_TOP_BAR }}
       zIndex={Z.transcriptPanel + 5}
       width={sessionDetailWidth(viewportWidth, CARD.sessionDetail.width)}
       {...stopPropagationHandlers}

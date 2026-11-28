@@ -29,7 +29,7 @@ const badStyle: React.CSSProperties = { borderColor: '#ff6677' }
 function Err({ issues }: { issues: { path: string; message: string }[] }) {
   if (issues.length === 0) return null
   return (
-    <ul role="alert" style={{ margin: '2px 0 0', padding: 0, listStyle: 'none', color: '#ff8896', fontSize: 9 }}>
+    <ul role="alert" style={{ margin: '2px 0 0', padding: 0, listStyle: 'none', color: '#ff8896', fontSize: 11 }}>
       {issues.map((i, n) => <li key={n}>{i.message}</li>)}
     </ul>
   )
@@ -38,7 +38,7 @@ function Err({ issues }: { issues: { path: string; message: string }[] }) {
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <section style={{ borderTop: `1px solid ${COLORS.glassBorder}`, padding: '10px 0' }}>
-      <h3 style={{ margin: '0 0 6px', color: COLORS.textMuted, fontSize: 9, letterSpacing: 1, textTransform: 'uppercase' }}>{title}</h3>
+      <h3 style={{ margin: '0 0 6px', color: COLORS.textMuted, fontSize: 11, letterSpacing: 1, textTransform: 'uppercase' }}>{title}</h3>
       {children}
     </section>
   )
@@ -67,7 +67,7 @@ export interface CostsSettingsDrawerProps {
 /** The version of the user's file the draft was made from, and the versions that count as ours (see isBaseChanged). */
 interface Seed { doc: Obj | undefined; known: string[]; epoch: number }
 
-const noteStyle: React.CSSProperties = { margin: '6px 0', padding: '6px 8px', borderRadius: 6, fontSize: 10, lineHeight: 1.4 }
+const noteStyle: React.CSSProperties = { margin: '6px 0', padding: '6px 8px', borderRadius: 6, fontSize: 11, lineHeight: 1.4 }
 const smallButton: React.CSSProperties = { color: COLORS.complete, border: `1px solid ${COLORS.glassBorder}`, borderRadius: 4, padding: '2px 8px', marginTop: 4 }
 
 /**
@@ -109,9 +109,9 @@ export function CostsSettingsDrawer({ status, seenProviders, onClose }: CostsSet
     >
       <div className="flex items-center" style={{ marginBottom: 4 }}>
         <strong style={{ fontSize: 13 }}>Cost settings</strong>
-        <button type="button" onClick={onClose} aria-label="Close cost settings" data-testid="costs-settings-close" className="ml-auto" style={{ color: COLORS.textMuted, fontSize: 14 }}>✕</button>
+        <button type="button" onClick={onClose} aria-label="Close cost settings" data-testid="costs-settings-close" className="af-tap af-focus ml-auto px-1" style={{ color: COLORS.textMuted, fontSize: 14 }}>✕</button>
       </div>
-      <p style={{ margin: '0 0 4px', color: COLORS.textMuted, fontSize: 10 }}>
+      <p style={{ margin: '0 0 4px', color: COLORS.textMuted, fontSize: 11 }}>
         Writes <code>{userSource?.path ?? '~/.agent-flow/costs.json'}</code>
         {userSource?.status === 'missing' ? ' (created on save)' : ''}.
       </p>
@@ -201,7 +201,7 @@ function DrawerForm({ status, seenProviders, base, baseFingerprint, block, onRel
         </div>
       )}
       {projectActive && (
-        <p data-testid="costs-project-override" style={{ margin: '0 0 4px', color: '#ffcc66', fontSize: 10 }}>
+        <p data-testid="costs-project-override" style={{ margin: '0 0 4px', color: '#ffcc66', fontSize: 11 }}>
           A project file ({projectSource?.path}) overrides these values where it sets them.
         </p>
       )}
@@ -224,7 +224,7 @@ function DrawerForm({ status, seenProviders, base, baseFingerprint, block, onRel
           <input aria-label="Rate date" value={draft.fxAsOf} placeholder="e.g. 2026-11-25" onChange={e => edit(d => ({ ...d, fxAsOf: e.target.value }))} style={inputStyle} />
         </label>
         <Err issues={issuesAt(check.errors, FIELD.fxAsOf)} />
-        <p style={{ margin: '4px 0 0', color: COLORS.textMuted, fontSize: 9 }}>Rates are entered by hand; nothing is fetched. They are shown next to every converted figure.</p>
+        <p style={{ margin: '4px 0 0', color: COLORS.textMuted, fontSize: 11 }}>Rates are entered by hand; nothing is fetched. They are shown next to every converted figure.</p>
       </Section>
 
       <Section title="Display">
@@ -246,7 +246,7 @@ function DrawerForm({ status, seenProviders, base, baseFingerprint, block, onRel
           </label>
         </div>
         {toggled && (
-          <p data-testid="unit-override-note" style={{ margin: '6px 0 0', color: '#ffd98a', fontSize: 10 }}>
+          <p data-testid="unit-override-note" style={{ margin: '6px 0 0', color: '#ffd98a', fontSize: 11 }}>
             The header toggle is set to <strong>{unitName(toggled)}</strong> on this device and overrides the default until you change the default.{' '}
             <button type="button" onClick={clearOverlayUnit} data-testid="unit-override-clear" style={{ ...smallButton, marginTop: 0 }}>Use the default</button>
           </p>
@@ -265,7 +265,7 @@ function DrawerForm({ status, seenProviders, base, baseFingerprint, block, onRel
                 {BILLING_MODES.map(m => <option key={m} value={m}>{BILLING_HELP[m] ?? m}</option>)}
               </select>
               {(p.billing === 'local' || p.energyProfile !== '' || (p.billing === '' && BUILTIN_LOCAL.has(id))) && (
-                <label style={{ display: 'block', marginTop: 3, fontSize: 9 }}>Energy profile
+                <label style={{ display: 'block', marginTop: 3, fontSize: 11 }}>Energy profile
                   <select aria-label={`Energy profile of ${id}`} data-testid={`provider-energy-${id}`} value={p.energyProfile} style={inputStyle}
                     onChange={e => edit(d => ({ ...d, providers: { ...d.providers, [id]: { ...p, energyProfile: e.target.value } } }))}>
                     <option value="">none (kWh not computed)</option>
@@ -281,7 +281,7 @@ function DrawerForm({ status, seenProviders, base, baseFingerprint, block, onRel
       </Section>
 
       <Section title="Model prices (per 1M tokens)">
-        {draft.rules.length === 0 && <p style={{ margin: 0, color: COLORS.textMuted, fontSize: 10 }}>No custom prices: the built-in catalog applies.</p>}
+        {draft.rules.length === 0 && <p style={{ margin: 0, color: COLORS.textMuted, fontSize: 11 }}>No custom prices: the built-in catalog applies.</p>}
         {draft.rules.map((r, i) => {
           const at = (f: Parameters<typeof FIELD.ruleField>[1]) => issuesAt(check.errors, FIELD.ruleField(i, f))
           const bad = (f: Parameters<typeof FIELD.ruleField>[1]) => (at(f).length ? badStyle : {})
@@ -296,11 +296,11 @@ function DrawerForm({ status, seenProviders, base, baseFingerprint, block, onRel
                 </label>
               </div>
               {r.locked ? (
-                <p style={{ margin: '6px 0 0', color: COLORS.textMuted, fontSize: 9 }}>This rule uses price tiers or its own currency: edit it in the file. Provider and model above can still change.</p>
+                <p style={{ margin: '6px 0 0', color: COLORS.textMuted, fontSize: 11 }}>This rule uses price tiers or its own currency: edit it in the file. Provider and model above can still change.</p>
               ) : (
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 6, marginTop: 6 }}>
                   {([['input', 'Input'], ['output', 'Output'], ['cacheRead', 'Cache read'], ['cacheWrite', 'Cache write']] as const).map(([f, label]) => (
-                    <label key={f} style={{ fontSize: 9 }}>{label}
+                    <label key={f} style={{ fontSize: 11 }}>{label}
                       <input aria-label={`Rule ${i + 1} ${label}`} inputMode="decimal" value={r[f]} placeholder={f === 'cacheRead' || f === 'cacheWrite' ? 'auto' : '0'}
                         onChange={e => setRule(i, { [f]: e.target.value } as Partial<RuleDraft>)} style={{ ...inputStyle, ...bad(f) }} />
                     </label>
@@ -308,7 +308,7 @@ function DrawerForm({ status, seenProviders, base, baseFingerprint, block, onRel
                 </div>
               )}
               <Err issues={issuesAt(check.errors, FIELD.rule(i))} />
-              <button type="button" onClick={() => edit(d => ({ ...d, rules: d.rules.filter((_, n) => n !== i) }))} style={{ marginTop: 6, color: '#ff8896', fontSize: 10 }}>Remove price</button>
+              <button type="button" onClick={() => edit(d => ({ ...d, rules: d.rules.filter((_, n) => n !== i) }))} style={{ marginTop: 6, color: '#ff8896', fontSize: 11 }}>Remove price</button>
             </div>
           )
         })}
@@ -318,10 +318,10 @@ function DrawerForm({ status, seenProviders, base, baseFingerprint, block, onRel
       </Section>
 
       <Section title="Local models: energy profiles">
-        <p style={{ margin: '0 0 6px', color: COLORS.textMuted, fontSize: 9 }}>
+        <p style={{ margin: '0 0 6px', color: COLORS.textMuted, fontSize: 11 }}>
           Configured power, not measured. kWh = (load − idle W, or load W with total attribution) × PUE × busy seconds ÷ 3.6e6. Busy time comes from each call&apos;s latency; calls without one are modelled from the throughput.
         </p>
-        {draft.profiles.length === 0 && <p style={{ margin: 0, color: COLORS.textMuted, fontSize: 10 }}>No profiles: local models show kWh as &quot;–&quot;.</p>}
+        {draft.profiles.length === 0 && <p style={{ margin: 0, color: COLORS.textMuted, fontSize: 11 }}>No profiles: local models show kWh as &quot;–&quot;.</p>}
         {draft.profiles.map((pr, i) => (
           <ProfileEditor key={i} i={i} pr={pr} errors={check.errors} projectOnly={false}
             onChange={patch => edit(d => ({ ...d, profiles: d.profiles.map((x, n) => (n === i ? { ...x, ...patch } : x)) }))}
@@ -347,14 +347,14 @@ function DrawerForm({ status, seenProviders, base, baseFingerprint, block, onRel
 
       <div style={{ position: 'sticky', bottom: -80, marginTop: 8, padding: '10px 0', background: '#080c18', borderTop: `1px solid ${COLORS.glassBorder}` }}>
         {saveError && (
-          <p role="alert" data-testid="costs-save-error" style={{ margin: '0 0 6px', color: '#ff8896', fontSize: 10 }}>
+          <p role="alert" data-testid="costs-save-error" style={{ margin: '0 0 6px', color: '#ff8896', fontSize: 11 }}>
             {saveError.conflict ? 'Nothing was written: ' : 'Could not save: '}{saveError.text}
             {saveError.conflict && onReload && <> <button type="button" onClick={onReload} data-testid="costs-reload-after-conflict" style={{ ...smallButton, marginTop: 0 }}>Reload from file</button></>}
           </p>
         )}
-        {saved && <p data-testid="costs-saved" style={{ margin: '0 0 6px', color: COLORS.complete, fontSize: 10 }}>Saved. The overlay now uses these values.</p>}
-        {!check.ok && <p style={{ margin: '0 0 6px', color: '#ff8896', fontSize: 10 }}>{check.errors.length} problem{check.errors.length === 1 ? '' : 's'} to fix before saving.</p>}
-        {block && <p data-testid="costs-save-blocked" style={{ margin: '0 0 6px', color: '#ffd98a', fontSize: 10 }}>{block.kind === 'changed' ? 'Save is off until you reload from the file.' : 'Save is off: the file cannot be edited from here (see above).'}</p>}
+        {saved && <p data-testid="costs-saved" style={{ margin: '0 0 6px', color: COLORS.complete, fontSize: 11 }}>Saved. The overlay now uses these values.</p>}
+        {!check.ok && <p style={{ margin: '0 0 6px', color: '#ff8896', fontSize: 11 }}>{check.errors.length} problem{check.errors.length === 1 ? '' : 's'} to fix before saving.</p>}
+        {block && <p data-testid="costs-save-blocked" style={{ margin: '0 0 6px', color: '#ffd98a', fontSize: 11 }}>{block.kind === 'changed' ? 'Save is off until you reload from the file.' : 'Save is off: the file cannot be edited from here (see above).'}</p>}
         <div className="flex gap-2">
           <button type="button" data-testid="costs-save" disabled={!canSave} onClick={save}
             style={{ background: canSave ? COLORS.costActiveBg : 'transparent', color: canSave ? COLORS.complete : COLORS.textMuted, border: `1px solid ${COLORS.glassBorder}`, borderRadius: 4, padding: '4px 14px', opacity: canSave ? 1 : 0.5 }}>
@@ -377,7 +377,7 @@ function ProfileEditor({ i, pr, errors, onChange, onRemove }: {
   const at = (path: string) => issuesAt(errors, path)
   const bad = (path: string) => (at(path).length ? badStyle : {})
   const num = (label: string, key: 'idle' | 'load' | 'gen' | 'prefill' | 'pue', path: string, ph: string) => (
-    <label style={{ fontSize: 9 }}>{label}
+    <label style={{ fontSize: 11 }}>{label}
       <input aria-label={`Profile ${i + 1} ${label}`} data-testid={`profile-${i}-${key}`} inputMode="decimal" value={pr[key]} placeholder={ph}
         onChange={e => onChange({ [key]: e.target.value } as Partial<ProfileDraft>)} style={{ ...inputStyle, ...bad(path) }} />
     </label>
@@ -397,7 +397,7 @@ function ProfileEditor({ i, pr, errors, onChange, onRemove }: {
         {num('Generate tok/s', 'gen', FIELD.throughput(name), 'with prompt')}
         {num('Prompt tok/s', 'prefill', FIELD.throughput(name), 'with generate')}
       </div>
-      <label style={{ display: 'block', marginTop: 6, fontSize: 9 }}>Attribution
+      <label style={{ display: 'block', marginTop: 6, fontSize: 11 }}>Attribution
         <select aria-label={`Profile ${i + 1} attribution`} data-testid={`profile-${i}-attribution`} value={pr.attribution}
           onChange={e => onChange({ attribution: e.target.value === 'total' ? 'total' : 'marginal' })} style={inputStyle}>
           <option value="marginal">marginal: load − idle (the extra the model causes)</option>
@@ -405,7 +405,7 @@ function ProfileEditor({ i, pr, errors, onChange, onRemove }: {
         </select>
       </label>
       <Err issues={[...at(FIELD.profile(i)), ...at(`/energy/profiles/${name}`)]} />
-      <button type="button" onClick={onRemove} style={{ marginTop: 6, color: '#ff8896', fontSize: 10 }}>Remove profile</button>
+      <button type="button" onClick={onRemove} style={{ marginTop: 6, color: '#ff8896', fontSize: 11 }}>Remove profile</button>
     </div>
   )
 }
@@ -440,17 +440,17 @@ function TariffEditor({ draft, errors, edit }: { draft: Draft; errors: Issue[]; 
         <input aria-label="Tariff time zone" data-testid="tariff-tz" value={t.tz} placeholder="device time zone" onChange={e => set({ tz: e.target.value })}
           style={{ ...inputStyle, ...(at(FIELD.tariffTz).length ? badStyle : {}) }} />
       </label>
-      <h4 style={{ margin: '8px 0 4px', color: COLORS.textMuted, fontSize: 9 }}>Time-of-day windows (outside every window the flat price applies)</h4>
+      <h4 style={{ margin: '8px 0 4px', color: COLORS.textMuted, fontSize: 11 }}>Time-of-day windows (outside every window the flat price applies)</h4>
       {t.windows.map((w, i) => (
         <div key={i} data-testid={`window-${i}`} style={{ border: `1px solid ${COLORS.glassBorder}`, borderRadius: 6, padding: 6, marginBottom: 6 }}>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 6 }}>
-            <label style={{ fontSize: 9 }}>From
+            <label style={{ fontSize: 11 }}>From
               <input aria-label={`Window ${i + 1} from`} data-testid={`window-${i}-from`} value={w.from} placeholder="22:00" onChange={e => setWin(i, { from: e.target.value })} style={inputStyle} />
             </label>
-            <label style={{ fontSize: 9 }}>To
+            <label style={{ fontSize: 11 }}>To
               <input aria-label={`Window ${i + 1} to`} data-testid={`window-${i}-to`} value={w.to} placeholder="06:00" onChange={e => setWin(i, { to: e.target.value })} style={inputStyle} />
             </label>
-            <label style={{ fontSize: 9 }}>Price / kWh
+            <label style={{ fontSize: 11 }}>Price / kWh
               <input aria-label={`Window ${i + 1} price`} data-testid={`window-${i}-price`} inputMode="decimal" value={w.perKWh} placeholder="0.10" onChange={e => setWin(i, { perKWh: e.target.value })} style={inputStyle} />
             </label>
           </div>
@@ -459,13 +459,13 @@ function TariffEditor({ draft, errors, edit }: { draft: Draft; errors: Issue[]; 
               const on = w.days.includes(day)
               return (
                 <button key={day} type="button" aria-pressed={on} onClick={() => setWin(i, { days: on ? w.days.filter(x => x !== day) : WEEK.filter(x => x === day || w.days.includes(x)) })}
-                  style={{ fontSize: 9, padding: '1px 5px', borderRadius: 3, border: `1px solid ${COLORS.glassBorder}`, color: on ? COLORS.complete : COLORS.textMuted, background: on ? COLORS.costActiveBg : 'transparent' }}>{day}</button>
+                  style={{ fontSize: 11, padding: '1px 5px', borderRadius: 3, border: `1px solid ${COLORS.glassBorder}`, color: on ? COLORS.complete : COLORS.textMuted, background: on ? COLORS.costActiveBg : 'transparent' }}>{day}</button>
               )
             })}
           </div>
-          <p style={{ margin: '3px 0 0', color: COLORS.textMuted, fontSize: 9 }}>A window past midnight (22:00 to 06:00) belongs to the day it starts on.</p>
+          <p style={{ margin: '3px 0 0', color: COLORS.textMuted, fontSize: 11 }}>A window past midnight (22:00 to 06:00) belongs to the day it starts on.</p>
           <Err issues={at(FIELD.tariffWindow(i))} />
-          <button type="button" onClick={() => set({ windows: t.windows.filter((_, n) => n !== i) })} style={{ marginTop: 4, color: '#ff8896', fontSize: 10 }}>Remove window</button>
+          <button type="button" onClick={() => set({ windows: t.windows.filter((_, n) => n !== i) })} style={{ marginTop: 4, color: '#ff8896', fontSize: 11 }}>Remove window</button>
         </div>
       ))}
       <button type="button" data-testid="add-window" onClick={() => set({ windows: [...t.windows, newWindow()] })} style={addButton}>+ Add time-of-day window</button>
