@@ -7,7 +7,7 @@ import { useSelectionState } from "@/hooks/use-selection-state"
 import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts"
 import { useScreensaver } from "@/hooks/use-screensaver"
 import { useViewUrlSync } from "@/hooks/use-view-url"
-import { parseViewParams } from "@/lib/fleet/url-view"
+import { restoreViewOption } from "@/lib/fleet/url-view"
 import { AgentCanvas } from "./canvas"
 import { agentCostOf } from "./canvas/draw-cost"
 import { effectiveCosts } from "@/lib/costs/active"
@@ -55,7 +55,7 @@ import { useLimitsFeed } from "@/hooks/use-limits"
 import { useAudioEffects } from "@/hooks/use-audio-effects"
 import { useViewportWidth } from "@/hooks/use-viewport-width"
 import { useAppStatePersistence } from "@/hooks/use-app-state"
-import type { AppState } from "@/lib/fleet/app-state"
+import { saveAppState, type AppState } from "@/lib/fleet/app-state"
 import { detailInset } from "@/lib/session-detail"
 import { FleetReplay } from "@/hooks/simulation/fleet-scene"
 
@@ -143,8 +143,11 @@ export function AgentVisualizer() {
   useAppStatePersistence(
     { showFleet, showTimeline, showStats, showHexGrid, showCostOverlay, showFileAttention, showTranscript, limitsCollapsed, selectedSessionId: bridge.selectedSessionId },
     useCallback((s: AppState) => {
-      // `?fleet=1|0` in the URL wins over the stored Fleet choice; without it the stored choice applies.
-      setShowFleet(parseViewParams(window.location.search).fleet ?? s.showFleet)
+      // `?fleet=1|0` in the URL wins over the stored Fleet choice (and is saved); without it the stored choice applies.
+      const search = window.location.search
+      setShowFleet(restoreViewOption(search, 'fleet', s.showFleet, v => { saveAppState(window.localStorage, { ...s, showFleet: v }) }))
+      // `?anchorMode=1|0` likewise: it wins over the stored option, and goes into the options store (saved to localStorage).
+      restoreViewOption(search, 'anchorMode', getOptions().anchorMode, v => { updateOptions({ anchorMode: v }) })
       setShowTimeline(s.showTimeline)
       setShowStats(s.showStats)
       setShowHexGrid(s.showHexGrid)
@@ -155,11 +158,12 @@ export function AgentVisualizer() {
     }, []),
   )
 
-  // The Fleet view and screensaver mode are kept in the URL (`?fleet=`, `?screensaver=`, see lib/fleet/url-view.ts).
-  // Written only after the restore above has run (same mount pass), so the URL is read before it is rewritten.
+  // The Fleet view, screensaver mode and anchors mode are kept in the URL (`?fleet=`, `?screensaver=`, `?anchorMode=`,
+  // see lib/fleet/url-view.ts and url-sync.ts). Written only after the restore above has run (same mount pass), so the
+  // URL is read before it is rewritten.
   const [viewUrlReady, setViewUrlReady] = useState(false)
   useEffect(() => { setViewUrlReady(true) }, [])
-  useViewUrlSync({ fleet: showFleet, screensaver: sv }, viewUrlReady)
+  useViewUrlSync({ fleet: showFleet, screensaver: sv, anchorMode }, viewUrlReady)
 
   // Fleet view: agent instances grouped by identity + Kanban/Supermemory lanes.
   // Selection only hides things from the views; it never stops a session.
