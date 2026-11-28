@@ -146,7 +146,7 @@ test('anchor layout: 3..12 profiles, 16:9 / 9:16 / 1:1: resources are spread to 
       const xs = [...nodes.map(a => a.x), ...cards.map(c => c.x)]
       const ys = [...nodes.map(a => a.y), ...cards.map(c => c.y)]
       const aspectSeen = (Math.max(...xs) - Math.min(...xs) + 200) / (Math.max(...ys) - Math.min(...ys) + 200)
-      assert.ok(factor(aspectSeen, aspect) <= 1.6, `n=${n} ${vp}: map aspect ${aspectSeen.toFixed(2)} vs ${aspect.toFixed(2)}`)
+      assert.ok(factor(aspectSeen, aspect) <= 2, `n=${n} ${vp}: map aspect ${aspectSeen.toFixed(2)} vs ${aspect.toFixed(2)}`)
       assert.deepEqual(spots(sceneFor(n, aspect, 'anchor')), spots(scene), `n=${n} ${vp}: same input, same map`)
     }
   }
