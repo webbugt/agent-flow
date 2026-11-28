@@ -262,7 +262,7 @@
 /* Lanes of the Fleet timeline: 18 vh (at least 120 px) on a phone, 320 px from `sm` up, a few rows on a short screen. */
 .af-fleet-lanes { max-height: max(18vh, 120px); }
 @media (min-width: 640px) { .af-fleet-lanes { max-height: 20rem; } }
-@media (max-height: 500px) { .af-fleet-lanes { max-height: 40px; } }
+@media (max-height: 500px) { .af-fleet-lanes { max-height: 28px; } }
 /* Fleet map zoom buttons: a column bottom-left; on a short screen a row, so they need 40 px of height instead of 132. */
 @media (max-height: 500px) {
   .af-fleet-zoom { flex-direction: row; }
